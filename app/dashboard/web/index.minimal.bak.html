@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Intraday News Sentiment &amp; Market Impact Engine</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#141922; --line:#232b3a;
+    --txt:#e6edf3; --dim:#8b98a9; --gold:#f0b429; --silver:#c0c8d1;
+    --btc:#f7931a; --bull:#2ea043; --bear:#f85149;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:var(--bg);color:var(--txt);
+    font:14px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    display:flex;flex-direction:column;overflow:hidden;
+  }
+
+  /* ---- slim header ---- */
+  header{
+    flex:0 0 auto;padding:10px 18px;border-bottom:1px solid var(--line);
+    background:var(--panel);display:flex;gap:18px;align-items:center;
+    flex-wrap:wrap;
+  }
+  header h1{font-size:12px;letter-spacing:2px;font-weight:600}
+  header .meta{font-size:11px;color:var(--dim);display:flex;gap:16px;flex-wrap:wrap}
+  header .meta b{color:var(--txt);font-weight:600}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
+       background:#6e7681;margin-right:5px;vertical-align:middle}
+  .dot.on{background:var(--bull);box-shadow:0 0 6px var(--bull)}
+
+  /* ---- three rows, sized to fit one screen ---- */
+  main{
+    flex:1 1 auto;min-height:0;padding:14px 18px;
+    display:grid;grid-template-rows:repeat(3,auto);gap:14px;
+    align-content:center;justify-items:stretch;
+    max-width:1600px;width:100%;margin:0 auto;
+  }
+  .asset{
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    border-left:5px solid var(--accent);
+    display:grid;
+    grid-template-columns:150px 190px 1fr 120px;
+    align-items:center;gap:16px;padding:0 16px;
+    min-height:96px;
+  }
+  .asset.gold{--accent:var(--gold)}
+  .asset.silver{--accent:var(--silver)}
+  .asset.bitcoin{--accent:var(--btc)}
+
+  .name{font-size:17px;font-weight:700;letter-spacing:1px;line-height:1.15}
+  .sym{font-size:11px;color:var(--dim);letter-spacing:1px}
+
+  .scope{font-size:11px;color:var(--dim);line-height:1.45}
+  .scope b{display:block;color:var(--txt);font-size:12px;letter-spacing:.5px}
+
+  .meters{display:flex;align-items:center;gap:10px;min-width:0}
+  .pct{font-size:15px;font-weight:700;width:58px;text-align:center;flex:0 0 auto}
+  .pct.bull{color:var(--bull)}
+  .pct.bear{color:var(--bear)}
+  .bar{flex:1 1 auto;display:flex;height:14px;border-radius:7px;
+       overflow:hidden;background:#1b2130;min-width:0}
+  .bar div{height:100%}
+  .bar .b{background:var(--bull)}
+  .bar .s{background:var(--bear)}
+
+  .verdict{text-align:center;font-size:13px;font-weight:700;letter-spacing:1px;
+           border:1px solid var(--line);border-radius:6px;padding:7px 0}
+  .verdict.BULLISH{color:var(--bull);border-color:var(--bull)}
+  .verdict.BEARISH{color:var(--bear);border-color:var(--bear)}
+  .verdict.MIXED{color:var(--gold);border-color:var(--gold)}
+  .verdict.NEUTRAL{color:var(--dim)}
+
+  footer{
+    flex:0 0 auto;padding:7px 18px;border-top:1px solid var(--line);
+    color:#6e7681;font-size:10px;text-align:center;
+  }
+
+  /* very short screens: shrink rather than scroll */
+  @media (max-height:620px){
+    main{gap:8px;padding:8px 12px}
+    .asset{grid-template-columns:120px 150px 1fr 100px;padding:0 12px;
+           min-height:68px}
+    .name{font-size:15px}
+    footer{display:none}
+  }
+  @media (max-width:760px){
+    .asset{grid-template-columns:110px 1fr 90px;gap:10px}
+    .scope{display:none}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>INTRADAY NEWS SENTIMENT &amp; MARKET IMPACT ENGINE</h1>
+  <div class="meta" id="meta">Loading&hellip;</div>
+</header>
+
+<main id="rows"></main>
+
+<footer>News-based intraday sentiment. Not a price prediction, not financial advice.</footer>
+
+</body>
+</html>
+<script>
+let ws=null, backoff=1000;
+
+function esc(s){return String(s==null?'':s)
+  .replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+/* Bullish / Bearish only. The engine keeps a neutral bucket internally for
+   correct weighting; for display the two directional shares are normalised
+   against each other so the bar is always a clean 100% split. */
+function split(b){
+  const bull=+b.bull_pct||0, bear=+b.bear_pct||0;
+  const tot=bull+bear;
+  if(tot<=0) return {bp:50,sp:50,label:'NEUTRAL'};
+  return {bp:bull/tot*100, sp:bear/tot*100, label:b.label||'NEUTRAL'};
+}
+
+async function load(){
+  try{
+    const r=await fetch('/api/dashboard');
+    render(await r.json());
+  }catch(e){ console.error(e); }
+}
+
+function render(d){
+  const st=d.status||{};
+  document.getElementById('meta').innerHTML=
+    '<span><span class="dot '+(st.running?'on':'')+'"></span>'
+      +(st.running?'RUNNING':'IDLE')+'</span>'
+    +'<span>DATE <b>'+esc(d.date)+'</b></span>'
+    +'<span>TIME <b>'+esc(d.current_time)+'</b></span>'
+    +'<span>SESSION <b>'+esc(d.current_session)+'</b></span>'
+    +'<span>REGIME <b>'+esc(d.regime)+'</b></span>'
+    +'<span>MODE <b>'+esc(st.analysis_mode)+'</b></span>'
+    +'<span>UPDATED <b>'+esc(st.last_updated||'n/a')+'</b></span>';
+
+  document.getElementById('rows').innerHTML=(d.assets||[]).map(function(a){
+    const b=a.market_prep||{};
+    const s=split(b);
+    return '<div class="asset '+a.label.toLowerCase()+'">'
+      +'<div><div class="name">'+esc(a.label.toUpperCase())+'</div>'
+      +'<div class="sym">'+esc(a.symbol)+'</div></div>'
+      +'<div class="scope"><b>MARKET PREP</b>expected setup</div>'
+      +'<div class="meters">'
+      +'<span class="pct bull">'+s.bp.toFixed(1)+'%</span>'
+      +'<span class="bar"><span class="b" style="width:'+s.bp.toFixed(1)
+        +'%"></span><span class="s" style="width:'+s.sp.toFixed(1)
+        +'%"></span></span>'
+      +'<span class="pct bear">'+s.sp.toFixed(1)+'%</span></div>'
+      +'<div class="verdict '+s.label+'">'+esc(s.label)+'</div>'
+      +'</div>';
+  }).join('');
+}
+
+function connect(){
+  const proto=location.protocol==='https:'?'wss':'ws';
+  ws=new WebSocket(proto+'://'+location.host+'/ws');
+  ws.onmessage=function(e){ try{ var m=JSON.parse(e.data);
+      if(m.type==='update'){ load(); } }catch(_){} };
+  ws.onclose=function(){ setTimeout(connect,backoff);
+    backoff=Math.min(backoff*2,30000); };
+  ws.onopen=function(){ backoff=1000; };
+  setInterval(function(){ if(ws&&ws.readyState===1) ws.send('ping'); },25000);
+}
+
+load(); connect(); setInterval(load,30000);
+</script>
