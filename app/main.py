@@ -18,7 +18,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import func, select
 
-from app.analysis import llm_client
+from app.analysis import fj_sessions, llm_client
 from app.config import settings
 from app.database import init_db, session_scope
 from app.ingestion.base import parse_source_config
@@ -299,6 +299,25 @@ async def dashboard():
         return build_payload(session)
 
 
+@app.get("/api/financialjuice/sessions")
+async def financialjuice_sessions():
+    """
+    FinancialJuice Session Analysis - five boxes, IST-dated.
+
+    Read-only and isolated: it never writes to the database and never triggers
+    an extra FinancialJuice fetch. It reads the rows the existing pipeline has
+    already ingested, so the dashboard's normal refresh/WebSocket cycle keeps
+    it current with no second connection.
+
+    The boxes themselves are still FinancialJuice-only, but their gold/silver/
+    bitcoin split also folds in HIGH-importance Section B news and the economic
+    calendar, so a session is read against the day's real backdrop.
+    """
+    with session_scope() as session:
+        return fj_sessions.session_payload_from_db(
+            session, pipeline.current_calendar_signals())
+
+
 @app.get("/api/news")
 async def news(limit: int = 60):
     """Today's news feed only."""
@@ -438,4 +457,14 @@ async def index():
     page = WEB_DIR / "index.html"
     if not page.exists():
         return HTMLResponse("<h1>Dashboard asset missing</h1>", status_code=500)
-    return HTMLResponse(page.read_text(encoding="utf-8"))
+    # The page is read from disk on every request and the UI polls itself, so a
+    # cached copy only ever serves stale markup. Explicit no-store prevents the
+    # browser from pinning an old revision after we edit the file.
+    return HTMLResponse(
+        page.read_text(encoding="utf-8"),
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )

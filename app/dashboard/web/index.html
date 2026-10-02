@@ -91,8 +91,6 @@
   .shead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
   .stitle{font-size:11px;letter-spacing:1.6px;font-weight:700}
   .ssub{font-size:10px;color:var(--dim)}
-  .sconf{margin-left:auto;font-size:10px;color:var(--dim)}
-  .sconf b{color:var(--txt);font-weight:600}
   .verdict{font-size:10px;font-weight:700;letter-spacing:1px;border:1px solid var(--line);
            border-radius:5px;padding:3px 9px;white-space:nowrap}
   .verdict.BULLISH{color:var(--bull);border-color:var(--bull)}
@@ -103,11 +101,6 @@
   .bar div{height:100%}
   .bar .b{background:var(--bull)}
   .bar .s{background:var(--bear)}
-  .legend{display:flex;gap:15px;margin-top:6px;font-size:10.5px;color:var(--dim);
-          flex-wrap:wrap}
-  .legend .lb{color:var(--bull)} .legend .ls{color:var(--bear)}
-  .legend b{font-weight:700}
-  .notes{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:9px}
   .note{background:var(--panel2);border:1px solid var(--line);border-radius:7px;
         padding:8px 11px}
   .note h4{font-size:9.5px;letter-spacing:1.5px;color:var(--dim);font-weight:700;
@@ -118,10 +111,6 @@
   .note.drv h4{color:var(--bull)} .note.drv li{border-left-color:var(--bull)}
   .note.rsk h4{color:var(--bear)} .note.rsk li{border-left-color:var(--bear)}
   .note.cat h4{color:var(--gold)} .note.cat li{border-left-color:var(--gold)}
-  .conflict{margin-top:8px;font-size:10.5px;line-height:1.4;color:var(--gold);
-            background:rgba(240,180,41,.06);border:1px solid rgba(240,180,41,.28);
-            border-radius:7px;padding:7px 11px}
-  .conflict b{letter-spacing:1px}
   /* Economic calendar rows - visibly distinct from news headlines. */
   .cal{border-left:2px solid var(--gold);padding:6px 0 6px 10px;margin-top:8px}
   .calh{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -131,7 +120,6 @@
         border-radius:4px;padding:1px 5px;margin-left:auto}
   .cal .row{font-size:10.5px;color:var(--dim);margin-top:3px}
   .cal .row b{color:var(--txt)}
-  .price{font-size:10px;color:var(--dim);margin-top:7px;padding-left:2px}
   .alert{background:rgba(248,81,73,.06);border:1px solid rgba(248,81,73,.3);
          border-left-width:4px;border-radius:8px;padding:9px 13px;margin-bottom:8px;
          font-size:11.5px;line-height:1.45}
@@ -172,10 +160,55 @@
   .wnote{margin-top:8px;padding-top:7px;border-top:1px dashed var(--line);
          font-size:10px;font-style:italic;color:var(--dim)}
   .empty{color:var(--dim);font-size:11.5px;padding:14px;text-align:center}
+
+  /* ---- FinancialJuice Session Analysis (five fixed boxes) ---- */
+  .fjhead{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;
+          padding:0 2px 10px}
+  .fjhead .ft{font-size:12px;letter-spacing:2px;color:var(--txt);font-weight:700}
+  .fjhead .fd{font-size:12px;color:var(--gold);font-weight:600}
+  .fjhead .fz{font-size:10.5px;color:var(--dim)}
+  .fjbox{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+         padding:13px 16px;margin-bottom:12px;scroll-margin-top:64px}
+  .fjbox.pending{opacity:.62}
+  .fjbh{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
+        padding-bottom:9px;margin-bottom:10px;border-bottom:1px solid var(--line)}
+  .fjbh .n{font-size:10px;color:var(--dim);font-weight:700;letter-spacing:1px}
+  .fjbh .nm{font-size:12.5px;letter-spacing:1.6px;font-weight:700}
+  .fjbh .ts{margin-left:auto;font-size:10.5px;color:var(--dim);font-variant-numeric:tabular-nums}
+  .fjbadge{font-size:9.5px;font-weight:700;letter-spacing:1.1px;padding:3px 8px;
+          border-radius:5px;border:1px solid var(--line);color:var(--dim);
+          background:var(--panel2);white-space:nowrap}
+  .fjbadge.today{color:var(--bull);border-color:rgba(46,160,67,.55);
+          background:rgba(46,160,67,.10)}
+  .fjbadge.prev{color:var(--gold);border-color:rgba(240,180,41,.5);
+          background:rgba(240,180,41,.09)}
+  .fjprevnote{font-size:10px;color:var(--gold);opacity:.85;margin-top:2px}
+  .fjctx{font-size:10.5px;color:var(--dim);margin:0 0 8px;padding:6px 10px;
+         border-left:2px solid var(--gold);background:var(--panel2)}
+  .fjctx b{color:var(--text)}
+  .fjrt{font-size:11px;color:var(--dim);margin-bottom:9px;font-style:italic}
+  .fjgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .fja{background:var(--panel2);border:1px solid var(--line);border-radius:7px;
+       padding:10px 12px}
+  .fja .an{font-size:10px;letter-spacing:1.3px;color:var(--dim);margin-bottom:6px}
+  .fja .pct{font-size:21px;font-weight:700;line-height:1.15;font-variant-numeric:tabular-nums}
+  .fja .pcb{font-size:11px;margin-top:3px;letter-spacing:.3px}
+  .bull{color:var(--bull)} .bear{color:var(--bear)}
+  .fja .bb{height:7px;border-radius:4px;overflow:hidden;display:flex;
+          margin:8px 0 7px;background:#1b2130}
+  .fja .bb .b{background:var(--bull)} .fja .bb .s{background:var(--bear)}
+  .fja .dv{font-size:10.5px;color:var(--dim);line-height:1.4}
+  .fjdv{margin-top:9px;padding-top:8px;border-top:1px dashed var(--line);
+        font-size:10.5px;color:var(--dim)}
+  .fjdv b{color:var(--txt);font-weight:600}
+  .fjpending{font-size:11px;color:var(--dim);font-style:italic;padding:4px 0}
+  @media (max-width:1000px){
+    .strip-cards{grid-template-columns:1fr}
+    .fjgrid{grid-template-columns:1fr}
+  }
   footer{border-top:1px solid var(--line);color:#6e7681;font-size:10px;
          text-align:center;padding:9px 18px;margin-top:20px}
   @media (max-width:1000px){
-    .notes{grid-template-columns:1fr}
     .strip-cards{grid-template-columns:1fr}
   }
   @media (max-width:700px){
@@ -193,7 +226,9 @@
 <main>
   <div id="prepStrip"></div>
   <div id="regime"></div>
-  <h2>SECTION A &mdash; MARKET PREP &amp; MARKET WRAP SENTIMENT</h2>
+  <h2>FINANCIALJUICE SESSION ANALYSIS</h2>
+  <div id="fjWrap"></div>
+  <h2>SECTION A &mdash; ECONOMIC CALENDAR</h2>
   <div id="assets"></div>
   <div id="alertsWrap"></div>
   <h2>SECTION B &mdash; TODAY'S NEWS IMPACT FEED <span class="n" id="feedCount"></span></h2>
@@ -208,20 +243,6 @@ function esc(s){return String(s==null?'':s)
 function n1(v){return (Math.round((+v||0)*10)/10).toFixed(1);}
 function w(v){return Math.max(0,Math.min(100,+v||0));}
 
-function bar(b){
-  return '<div class="bar">'
-    +'<div class="b" style="width:'+w(b.bull_pct)+'%"></div>'
-    +'<div class="s" style="width:'+w(b.bear_pct)+'%"></div></div>'
-    +'<div class="legend">'
-    +'<span class="lb">BULLISH <b>'+n1(b.bull_pct)+'%</b></span>'
-    +'<span class="ls">BEARISH <b>'+n1(b.bear_pct)+'%</b></span>'
-    +'<span>NET <b>'+n1(b.net_bias)+'</b></span></div>';
-}
-function note(cls,title,items){
-  if(!items||!items.length) return '';
-  return '<div class="note '+cls+'"><h4>'+title+'</h4><ul>'
-    +items.map(function(x){return '<li>'+esc(x)+'</li>';}).join('')+'</ul></div>';
-}
 /* Compact bar for the top strip (no legend - percentages sit in the footer). */
 function mbar(b){
   return '<div class="bar">'
@@ -253,8 +274,8 @@ function prepCard(a){
   var b=a.market_prep||{};
   var conf=String(b.conflicting_signals||0);
   return '<div class="mcard '+String(a.label||'').toLowerCase()
-    +'" data-goto="asset-'+esc(a.symbol)+'" title="Jump to the full '
-    +esc(String(a.label||'').toUpperCase())+' breakdown">'
+    +'" data-goto="asset-'+esc(a.symbol)+'" title="Jump to the '
+    +esc(String(a.label||'').toUpperCase())+' economic calendar">'
     +'<div class="mtop"><span class="mname">'
     +esc(String(a.label||'').toUpperCase())+'</span>'
     +'<span class="msym">'+esc(a.symbol)+'</span></div>'
@@ -285,34 +306,6 @@ function renderPrepStrip(assets){
     +'<span class="ss">SESSIONS '+sessionChain()+'</span></div>'
     +'<div class="strip-cards">'+assets.map(prepCard).join('')+'</div>'
     +'<div class="hr"></div>';
-}
-function conflicts(cs){
-  if(!cs||!cs.length) return '';
-  return cs.map(function(c){
-    return '<div class="conflict"><b>! CONFLICT</b> &mdash; '+esc(c.resolution)
-      +'<br>&bull; '+esc(c.bullish_driver)+' (weight '+n1(c.bullish_weight*100)+'%)'
-      +'<br>&bull; '+esc(c.bearish_driver)+' (weight '+n1(c.bearish_weight*100)+'%)</div>';
-  }).join('');
-}
-var SCOPES=[['market_prep','MARKET PREP','expected / forward-looking setup'],
-  ['market_wrap','MARKET WRAP','what actually happened'],
-  ['current','CURRENT','current day-trading sentiment']];
-function scope(key,title,sub,b){
-  if(!b) return '';
-  return '<div class="scope"><div class="shead">'
-    +'<span class="stitle">'+title+'</span>'
-    +'<span class="ssub">'+sub+'</span>'
-    +'<span class="verdict '+esc(b.label)+'">'+esc(b.label)+'</span>'
-    +'<span class="sconf">conf <b>'+n1((+b.confidence||0)*100)+'%</b>'
-    +' &middot; n=<b>'+(+b.contributing_articles||0)+'</b>'
-    +(b.conflicting_signals?' &middot; <b>'+b.conflicting_signals+'</b> conflicting':'')
-    +'</span></div>'+bar(b)
-    +'<div class="notes">'+note('drv','TOP DRIVERS',b.drivers)
-    +note('rsk','KEY RISKS',b.risks)
-    +note('cat','UPCOMING CATALYSTS',(key==='market_prep'?b.catalysts:null))+'</div>'
-    +conflicts(b.conflicts)
-    +'<div class="price">'+(b.last_updated?('Computed '+esc(b.last_updated)+' &middot; '):'')
-    +esc(b.price_note||'Price-action confirmation unavailable.')+'</div></div>';
 }
 /* ---- Economic calendar ------------------------------------------------
    Scheduled macro releases weighed into the sentiment. Released prints use
@@ -364,7 +357,7 @@ function calendarBlock(rows){
 }
 function renderAssets(assets){
   document.getElementById('assets').innerHTML=(assets||[]).map(function(a){
-    var cur=a.current||a.market_prep||{};
+    var rows=(a.economic_calendar||[]).length;
     return '<div class="asset '+String(a.label||'').toLowerCase()
       +'" id="asset-'+esc(a.symbol)+'">'
       +'<div class="ahead"><div>'
@@ -373,9 +366,8 @@ function renderAssets(assets){
       +'<div class="tagline"><span class="ssub">SESSIONS</span>'
       +'<span class="ssub">'+esc(DATA.previous_session)+' &rarr; '
       +esc(DATA.next_session)+'</span>'
-      +'<span class="verdict '+esc(cur.label)+'">'+esc(cur.label)+'</span>'
+      +'<span class="ssub">'+rows+' MACRO RELEASES</span>'
       +'</div></div>'
-      +SCOPES.map(function(s){return scope(s[0],s[1],s[2],a[s[0]]);}).join('')
       +calendarBlock(a.economic_calendar)
       +'</div>';
   }).join('');
@@ -445,6 +437,86 @@ function renderFeed(items){
       +'</div></div>';
   }).join('');
 }
+/* ---- FinancialJuice Session Analysis -----------------------------------
+   Renders exactly five boxes in the fixed order supplied by the API. Only
+   Bullish % and Bearish % are shown - there is deliberately no third
+   sentiment category anywhere in this section. */
+function fjAsset(a){
+  var bull=+a.bull_pct||0, bear=+a.bear_pct||0;
+  var dv=(a.drivers&&a.drivers.length)?a.drivers.slice(0,3).join(' \u00b7 '):'';
+  return '<div class="fja">'
+    +'<div class="an">'+esc(a.label)+' <span style="color:var(--dim)">'
+      +esc(a.asset)+'</span></div>'
+    +'<div class="pct '+(bull>=bear?'bull':'bear')+'">'
+      +n1(bull>=bear?bull:bear)+'%</div>'
+    +'<div class="pcb"><span class="bull">\ud83d\udfe2 Bullish '+n1(bull)
+      +'%</span> <span style="color:var(--dim)">|</span> '
+      +'<span class="bear">\ud83d\udd34 Bearish '+n1(bear)+'%</span></div>'
+    +'<div class="bb"><div class="b" style="width:'+w(bull)+'%"></div>'
+      +'<div class="s" style="width:'+w(bear)+'%"></div></div>'
+    +'<div class="dv">'+esc(dv)+'</div>'
+    +'</div>';
+}
+function renderFinancialJuice(d){
+  var box=document.getElementById('fjWrap');
+  if(!d||!d.boxes||!d.boxes.length){
+    box.innerHTML='<div class="fjpending">FinancialJuice session data '
+      +'unavailable.</div>';
+    return;
+  }
+  var html='<div class="fjhead">'
+    +'<span class="ft">FINANCIALJUICE SESSION ANALYSIS</span>'
+    +'<span class="fd">Indian Date: '+esc(d.india_date_display||d.india_date)
+      +'</span>'
+    +'<span class="fz">Source: FinancialJuice only &middot; times in '
+      +esc(d.timezone)+' &middot; Bullish + Bearish = 100%</span>'
+    +'</div>';
+
+  /* The order here is whatever the API returned, which the backend fixes to
+     US Market Wrap, Asian Market Wrap, Europe Market Prep, Europe Market
+     Wrap, US Session Prep. It is never re-sorted here. */
+  if(d.context&&(d.context.news_items||d.context.calendar_items)){
+      html+='<div class="fjctx">Scored against the FinancialJuice report PLUS '
+        +'high-impact news (<b>'+(d.context.news_items||0)+'</b> Section B '
+        +'items) and economic-calendar signals (<b>'
+        +(d.context.calendar_items||0)+'</b>).</div>';
+    }
+    d.boxes.forEach(function(b,i){
+    var badge = b.found
+      ? '<span class="fjbadge '+(b.is_today?'today':'prev')+'">'
+        +esc(b.age_label||'')+'</span>'
+      : '';
+    html+='<div class="fjbox'+(b.found&&b.is_today?'':' pending')+'">'
+      +'<div class="fjbh"><span class="n">'+(i+1)+'</span>'
+      +'<span class="nm">'+esc(b.title.toUpperCase())+'</span>'
+      +badge
+      +'<span class="ts">'+esc(b.published_ist||'No report yet')+'</span>'
+      +'</div>';
+    if(b.found&&b.report_title){
+      html+='<div class="fjrt">'+esc(b.report_title)+'</div>';
+      if(!b.is_today&&b.report_date_display){
+        html+='<div class="fjprevnote">Showing the most recent available '
+          +'report &mdash; dated '+esc(b.report_date_display)
+          +'. Today\'s report has not been published by FinancialJuice yet.'
+          +'</div>';
+      }
+    }
+    if(b.found){
+      html+='<div class="fjgrid">'+(b.assets||[]).map(fjAsset).join('')+'</div>';
+      if(b.drivers&&b.drivers.length){
+        html+='<div class="fjdv"><b>Key drivers:</b> '
+          +b.drivers.map(function(x){return esc(x);}).join(' &middot; ')+'</div>';
+      }
+    }else{
+      html+='<div class="fjpending">Awaiting today\'s FinancialJuice '
+        +esc(b.title)+' report. Showing an even 50/50 split rather than '
+        +'inventing a signal.</div>';
+      html+='<div class="fjgrid">'+(b.assets||[]).map(fjAsset).join('')+'</div>';
+    }
+    html+='</div>';
+  });
+  box.innerHTML=html;
+}
 function renderHeader(d){
   var st=d.status||{};
   document.getElementById('meta').innerHTML=
@@ -491,6 +563,16 @@ async function load(){
   try{
     const r=await fetch('/api/dashboard');
     render(await r.json());
+  }catch(e){ console.error(e); }
+  loadFinancialJuice();
+}
+/* FinancialJuice Session Analysis is served by its own read-only endpoint so
+   the main dashboard payload is left byte-for-byte unchanged. It reuses the
+   rows the existing pipeline already ingested - no second FJ connection. */
+async function loadFinancialJuice(){
+  try{
+    const r=await fetch('/api/financialjuice/sessions');
+    renderFinancialJuice(await r.json());
   }catch(e){ console.error(e); }
 }
 document.addEventListener('click',function(e){

@@ -92,22 +92,6 @@ st.caption(
     f"Poll every {status['poll_interval_seconds']}s · Regime: {data['regime']}"
 )
 
-# ---------------- Section A ----------------
-st.subheader("Section A — Market Prep & Market Wrap Sentiment")
-for idx, asset in enumerate(data["assets"]):
-    with st.expander(f"{asset['label'].upper()} — {asset['symbol']}",
-                     expanded=(idx == 0)):
-        st.markdown("#### MARKET PREP *(expected setup)*")
-        render_block(asset["market_prep"])
-        st.markdown("#### MARKET WRAP *(what actually happened)*")
-        render_block(asset["market_wrap"])
-        st.markdown("#### CURRENT DAY-TRADING SENTIMENT")
-        render_block(asset["current"])
-        if asset["market_prep"].get("catalysts"):
-            st.markdown("**Key upcoming catalysts**")
-            for c in asset["market_prep"]["catalysts"]:
-                st.markdown(f"- ◆ {c}")
-
 # ---------------- Alerts ----------------
 if data["alerts"]:
     st.subheader("🚨 High-Impact Alerts")

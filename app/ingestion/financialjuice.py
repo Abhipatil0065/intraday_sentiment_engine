@@ -201,6 +201,27 @@ class FinancialJuiceSource:
 
     kind = "fj"
 
+    #: Below this many headlines a scrape is treated as failed. The homepage
+    #: renders ~20 on first paint, so a genuine load never returns fewer; a
+    #: smaller number means the SPA had not hydrated when we read the DOM.
+    MIN_HEADLINES = 15
+
+    #: Each scroll appends ~20 more headlines (verified live: 23 -> 184).
+    #: Three rounds gives a ~80-item window, comfortably wider than the
+    #: ~21 headlines published per 3-minute poll cycle, so a session report
+    #: can no longer fall out of view between two consecutive runs.
+    SCROLL_ROUNDS = 3
+
+    #: Pause after each scroll to let the next page of items stream in.
+    SCROLL_SETTLE_MS = 1800
+
+    #: A session report's body is not in the feed - only its teaser is, and for
+    #: the "Morning Juice" preps that teaser is EMPTY. The full text (Sentiment,
+    #: Docket, Speakers) lives on the article page, so those reports are opened
+    #: individually. Verified: US Session Prep = 3238 chars on the article page
+    #: vs 0 chars in the feed.
+    ARTICLE_MAX_CHARS = 4000
+
     def __init__(self, spec=None):
         self.name = spec.name if spec else "Financial Juice"
         self.quality = spec.quality if spec else "TIER_2_MAJOR"
@@ -226,7 +247,7 @@ class FinancialJuiceSource:
 
         from playwright.async_api import async_playwright
 
-        html = ""
+        articles = []
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(
                 headless=True,
@@ -234,33 +255,159 @@ class FinancialJuiceSource:
                       "--disable-blink-features=AutomationControlled"],
             )
             try:
-                ctx = await browser.new_context(
-                    user_agent=settings.http_user_agent,
-                    viewport={"width": 1440, "height": 2400},
-                    locale="en-US",
-                    # Match the zone _parse_fj_time assumes, so the rendered
-                    # wall-clock and the parsed timestamp always agree.
-                    timezone_id=settings.display_timezone,
-                )
-                page = await ctx.new_page()
-                await page.goto(self.url, timeout=45000,
-                                wait_until="domcontentloaded")
-                try:
-                    await page.wait_for_load_state("networkidle",
-                                                   timeout=self.wait_ms)
-                except Exception:  # networkidle often never settles on SPAs
-                    pass
-                await page.wait_for_timeout(2500)
-                html = await page.content()
+                # A thin read means the SPA had not hydrated. Reload once
+                # rather than returning a short list: a headline missed now is
+                # invisible forever, so retrying beats a silent gap.
+                for attempt in range(2):
+                    ctx = await browser.new_context(
+                        user_agent=settings.http_user_agent,
+                        viewport={"width": 1440, "height": 2400},
+                        locale="en-US",
+                        # Match the zone _parse_fj_time assumes, so the
+                        # rendered wall-clock and the parsed stamp agree.
+                        timezone_id=settings.display_timezone,
+                    )
+                    try:
+                        html = await self._render_and_scroll(ctx)
+                    finally:
+                        await ctx.close()
+
+                    articles = _extract(html, self.name, self.quality)
+                    log.info(
+                        "Financial Juice: extracted %d headlines (try %d)",
+                        len(articles), attempt + 1)
+                    if len(articles) >= self.MIN_HEADLINES:
+                        break
+                    if attempt == 0:
+                        log.warning(
+                            "Financial Juice: only %d headlines (< %d); "
+                            "reloading once in case the SPA loaded slowly",
+                            len(articles), self.MIN_HEADLINES)
+
+                # Second pass: the feed only carries a teaser (sometimes an
+                # empty one), so open the handful of session reports and
+                # store their full Sentiment/Docket/Speakers text.
+                if articles:
+                    await self._enrich_session_reports(browser, articles)
             finally:
                 await browser.close()
 
-        articles = _extract(html, self.name, self.quality)
-        log.info("Financial Juice: extracted %d headlines", len(articles))
         return articles
 
+    async def _render_and_scroll(self, ctx):
+        """Render the homepage, scroll the feed, return the resulting HTML."""
+        page = await ctx.new_page()
+        await page.goto(self.url, timeout=45000, wait_until="domcontentloaded")
+        try:
+            await page.wait_for_load_state("networkidle", timeout=self.wait_ms)
+        except Exception:  # networkidle often never settles on SPAs
+            pass
+        await page.wait_for_timeout(2500)
 
+        # The feed is an infinite-scroll list: only the newest ~20 headlines
+        # exist in the DOM on first paint. Without scrolling, a session report
+        # published between two polls is pushed out of the window and lost for
+        # good - exactly how the 2 Oct US Market Wrap went missing. Each scroll
+        # appends ~20 more items (verified live: 23 -> 184 headlines).
+        for _ in range(self.SCROLL_ROUNDS):
+            before = await page.eval_on_selector_all(
+                "div.headline-item", "els => els.length")
+            await page.evaluate(
+                "window.scrollTo(0, document.body.scrollHeight)")
+            await page.wait_for_timeout(self.SCROLL_SETTLE_MS)
+            after = await page.eval_on_selector_all(
+                "div.headline-item", "els => els.length")
+            if after <= before:
+                # Nothing loaded: the list is exhausted, so stop early rather
+                # than burning the remaining settle time.
+                break
 
+        return await page.content()
 
+    async def _fetch_article_text(self, ctx, url: str) -> str:
+        """
+        Open one article page and return its body text ('' on any failure).
 
+        ``div.entry-content`` is the article body (verified live): it holds the
+        Sentiment paragraph, the Docket and the Speakers list, and excludes the
+        site chrome. Everything is best-effort - a failure here must never
+        discard a headline we already hold, so the caller keeps what it has.
+        """
+        if not url or "/News/" not in url:
+            return ""
+        page = None
+        try:
+            page = await ctx.new_page()
+            await page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            try:
+                await page.wait_for_load_state("networkidle", timeout=8000)
+            except Exception:  # SPAs frequently never go idle
+                pass
+            await page.wait_for_timeout(1500)
+            el = await page.query_selector("div.entry-content")
+            if el is None:
+                return ""
+            text = (await el.inner_text()).strip()
+            return text[: self.ARTICLE_MAX_CHARS]
+        except Exception as exc:  # network hiccup, layout change, timeout
+            log.warning("Financial Juice: article fetch failed for %s (%s)",
+                        url[:90], exc)
+            return ""
+        finally:
+            if page is not None:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
 
+    async def _enrich_session_reports(self, browser, articles: list) -> int:
+        """
+        Replace the feed teaser with the FULL text for session reports only.
+
+        The feed carries a teaser (and for the "Morning Juice" preps, an empty
+        one), so scoring the reports on feed data alone under-reads them. Only
+        the five session reports are opened - never the ~70 general headlines -
+        so this costs a handful of page loads per cycle.
+        """
+        from app.analysis.fj_sessions import (
+            classify_fj_session,
+            is_financial_juice,
+        )
+
+        targets = [
+            a for a in articles
+            if is_financial_juice(a.source)
+            and classify_fj_session(a.title or "", a.body or "") is not None
+        ]
+        if not targets:
+            return 0
+
+        ctx = await browser.new_context(
+            user_agent=settings.http_user_agent,
+            viewport={"width": 1440, "height": 2400},
+            locale="en-US",
+            timezone_id=settings.display_timezone,
+        )
+        upgraded = 0
+        try:
+            for art in targets:
+                full = await self._fetch_article_text(ctx, art.url)
+                if not full:
+                    continue
+                # Only replace when the page genuinely has more to say;
+                # otherwise keep the teaser we already scraped.
+                if len(full) > len(art.body or ""):
+                    previous = len(art.body or "")
+                    art.body = full[: settings.article_fetch_max_chars]
+                    art.summary = full[:300]
+                    upgraded += 1
+                    log.info("Financial Juice: session report body %d -> %d "
+                             "chars (%s)", previous, len(art.body),
+                             art.title[:60])
+        finally:
+            await ctx.close()
+
+        if upgraded:
+            log.info("Financial Juice: enriched %d/%d session reports with "
+                     "full article text", upgraded, len(targets))
+        return upgraded

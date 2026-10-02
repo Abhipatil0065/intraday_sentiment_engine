@@ -144,6 +144,47 @@ def _is_update_article(published: Optional[datetime],
     return abs((updated - published).total_seconds()) / 3600.0 <= settings.update_window_hours
 
 
+async def _is_fj_session_report(art: RawArticle) -> bool:
+    """True when this article is one of the five FinancialJuice session reports.
+
+    Imported lazily so the analysis layer stays free of any pipeline dependency.
+    """
+    from app.analysis.fj_sessions import (
+        classify_fj_session,
+        is_financial_juice,
+    )
+
+    if not is_financial_juice(art.source):
+        return False
+    return classify_fj_session(art.title or "", art.body or "") is not None
+
+
+def _fj_session_report_is_admissible(published: datetime) -> bool:
+    """
+    Admit a FinancialJuice session report on the INDIAN trading date.
+
+    The general TODAY filter is anchored to MARKET_TIMEZONE (America/New_York)
+    because the sentiment engine trades US hours. FJ session reports are not
+    aligned to those hours: the Asia wrap lands around 11:00 IST (01:00 EDT,
+    same day) but the US wrap lands ~01:05 IST, which is 15:35 EDT on the
+    PREVIOUS day. Applying the market-timezone filter therefore threw the US
+    wrap away every single evening - the report was published, scraped and
+    then discarded before it could ever reach the FJ section.
+
+    Only the IST date decides admission here, mirroring the rule the FJ
+    section itself applies when rendering (today, plus one lookback day for
+    the US Market Wrap). Nothing else about the TODAY filter changes, and no
+    non-FJ article is affected.
+    """
+    from app.analysis.fj_sessions import india_date_of, india_today
+
+    report_date = india_date_of(published)
+    if report_date is None:
+        return False
+    age_days = (india_today() - report_date).days
+    return 0 <= age_days <= 1
+
+
 async def _ingest_article(art: RawArticle, session, stats: IngestStats):
     """Apply the TODAY filter, classify, cluster and store one article."""
     published, updated, tz_label = _parse_article_time(art)
@@ -152,7 +193,14 @@ async def _ingest_article(art: RawArticle, session, stats: IngestStats):
     if published is None:
         stats.rejected += 1
         return None
-    if not T.is_today(published) or not T.within_max_age(published):
+    if await _is_fj_session_report(art):
+        # Session reports carry their own IST-based admission rule (see
+        # _fj_session_report_is_admissible); the market-timezone test would
+        # discard the overnight US wrap every evening.
+        if not _fj_session_report_is_admissible(published):
+            stats.rejected += 1
+            return None
+    elif not T.is_today(published) or not T.within_max_age(published):
         stats.rejected += 1
         return None
 
@@ -290,6 +338,16 @@ def _calendar_signal_to_weighted(sig: CalendarSignal) -> WeightedSignal:
 def calendar_summary(asset: Asset, limit: int = 8) -> list[dict]:
     """Dashboard rows for one asset's economic calendar."""
     return to_calendar_summary(_calendar_signals, asset, limit=limit)
+
+
+def current_calendar_signals() -> list[CalendarSignal]:
+    """
+    Read-only view of the most recent economic-calendar signals.
+
+    Returned as a copy so a caller cannot mutate the module-level state that
+    the scheduler owns.
+    """
+    return list(_calendar_signals)
 
 
 def _recompute_sentiment(session):
