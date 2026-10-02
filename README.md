@@ -363,9 +363,10 @@ DATABASE_URL=postgresql+psycopg://user:pass@localhost:5432/intraday
   describes. The UI always states which mode produced a given result.
 * **Price data is off by default** because no free, keyless, reliable intraday
   feed exists for XAUUSD/XAGUSD.
-* **Free RSS feeds go stale.** Several major outlets freeze their free feeds
-  (WSJ's is months old). The today-filter drops them automatically; use
-  `probe_sources` to monitor.
+* **Free RSS feeds go stale or die.** Outlets freeze, kill or paywall their
+  free feeds — `CNBC Markets`, `Yahoo Finance` and `WSJ Markets` were dropped
+  from `NEWS_SOURCES` for exactly this reason. The today-filter drops stale
+  items automatically; use `probe_sources` to monitor what is left.
 * **Scraping is best-effort.** `WebsiteSource` is intentionally polite
   (one request per page, concurrency-limited). Respect each site's terms.
 * **Sentiment ≠ probability.** The percentages are the model's news-derived
@@ -384,7 +385,7 @@ Sources are **configuration only** — no code changes needed. In `.env`:
 NEWS_SOURCES=Name|type|url|weight|quality_tier, Name2|type|url|weight|quality_tier
 ```
 
-* `type` = `rss` | `atom` | `html` | `mock`
+* `type` = `rss` | `atom` | `html` | `kitco` | `fj` | `mock`
 * `quality_tier` = `TIER_1_OFFICIAL` | `TIER_2_MAJOR` | `TIER_3_CRYPTO` | `TIER_4_OTHER`
 
 > Keep `NEWS_SOURCES` on a **single line** — `.env` parsers do not support
@@ -399,7 +400,7 @@ python -m tests.probe_sources
 ```
 STATUS  SOURCE                TOTAL  TODAY  LATEST
 LIVE    CNBC Economy             30      3  2026-10-01T07:23:01+00:00
-STALE   WSJ Markets              20      0  2025-01-27T19:26:00+00:00
+STALE   <some other feed>        20      0  2025-01-27T19:26:00+00:00
 ```
 
 `STALE` means the feed serves no article dated today; the today-filter rejects

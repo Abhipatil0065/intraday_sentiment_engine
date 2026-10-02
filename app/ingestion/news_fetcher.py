@@ -20,6 +20,7 @@ from app.ingestion.base import (
     SourceSpec,
     parse_source_config,
 )
+from app.ingestion.kitco import KitcoSource
 from app.ingestion.mock_source import MockSource
 from app.ingestion.rss_reader import RssSource
 from app.ingestion.website_monitor import WebsiteSource
@@ -50,6 +51,8 @@ def build_sources() -> list:
                 sources.append(RssSource(spec))
             elif spec.kind in ("html", "scrape"):
                 sources.append(WebsiteSource(spec))
+            elif spec.kind == "kitco":
+                sources.append(KitcoSource(spec))
             elif spec.kind == "mock":
                 sources.append(MockSource(spec.url))
             elif spec.kind == "fj":

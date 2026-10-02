@@ -68,6 +68,21 @@ class RateLimiter:
         self._prune(time.monotonic())
         return len(self._stamps)
 
+    def last_admitted_at(self) -> Optional[float]:
+        """
+        Wall-clock stamp of the most recent admission, or ``None`` if none yet.
+
+        This is the timestamp the limiter actually charged against the window,
+        so it is what any caller reasoning about admission spacing must use. A
+        fresh ``time.monotonic()`` read after :meth:`acquire` returns is NOT
+        equivalent: the gap between the charge and the read is scheduler skew,
+        which can push the reading across a window boundary and make a correct
+        limiter appear to have exceeded its limit.
+
+        Deliberately does not prune, so it never mutates limiter state.
+        """
+        return self._stamps[-1] if self._stamps else None
+
     async def acquire(self) -> None:
         """Block until a slot is free, then consume it."""
         if self.limit <= 0:

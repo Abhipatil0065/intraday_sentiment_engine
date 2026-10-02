@@ -198,9 +198,13 @@
           margin:8px 0 7px;background:#1b2130}
   .fja .bb .b{background:var(--bull)} .fja .bb .s{background:var(--bear)}
   .fja .dv{font-size:10.5px;color:var(--dim);line-height:1.4}
-  .fjdv{margin-top:9px;padding-top:8px;border-top:1px dashed var(--line);
-        font-size:10.5px;color:var(--dim)}
-  .fjdv b{color:var(--txt);font-weight:600}
+  /* Session-level TOP DRIVERS / KEY RISKS. Deliberately reuses the same
+     .note.drv / .note.rsk component the MARKET PREP cards use, so all five
+     session boxes read exactly like the three cards above them. */
+  .fjdrv{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;
+         padding-top:9px;border-top:1px dashed var(--line)}
+  .fjbox .note li{color:var(--txt)}
+  .fjbox .note .none{font-size:10.5px;color:var(--dim);font-style:italic}
   .fjpending{font-size:11px;color:var(--dim);font-style:italic;padding:4px 0}
   @media (max-width:1000px){
     .strip-cards{grid-template-columns:1fr}
@@ -215,6 +219,7 @@
     .tagline{margin-left:0;width:100%}
     .ihead .ttl{white-space:normal}
     .mcard .bar{height:10px}
+    .fjdrv{grid-template-columns:1fr}
   }
 </style>
 </head>
@@ -503,16 +508,19 @@ function renderFinancialJuice(d){
     }
     if(b.found){
       html+='<div class="fjgrid">'+(b.assets||[]).map(fjAsset).join('')+'</div>';
-      if(b.drivers&&b.drivers.length){
-        html+='<div class="fjdv"><b>Key drivers:</b> '
-          +b.drivers.map(function(x){return esc(x);}).join(' &middot; ')+'</div>';
-      }
     }else{
       html+='<div class="fjpending">Awaiting today\'s FinancialJuice '
         +esc(b.title)+' report. Showing an even 50/50 split rather than '
         +'inventing a signal.</div>';
       html+='<div class="fjgrid">'+(b.assets||[]).map(fjAsset).join('')+'</div>';
     }
+    /* TOP DRIVERS / KEY RISKS read off THIS box's own session report, via the
+       same two-note component the MARKET PREP cards use. Drawn for all five
+       boxes - found or not - so the section reads as one consistent set; an
+       empty side says "None flagged." instead of being hidden. */
+    html+='<div class="fjdrv">'
+      +mnote('drv','TOP DRIVERS',b.drivers,3)
+      +mnote('rsk','KEY RISKS',b.risks,3)+'</div>';
     html+='</div>';
   });
   box.innerHTML=html;

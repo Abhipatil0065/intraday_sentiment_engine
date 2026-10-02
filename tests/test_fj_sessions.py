@@ -582,4 +582,128 @@ def test_each_required_report_classifies_to_its_own_box(title, expected):
 def test_ordinary_wire_headlines_cannot_classify_as_a_session():
     assert F.classify_fj_session("Fed's Jefferson: inflation cools") is None
     assert F.classify_fj_session("") is None
+# ---------------------------------------------------------------------------
+# TOP DRIVERS & KEY RISKS - read off each box's own session report
+# ---------------------------------------------------------------------------
+US_WRAP_BODY = (
+    "Gold surged as the dollar weakened and safe haven demand lifted "
+    "Treasuries. Equities fell while oil climbed, with geopolitical "
+    "tensions escalating around the Strait of Hormuz."
+)
+
+
+def test_every_box_always_exposes_drivers_and_risks():
+    """The key must exist on all five boxes, found or not, so the UI never
+    has to special-case a missing report."""
+    payload = F.build_session_analysis([], now=NOW)
+    for box in payload["boxes"]:
+        assert "drivers" in box and "risks" in box
+        assert box["drivers"] == [] and box["risks"] == []
+
+
+def test_box_drivers_and_risks_are_extracted_from_the_report():
+    rows = [row("Gold Surges as Dollar Weakens - US Market Wrap",
+                datetime(2026, 10, 2, 8, 0, tzinfo=timezone.utc),
+                body=US_WRAP_BODY)]
+    box = {b["session_key"]: b for b in
+           F.build_session_analysis(rows, now=NOW)["boxes"]}["US_MARKET_WRAP"]
+    assert box["drivers"], "a report with supportive lines must yield drivers"
+    assert box["risks"], "geopolitical escalation must be flagged as a risk"
+    # Everything shown is the report's own wording, never invented text.
+    joined = " ".join(box["drivers"] + box["risks"]).lower()
+    for phrase in ("gold surged", "geopolitical", "hormuz"):
+        assert phrase in joined
+
+
+def test_geopolitical_risk_lands_in_risks_not_drivers():
+    """'escalating the war' is a risk; it must never be shown as a driver."""
+    drivers, risks = F.extract_drivers_and_risks(
+        "Tensions escalated sharply and the Fed signaled a rate hike, with "
+        "sanctions on crude exports raising the risk of a severe downturn.")
+    assert risks
+    assert not any("escalat" in d.lower() or "sanction" in d.lower()
+                   for d in drivers)
+
+
+def test_dovish_language_lands_in_drivers_not_risks():
+    drivers, risks = F.extract_drivers_and_risks(
+        "The Fed signaled a rate cut as inflation cooled, and safe haven "
+        "demand surged with the dollar sliding lower on the news.")
+    assert drivers
+    assert not any("rate cut" in r.lower() for r in risks)
+
+
+def test_scheduled_docket_entries_count_as_forward_looking_risks():
+    """A print that has not happened yet is a risk, not a realised move."""
+    body = ("Sentiment\nOil steadied after a two-day gain.\n"
+            "Docket\n05:00 ET\nEurozone CPI\n"
+            "YoY \u2013 Forecast: 3.7% | Prior: 3.2%")
+    _drivers, risks = F.extract_drivers_and_risks(body)
+    assert any("Eurozone CPI" in r for r in risks)
+    # The bare clock line is formatting, not an event.
+    assert not any(r.strip().startswith("05:00") for r in risks)
+
+
+def test_speakers_section_is_treated_as_ahead_of_time_risk():
+    _drivers, risks = F.extract_drivers_and_risks(
+        "Speakers\nFed Vice Chair Philip Jefferson")
+    assert any("Jefferson" in r for r in risks)
+
+
+def test_report_with_no_directional_content_flags_nothing():
+    """No evidence must render as empty, never as a fabricated driver."""
+    drivers, risks = F.extract_drivers_and_risks(
+        "Good Morning Traders. Here is what to look out for today.")
+    assert drivers == [] and risks == []
+
+
+def test_driver_and_risk_items_are_clipped_to_a_readable_width():
+    drivers, risks = F.extract_drivers_and_risks(
+        "Gold surged as the dollar slid and the Fed signalled a rate cut " * 12,
+        title="Gold Surges - US Market Wrap")
+    for item in drivers + risks:
+        assert len(item) <= F.MAX_ITEM_CHARS
+
+
+def test_title_is_scored_separately_from_the_first_body_sentence():
+    """The headline must not be spliced onto the opening sentence."""
+    drivers, _risks = F.extract_drivers_and_risks(
+        "Equities fell as oil advanced on the day.",
+        title="Stocks Surge as Yields Fall - US Market Wrap")
+    assert drivers
+    assert any("Stocks Surge as Yields Fall" in d for d in drivers)
+    assert not any("US Market Wrap Equities fell" in d for d in drivers)
+
+
+def test_context_drivers_do_not_leak_into_the_report_notes():
+    """Section B / calendar evidence shapes the score, but TOP DRIVERS and
+    KEY RISKS must stay FinancialJuice-report-only, matching the source rule."""
+    from app.models.enums import Direction, EconomicImportance, ImpactStrength
+
+    ctx = F.SessionContext()
+    ctx.news_count = 1
+    entry = ctx.news.setdefault(Asset.GOLD, F.AssetContext())
+    entry.bull, entry.bear, entry.drivers = 6.0, 0.0, ["Some Section B headline"]
+
+    rows = [row("US Stocks End Higher - US Market Wrap",
+                datetime(2026, 10, 2, 8, 0, tzinfo=timezone.utc), body=US_WRAP_BODY)]
+    box = {b["session_key"]: b for b in
+           F.build_session_analysis(rows, now=NOW, context=ctx)["boxes"]
+           }["US_MARKET_WRAP"]
+    assert "Some Section B headline" not in " ".join(box["drivers"] + box["risks"])
+
+
+def test_section_splitting_keeps_headings_as_boundaries():
+    sections = F.split_report_sections(
+        "Intro line.\nSentiment\nMarkets rallied broadly.\nDocket\n10:00 ET\nCPI")
+    assert set(sections) == {"body", "sentiment", "docket"}
+    assert "rallied" in sections["sentiment"]
+    assert "rallied" not in sections["docket"]
+
+
+def test_wraps_without_headings_land_entirely_in_body():
+    """A MARKET WRAP is plain prose - nothing may be lost to a missing heading."""
+    sections = F.split_report_sections(US_WRAP_BODY)
+    assert list(sections) == ["body"]
+    assert "Hormuz" in sections["body"]
     assert F.classify_fj_session("Unrelated: something happened") is None

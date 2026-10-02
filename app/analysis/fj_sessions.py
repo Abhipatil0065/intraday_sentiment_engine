@@ -21,6 +21,12 @@ Design rules enforced here:
   to exactly 100.0. There is no NEUTRAL / MIXED / SIDEWAYS output anywhere;
   weak evidence collapses toward 50/50 rather than inventing conviction
   (see :func:`bullish_bearish_from_score`).
+* **TOP DRIVERS & KEY RISKS come from the report's own sentences** - see
+  :func:`extract_drivers_and_risks`. Drivers are the lines that lean
+  supportive, risks the lines that lean against plus everything the session is
+  still waiting on (a Docket print or a scheduled speaker). Both are verbatim
+  fragments of the report: nothing is paraphrased, and an evidence-free report
+  yields empty lists rather than a fabricated one.
 """
 
 from __future__ import annotations
@@ -324,20 +330,15 @@ ASSET_CUES: dict = {
 }
 
 
-def _asset_evidence(text: str, asset: Asset) -> tuple:
+def _apply_subject_inversion(lowered: str, bull: float, bear: float) -> tuple:
     """
-    Score one report for one asset using the project's existing cue tables.
+    Subject-aware inversion, mirroring ``cue_rules.detect_direction``.
 
-    Returns (bull_score, bear_score, matched_driver_phrases). The established
-    BULLISH_CUES / BEARISH_CUES tables are reused rather than reinvented, and
-    the same yield/dollar inversion the main engine applies is applied here so
-    "yields rise" stays bearish for metals.
+    It lives in one place because BOTH the per-asset score and the per-sentence
+    TOP DRIVERS / KEY RISKS read depend on it: "Treasury YIELDS RISE" must stay
+    bearish for metals, and a sentence is only evidence if it is read the same
+    way in both places.
     """
-    lowered = (text or "").lower()
-    bull = score_cues(lowered, BULLISH_CUES)
-    bear = score_cues(lowered, BEARISH_CUES)
-
-    # Subject-aware inversion, mirroring cue_rules.detect_direction.
     for _ in re.finditer(
         r"\b(yields?|treasur\w*|dollar|usd|dxy|currency)\b[^.;]{0,24}?"
         r"\b(rise|rose|rising|climb\w*|higher|up|advance|strengthen\w*|gain\w*)\b",
@@ -352,6 +353,28 @@ def _asset_evidence(text: str, asset: Asset) -> tuple:
     ):
         bull = max(0.0, bull - 2.0)
         bear += 2.0
+    return bull, bear
+
+
+def _directional_scores(text: str) -> tuple:
+    """(bullish, bearish) cue weight for one piece of report text."""
+    lowered = (text or "").lower()
+    bull = score_cues(lowered, BULLISH_CUES)
+    bear = score_cues(lowered, BEARISH_CUES)
+    return _apply_subject_inversion(lowered, bull, bear)
+
+
+def _asset_evidence(text: str, asset: Asset) -> tuple:
+    """
+    Score one report for one asset using the project's existing cue tables.
+
+    Returns (bull_score, bear_score, matched_driver_phrases). The established
+    BULLISH_CUES / BEARISH_CUES tables are reused rather than reinvented, and
+    the same yield/dollar inversion the main engine applies is applied here so
+    "yields rise" stays bearish for metals.
+    """
+    lowered = (text or "").lower()
+    bull, bear = _directional_scores(text)
 
     # Only surface a cue as a driver when it is relevant to THIS instrument.
     relevant = ASSET_CUES[asset]
@@ -365,6 +388,128 @@ def _asset_evidence(text: str, asset: Asset) -> tuple:
 
     return float(bull), float(bear), list(dict.fromkeys(drivers))[:4]
 
+# ---------------------------------------------------------------------------
+# 3a. REPORT STRUCTURE - what a FinancialJuice report is actually made of
+# ---------------------------------------------------------------------------
+#: FinancialJuice lays its reports out under fixed headings. "Sentiment" is the
+#: narrative, "Docket" the scheduled macro prints, "Speakers" the voices due to
+#: speak. Recognising them is what lets a PREP box show what it is WAITING on
+#: rather than only what has already happened.
+REPORT_SECTIONS: tuple = ("sentiment", "docket", "speakers", "calendar",
+                          "earnings", "what to watch")
+
+_SECTION_HEADER = re.compile(
+    r"^\s*(" + "|".join(REPORT_SECTIONS) + r")\s*:?\s*$", re.IGNORECASE)
+
+#: Sections whose contents have NOT happened yet. A scheduled print or speaker
+#: is a forward-looking risk, never a realised move, so it is filed under risks.
+AHEAD_SECTIONS: frozenset = frozenset({"docket", "speakers", "calendar"})
+
+#: A sentence shorter than this is a fragment, not evidence.
+MIN_EVIDENCE_CHARS = 40
+
+#: Items are clipped to this width so one box still fits on a screen. The cut is
+#: made on a word boundary and the original text is otherwise untouched, so
+#: every line a reader sees is still the report's own wording.
+MAX_ITEM_CHARS = 150
+
+#: Split after sentence-ending punctuation followed by a capital/digit.
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])")
+
+#: "05:00 ET" alone on a Docket line is the clock, not the event.
+_CLOCK_LINE = re.compile(r"^\d{1,2}:\d{2}\s*(ET|GMT|UTC|BST|CET)?\s*$",
+                         re.IGNORECASE)
+
+
+def split_report_sections(text: str) -> dict:
+    """
+    Split a report body into ``{section_name: text}``.
+
+    Anything before the first heading lands under ``"body"``, which is how a
+    MARKET WRAP arrives - it is prose with no headings at all. Unknown headings
+    are not treated as sections, so a stray line can never swallow the rest of
+    the report.
+    """
+    sections: dict = {"body": []}
+    current = "body"
+    for line in (text or "").splitlines():
+        header = _SECTION_HEADER.match(line)
+        if header:
+            current = header.group(1).strip().lower()
+            sections.setdefault(current, [])
+        else:
+            sections.setdefault(current, []).append(line)
+    return {name: "\n".join(lines).strip() for name, lines in sections.items()}
+
+
+def _clip(text: str, limit: int = MAX_ITEM_CHARS) -> str:
+    """Flatten whitespace and cut on a word boundary, never mid-word."""
+    flat = " ".join((text or "").split()).strip()
+    if len(flat) <= limit:
+        return flat
+    head = flat[:limit].rsplit(" ", 1)[0].rstrip(" ,;:-")
+    return (head or flat[:limit]) + "..."
+
+
+def _rank(scored: list, limit: int) -> list:
+    """Strongest evidence first, de-duplicated, capped at ``limit``."""
+    out: list = []
+    for _weight, item in sorted(scored, key=lambda x: (-x[0], x[1])):
+        if item in out:
+            continue
+        out.append(item)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def extract_drivers_and_risks(body: str, limit: int = 3,
+                              title: str = "") -> tuple:
+    """
+    Read a session report's TOP DRIVERS and KEY RISKS off its own text.
+
+    Returns ``(drivers, risks)``. Drivers are the sentences in the report that
+    lean supportive; risks are the ones that lean against, PLUS everything the
+    session is still waiting on - a Docket print or a scheduled speaker is
+    forward-looking risk rather than a move that has happened.
+
+    ``title`` is scored as its own unit rather than being glued onto the opening
+    sentence: the headline is often the single sharpest line in the report
+    ("Stocks Rebound as Treasury Rally Provides Relief"), and joining it to the
+    body would splice two separate statements into one unreadable fragment.
+
+    Every entry is a clipped fragment of the report itself, so nothing is
+    paraphrased and nothing is invented: a report that takes no side in any
+    sentence yields empty lists, which the dashboard renders as "None flagged."
+    """
+    drivers: list = []
+    risks: list = []
+
+    units: list = [(title.strip(), True)] if (title or "").strip() else []
+    for name, block in split_report_sections(body).items():
+        if name in AHEAD_SECTIONS:
+            # Scheduled, therefore unresolved: each line is a risk on its own.
+            for line in block.splitlines():
+                line = line.strip()
+                if len(line) < 3 or _CLOCK_LINE.match(line):
+                    continue
+                risks.append((1.0, _clip(line)))
+            continue
+        units.extend((s.strip(), False)
+                     for s in _SENTENCE_SPLIT.split(block))
+
+    for unit, is_title in units:
+        if not is_title and len(unit) < MIN_EVIDENCE_CHARS:
+            continue
+        if not unit:
+            continue
+        bull, bear = _directional_scores(unit)
+        if bull > bear:
+            drivers.append((bull - bear, _clip(unit)))
+        elif bear > bull:
+            risks.append((bear - bull, _clip(unit)))
+
+    return _rank(drivers, limit), _rank(risks, limit)
 
 def analyse_report_text(text: str, context=None) -> dict:
     """
@@ -758,15 +903,8 @@ def _empty_box(session_key: str) -> dict:
             for a in (Asset.GOLD, Asset.SILVER, Asset.BITCOIN)
         ],
         "drivers": [],
+        "risks": [],
     }
-
-
-def _merge_drivers(scored: dict) -> list:
-    """Top cross-asset drivers, de-duplicated, for the box-level summary."""
-    merged: list = []
-    for asset in (Asset.GOLD, Asset.SILVER, Asset.BITCOIN):
-        merged.extend(scored[asset]["drivers"])
-    return list(dict.fromkeys(merged))[:5]
 
 
 def build_session_analysis(
@@ -827,6 +965,9 @@ def build_session_analysis(
             continue
 
         scored = analyse_report_text(f"{rep.title}\n{rep.body}", context)
+        # TOP DRIVERS / KEY RISKS are read off the report's own sentences, so
+        # they describe THIS session rather than any asset in isolation.
+        drivers, risks = extract_drivers_and_risks(rep.body, title=rep.title)
         boxes.append({
             "session_key": key,
             "title": SESSION_TITLES[key],
@@ -843,7 +984,11 @@ def build_session_analysis(
             "published_ist": rep.published_ist,
             "assets": [scored[a] for a in (
                 Asset.GOLD, Asset.SILVER, Asset.BITCOIN)],
-            "drivers": _merge_drivers(scored),
+            # Report sentences only. This box is FinancialJuice-only, so
+            # external evidence (Section B news, the economic calendar) must
+            # never appear here - it shapes the scores above, not these notes.
+            "drivers": drivers,
+            "risks": risks,
         })
 
     return {
