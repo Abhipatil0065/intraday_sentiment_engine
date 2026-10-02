@@ -1018,11 +1018,15 @@ def build_context_from_db(session, calendar_signals=None) -> Optional[SessionCon
     from sqlalchemy import select
 
     from app.models.db_models import NewsArticle
+    from app.services.pipeline import news_day_predicate
 
+    # Resolved at query time, like the Section B feed. Reading the raw is_today
+    # column here would let the session backdrop score itself against
+    # yesterday's HIGH-importance headlines after the day rolls over.
     news_rows = session.scalars(
         select(NewsArticle)
         .where(
-            NewsArticle.is_today.is_(True),
+            news_day_predicate(),
             NewsArticle.importance.in_(list(HIGH_IMPORTANCE)),
         )
         .order_by(NewsArticle.published_at_utc.desc())

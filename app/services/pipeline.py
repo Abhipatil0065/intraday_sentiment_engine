@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 
 from app.analysis.economic_impact import (
     CalendarSignal,
@@ -24,6 +24,7 @@ from app.analysis.economic_impact import (
     to_calendar_summary,
 )
 from app.analysis.event_deduplication import EventDeduplicator
+from app.analysis.fj_sessions import FINANCIAL_JUICE_SOURCE
 from app.analysis.news_classifier import analyze_article
 from app.analysis.sentiment_engine import WeightedSignal
 from app.config import settings
@@ -360,7 +361,7 @@ def _recompute_sentiment(session):
     from app.analysis.sentiment_engine import compute as compute_sentiment
 
     rows = session.scalars(
-        select(NewsArticle).where(NewsArticle.is_today.is_(True))
+        select(NewsArticle).where(news_day_predicate())
     ).all()
 
     signals: list[WeightedSignal] = []
@@ -454,6 +455,64 @@ def _recompute_sentiment(session):
         )
 
     return signals, assessment
+
+
+def _is_article_today_query(published: Optional[datetime]) -> bool:
+    """
+    The TODAY test, re-evaluated NOW rather than trusting a stored flag.
+
+    ``NewsArticle.is_today`` is written once at ingest time and never
+    recomputed, so on a long-running process it drifts: every article ever
+    ingested stays flagged True, and the feed keeps re-serving yesterday's
+    headlines as today's news. Re-deriving the day from the stored publication
+    time against the single boundary in ``timeutils.market_day_start_utc`` is
+    what keeps "today" meaning today.
+    """
+    if published is None:
+        return False
+    return T.is_within_market_day(published)
+
+
+def news_day_predicate():
+    """
+    SQLAlchemy predicate matching the rows that count as TODAY right now.
+
+    Shared by every reader (dashboard feed, sentiment recompute, article
+    counters) so no consumer can disagree about which day it is looking at.
+
+    FinancialJuice session reports are deliberately excluded from the
+    publication-time test: they are admitted on the INDIAN trading date (see
+    ``_fj_session_report_is_admissible``), and the US Market Wrap legitimately
+    lands on the previous ET day. Applying the ET test to them would throw that
+    report away every evening, exactly the regression the IST carve-out exists
+    to prevent. They stay governed by ``is_today``, which is the flag ingest set
+    for them.
+    """
+    from app.analysis.fj_sessions import FINANCIAL_JUICE_SOURCE
+
+    day_start = T.market_day_start_utc().replace(tzinfo=None)
+
+    def _is_fj_source(col):
+        """
+        SQL twin of ``fj_sessions.is_financial_juice``.
+
+        That helper matches by stripping separators and lowercasing, so a
+        config rename ("Financial Juice" vs "financialjuice") still matches.
+        Mirror that normalisation here instead of hard-coding one spelling,
+        otherwise the carve-out silently stops applying after a source rename.
+        """
+        flat = func.lower(col)
+        for ch in (" ", "-", "_", ".", "'"):
+            flat = func.replace(flat, ch, "")
+        return flat.contains(FINANCIAL_JUICE_SOURCE)
+
+    return and_(
+        NewsArticle.is_today.is_(True),
+        or_(
+            NewsArticle.published_at_utc >= day_start,
+            _is_fj_source(NewsArticle.source),
+        ),
+    )
 
 
 def _load_existing_guids(session) -> set[str]:

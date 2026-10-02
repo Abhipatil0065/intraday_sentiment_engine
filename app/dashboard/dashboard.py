@@ -100,11 +100,27 @@ if data["alerts"]:
                  f"est. delta {a['sentiment_delta']:+.1f} — {a['headline']}")
 
 # ---------------- Section B ----------------
+# The API ships one page of the day; streamlit pages through /api/news so the
+# reader can reach every article without the main payload carrying all of them.
+PAGE = st.number_input(
+    "Page", min_value=1, max_value=500, value=1, step=1,
+    help="Articles are ordered newest first.",
+)
+feed_total = int(data.get("news_feed_total", 0) or 0)
+feed_page = fetch(f"/api/news?limit=60&offset={(int(PAGE) - 1) * 60}")
+feed_items = feed_page.get("items", [])
+
 st.subheader("Section B — Today's News Impact Feed")
-if not data["news_feed"]:
+if feed_total:
+    shown = len(feed_items)
+    st.caption(
+        f"Showing {shown} of {feed_total} articles today "
+        f"(page {int(PAGE)} of {max(1, -(-feed_total // 60))})."
+    )
+if not feed_items:
     st.info("No qualifying news for today yet.")
 
-for item in data["news_feed"]:
+for item in feed_items:
     with st.expander(f"[{item['display_time']}] {item['title']}"):
         st.markdown(
             f"**Source:** {item['source']} · **Category:** {item['category']} · "

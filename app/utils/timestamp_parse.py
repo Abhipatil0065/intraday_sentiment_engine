@@ -76,6 +76,30 @@ def _market_tz():
     return market_tz()
 
 
+def _market_day_start_utc(now: Optional[datetime] = None) -> datetime:
+    from app.utils.timeutils import market_day_start_utc
+    return market_day_start_utc(now)
+
+
+def is_within_market_day(
+    utc_dt: Optional[datetime], *, now: Optional[datetime] = None
+) -> bool:
+    """
+    True when a timestamp falls on or after today's market-day start.
+
+    This is the in-Python twin of the SQL predicate the feed uses
+    (``pipeline.news_day_predicate``). Both compare against the same
+    ``market_day_start_utc`` boundary, so the database and this helper can never
+    disagree about where the trading day starts - which is exactly the drift
+    that let yesterday's headlines linger in today's feed.
+    """
+    if utc_dt is None:
+        return False
+    if utc_dt.tzinfo is None:
+        utc_dt = utc_dt.replace(tzinfo=timezone.utc)
+    return utc_dt.astimezone(timezone.utc) >= _market_day_start_utc(now)
+
+
 def is_today(utc_dt: Optional[datetime], *, now: Optional[datetime] = None) -> bool:
     """
     Strict TODAY test in the market timezone.

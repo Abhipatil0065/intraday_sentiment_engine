@@ -115,6 +115,17 @@ class Settings(BaseSettings):
     max_article_age_hours: int = 26
     update_window_hours: int = 6
 
+    # ---------------- news feed paging ----------------
+    # How many articles one dashboard payload carries. Purely a transport
+    # concern: /api/news can page through the entire day regardless of this.
+    # A busy day holds several hundred rows, each with its full per-asset
+    # impact breakdown, so shipping the whole day on every 30s poll would be
+    # wasteful. Readers page in more via the "Load more" button.
+    news_feed_page_size: int = 60
+    # Ceiling on a single /api/news page, so one request can never ask the
+    # server to serialise an unbounded number of rows.
+    news_feed_max_page_size: int = 200
+
     # ---------------- deduplication ----------------
     dedup_similarity_threshold: float = 0.72
     dedup_time_window_hours: int = 12

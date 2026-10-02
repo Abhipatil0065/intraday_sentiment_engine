@@ -200,6 +200,76 @@ def test_non_fj_source_is_never_a_session_report():
     assert asyncio.run(_is_fj_session_report(art)) is False
 
 
+# ---------------------------------------------------------------------------
+# Query-time TODAY resolution.
+#
+# is_today is written once at ingest and never recomputed, so a long-running
+# process accumulates yesterday's headlines under that flag forever. The feed
+# and the sentiment recompute therefore re-derive the day from the stored
+# publication time instead. These tests pin that boundary.
+# ---------------------------------------------------------------------------
+def test_market_day_start_is_midnight_in_the_market_tz():
+    now = datetime(2026, 10, 2, 11, 55, tzinfo=timezone.utc)
+    start = T.market_day_start_utc(now)
+    assert start == datetime(2026, 10, 2, 4, 0, tzinfo=timezone.utc)  # 00:00 EDT
+    assert start.tzinfo is timezone.utc
+
+
+def test_article_after_midnight_et_is_within_the_market_day():
+    now = datetime(2026, 10, 2, 11, 55, tzinfo=timezone.utc)
+    published = datetime(2026, 10, 2, 4, 0, tzinfo=timezone.utc)
+    assert T.is_within_market_day(published, now=now) is True
+
+
+def test_article_before_midnight_et_is_outside_the_market_day():
+    """The regression this change exists for: 23:30 UTC the prior day is
+    yesterday in New York and must not be served as today's news."""
+    now = datetime(2026, 10, 2, 11, 55, tzinfo=timezone.utc)
+    published = datetime(2026, 10, 1, 23, 30, tzinfo=timezone.utc)
+    assert T.is_within_market_day(published, now=now) is False
+
+
+def test_stale_is_today_flag_no_longer_decides_the_day():
+    """An article flagged is_today=True at ingest but published yesterday must
+    be excluded by the predicate the feed and sentiment recompute both share."""
+    from app.services.pipeline import news_day_predicate
+
+    now = datetime(2026, 10, 2, 11, 55, tzinfo=timezone.utc)
+    yesterday = now - timedelta(hours=20)
+    assert T.is_within_market_day(yesterday, now=now) is False
+    assert news_day_predicate() is not None
+
+
+def test_missing_timestamp_is_never_within_the_market_day():
+    assert T.is_within_market_day(None) is False
+
+
+def test_naive_timestamp_is_treated_as_utc():
+    now = datetime(2026, 10, 2, 11, 55, tzinfo=timezone.utc)
+    assert T.is_within_market_day(datetime(2026, 10, 2, 5, 0), now=now) is True
+
+
+def test_market_day_rolls_over_at_et_midnight_not_utc_midnight():
+    """The ET day, not the UTC day, decides what "today" means.
+
+    An article stamped 01:00 UTC on Oct 2 is Oct 1 21:00 in New York. While the
+    ET day is still Oct 1 it legitimately belongs to today; once ET crosses
+    midnight (04:00 UTC) the same article becomes yesterday and must drop out.
+    This is precisely why the feed cannot filter on the UTC date column.
+    """
+    published = datetime(2026, 10, 2, 1, 0, tzinfo=timezone.utc)  # Oct 1, 21:00 EDT
+
+    # Still Oct 1 in New York -> the article is today's news.
+    assert T.is_within_market_day(
+        published, now=datetime(2026, 10, 2, 1, 30, tzinfo=timezone.utc)
+    ) is True
+
+    # After ET midnight (04:00 UTC) it is Oct 2 in New York -> yesterday's news.
+    assert T.is_within_market_day(
+        published, now=datetime(2026, 10, 2, 12, 0, tzinfo=timezone.utc)
+    ) is False
+
+
 def test_us_wrap_past_midnight_ist_is_admissible():
     """01:05 IST on 2 Oct is 'yesterday' in New York - it must still pass."""
     published = datetime(2026, 10, 1, 19, 35, tzinfo=timezone.utc)

@@ -160,6 +160,14 @@
   .wnote{margin-top:8px;padding-top:7px;border-top:1px dashed var(--line);
          font-size:10px;font-style:italic;color:var(--dim)}
   .empty{color:var(--dim);font-size:11.5px;padding:14px;text-align:center}
+  .feedmore{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+            padding:12px 2px 4px;margin-top:4px;
+            border-top:1px dashed var(--line)}
+  .feedmore button{background:var(--panel2);border:1px solid var(--line);
+            color:var(--txt);font:inherit;font-size:11.5px;padding:7px 14px;
+            border-radius:6px;cursor:pointer;letter-spacing:.4px}
+  .feedmore button:hover:not(:disabled){border-color:var(--gold);color:var(--gold)}
+  .feedmore button:disabled{opacity:.5;cursor:default}
 
   /* ---- FinancialJuice Session Analysis (five fixed boxes) ---- */
   .fjhead{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;
@@ -243,6 +251,9 @@
 <footer id="disclaimer">News-based intraday sentiment. Not a price prediction, not financial advice.</footer>
 <script>
 let ws=null, backoff=1000, DATA=null, activeFilter='ALL';
+/* Feed paging state. total = the whole day (from the API); loaded = how many
+   rows are currently in memory across pages fetched so far. */
+let FEED={items:[],total:0,loaded:0,page:60,busy:false};
 function esc(s){return String(s==null?'':s)
   .replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function n1(v){return (Math.round((+v||0)*10)/10).toFixed(1);}
@@ -410,10 +421,18 @@ function matches(it){
 function renderFeed(items){
   var list=(items||[]).filter(matches);
   var box=document.getElementById('feed');
+  /* items.length is what is loaded; FEED.total is the whole day. Showing the
+     loaded count as the denominator is what produced the misleading
+     "60 of 60" - the two were the same number because the server had already
+     capped the array at 60 before this ever ran. */
   document.getElementById('feedCount').textContent=
-    '('+list.length+' of '+(items||[]).length+' items)';
+    '('+list.length+' shown of '+FEED.total+' today)';
   if(!list.length){
-    box.innerHTML='<div class="empty">No qualifying news for this filter yet.</div>';
+    box.innerHTML='<div class="empty">'+(FEED.total
+      ?'No qualifying news for this filter among the '+FEED.loaded
+       +' articles loaded. Load more to keep searching.'
+      :'No qualifying news for today yet.')+'</div>';
+    if(FEED.loaded<FEED.total) box.innerHTML+=moreButton();
     return;
   }
   box.innerHTML=list.map(function(it){
@@ -441,6 +460,44 @@ function renderFeed(items){
       +(it.analysis_note?('<div class="wnote">'+esc(it.analysis_note)+'</div>'):'')
       +'</div></div>';
   }).join('');
+  if(FEED.loaded<FEED.total) box.innerHTML+=moreButton();
+}
+/* ---- Feed paging ---------------------------------------------------------
+   A busy day holds hundreds of articles, so /api/dashboard ships the first
+   page only and this pulls the rest from /api/news on demand. Paging is
+   server-side and offset-based against a strict newest-first ordering that
+   carries an id tiebreaker, so consecutive pages cannot duplicate or skip. */
+function moreButton(){
+  var remain=FEED.total-FEED.loaded;
+  return '<div class="feedmore"><button data-more="1"'
+    +(FEED.busy?' disabled':'')+'>'+(FEED.busy?'Loading…':'Load more ('
+      +Math.min(FEED.page,remain)+' of '+remain+' remaining)')+'</button>'
+    +'<span class="fcount">Showing '+FEED.loaded+' of '+FEED.total
+    +' articles today</span></div>';
+}
+async function loadMore(){
+  if(FEED.busy||FEED.loaded>=FEED.total) return;
+  FEED.busy=true; renderFeed(FEED.items);
+  try{
+    const r=await fetch('/api/news?offset='+FEED.loaded+'&limit='+FEED.page);
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    /* Merge by id instead of trusting a blind append: if a new article landed
+       since the previous page was drawn, the server's offset window has
+       shifted, so concatenation could otherwise duplicate a row. */
+    var seen={}, merged=[];
+    FEED.items.concat(d.items||[]).forEach(function(it){
+      if(!seen[it.id]){ seen[it.id]=1; merged.push(it); }
+    });
+    merged.sort(function(a,b){
+      if(a.published_at_utc===b.published_at_utc) return (b.id||0)-(a.id||0);
+      return a.published_at_utc<b.published_at_utc?1:-1;
+    });
+    FEED.items=merged;
+    if(typeof d.total==='number') FEED.total=d.total;
+    FEED.loaded=FEED.items.length;
+  }catch(e){ console.error(e); }
+  FEED.busy=false; renderFeed(FEED.items);
 }
 /* ---- FinancialJuice Session Analysis -----------------------------------
    Renders exactly five boxes in the fixed order supplied by the API. Only
@@ -564,7 +621,26 @@ function render(d){
   renderPrepStrip(d.assets);
   renderAssets(d.assets);
   renderAlerts(d.alerts);
-  renderFeed(d.news_feed);
+  /* Seed the feed from the payload's first page. On a refresh the page-1 rows
+     are replaced, but anything the reader already paged in is kept, so a 30s
+     auto-refresh does not silently collapse an expanded feed back to 60. */
+  var first=d.news_feed||[];
+  if(!FEED.loaded){
+    FEED.items=first.slice();
+    FEED.loaded=FEED.items.length;
+  }else{
+    var byId={}; FEED.items.forEach(function(it){byId[it.id]=it;});
+    first.forEach(function(it){byId[it.id]=it;});
+    FEED.items=Object.keys(byId).map(function(k){return byId[k];});
+    FEED.items.sort(function(a,b){
+      if(a.published_at_utc===b.published_at_utc) return (b.id||0)-(a.id||0);
+      return a.published_at_utc<b.published_at_utc?1:-1;
+    });
+    FEED.loaded=FEED.items.length;
+  }
+  if(typeof d.news_feed_total==='number') FEED.total=d.news_feed_total;
+  else FEED.total=Math.max(FEED.total,FEED.loaded);
+  renderFeed(FEED.items);
   document.getElementById('disclaimer').textContent=d.disclaimer||'';
 }
 async function load(){
@@ -592,9 +668,11 @@ document.addEventListener('click',function(e){
   }
   var head=e.target.closest('.ihead');
   if(head){ head.parentNode.classList.toggle('open'); return; }
+  var more=e.target.closest('[data-more]');
+  if(more){ loadMore(); return; }
   var btn=e.target.closest('.filters button');
   if(btn){ activeFilter=btn.getAttribute('data-f'); renderFilters();
-           renderFeed(DATA?DATA.news_feed:[]); }
+           renderFeed(FEED.items); }
 });
 function connect(){
   const proto=location.protocol==='https:'?'wss':'ws';

@@ -171,6 +171,10 @@ class DashboardPayload(BaseModel):
     regime_drivers: list[str] = Field(default_factory=list)
     assets: list[AssetView] = Field(default_factory=list)
     news_feed: list[NewsItemOut] = Field(default_factory=list)
+    # Size of the WHOLE day, not of news_feed (which is one page). The header
+    # renders "showing N of TOTAL" from this, so a reader can always tell how
+    # many articles are still behind the "Load more" button.
+    news_feed_total: int = 0
     alerts: list[AlertOut] = Field(default_factory=list)
     status: PipelineStatus
     disclaimer: str = (

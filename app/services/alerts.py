@@ -29,9 +29,14 @@ def evaluate_and_emit(session, stats) -> list[Alert]:
     want_importance = settings.alert_on_importance.upper()
     want_strength = settings.alert_on_strength.upper()
 
+    # news_day_predicate, not the raw is_today flag: that flag is written once
+    # at ingest and never recomputed, so scanning it alone would keep alerting
+    # on yesterday's very-high-signal headlines as though they were breaking now.
+    from app.services.pipeline import news_day_predicate
+
     candidates = session.scalars(
         select(NewsArticle)
-        .where(NewsArticle.is_today.is_(True))
+        .where(news_day_predicate())
         .where(
             (NewsArticle.importance == EconomicImportance.VERY_HIGH.value)
             | (NewsArticle.importance == want_importance)

@@ -11,6 +11,7 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -146,13 +147,44 @@ def _block(session, asset: str, scope: str) -> dict:
     }
 
 
-def _news_feed(session, limit: int = 60) -> list[dict]:
-    """Today's news, newest first, each with its full impact analysis."""
+def _news_feed(session, limit: Optional[int] = None,
+               offset: int = 0) -> tuple[list[dict], int]:
+    """
+    Today's news, newest first, each with its full impact analysis.
+
+    Returns ``(items, total)`` where ``total`` is the size of the WHOLE day,
+    not of this page. The dashboard header renders "N of TOTAL" from it, so a
+    reader can always see how many articles are still behind "Load more".
+
+    ``limit`` defaults to ``settings.news_feed_page_size`` and is clamped to
+    ``settings.news_feed_max_page_size`` so one request can never ask the server
+    to serialise an unbounded number of rows.
+
+    "Today" is resolved by ``pipeline.news_day_predicate`` rather than by the
+    stored ``is_today`` column, which is written once at ingest and never
+    recomputed - trusting it is what let yesterday's headlines sit in today's
+    feed indefinitely.
+    """
+    page = settings.news_feed_page_size if limit is None else int(limit)
+    page = max(1, min(page, settings.news_feed_max_page_size))
+    offset = max(0, int(offset))
+
+    predicate = pipeline.news_day_predicate()
+
+    total = session.scalar(
+        select(func.count(NewsArticle.id)).where(predicate)
+    ) or 0
+
     rows = session.scalars(
         select(NewsArticle)
-        .where(NewsArticle.is_today.is_(True))
-        .order_by(NewsArticle.published_at_utc.desc())
-        .limit(limit)
+        .where(predicate)
+        # id is the tiebreaker on purpose: publishers stamp whole batches with
+        # one timestamp (Investing.com alone fires dozens per minute), so
+        # published_at_utc alone is not a stable sort key and offset paging
+        # would otherwise duplicate or skip rows between pages.
+        .order_by(NewsArticle.published_at_utc.desc(), NewsArticle.id.desc())
+        .offset(offset)
+        .limit(page)
     ).all()
 
     feed: list[dict] = []
@@ -197,7 +229,7 @@ def _news_feed(session, limit: int = 60) -> list[dict]:
                 for i in row.impacts
             ],
         })
-    return feed
+    return feed, total
 
 
 def build_payload(session) -> dict:
@@ -216,8 +248,10 @@ def build_payload(session) -> dict:
             "economic_calendar": pipeline.calendar_summary(asset),
         })
 
+    news_feed, news_feed_total = _news_feed(session)
+
     articles_today = session.scalar(
-        select(func.count(NewsArticle.id)).where(NewsArticle.is_today.is_(True))
+        select(func.count(NewsArticle.id)).where(pipeline.news_day_predicate())
     ) or 0
     events_today = session.scalar(select(func.count(NewsEvent.id))) or 0
     last_run = session.scalar(
@@ -250,7 +284,8 @@ def build_payload(session) -> dict:
         "regime_confidence": (regime.confidence if regime else 0.0),
         "regime_drivers": (regime.drivers if regime else []),
         "assets": assets_out,
-        "news_feed": _news_feed(session),
+        "news_feed": news_feed,
+        "news_feed_total": news_feed_total,
         "alerts": alerts,
         "status": {
             "running": state["running"],
@@ -319,10 +354,22 @@ async def financialjuice_sessions():
 
 
 @app.get("/api/news")
-async def news(limit: int = 60):
-    """Today's news feed only."""
+async def news(limit: Optional[int] = None, offset: int = 0):
+    """
+    Today's news feed only, one page at a time.
+
+    ``total`` is the size of the entire day, so a client can page until
+    ``has_more`` is false and still render an honest "N of TOTAL" counter.
+    """
     with session_scope() as session:
-        return {"items": _news_feed(session, limit=limit)}
+        items, total = _news_feed(session, limit=limit, offset=offset)
+    return {
+        "items": items,
+        "total": total,
+        "limit": len(items),
+        "offset": max(0, int(offset)),
+        "has_more": (max(0, int(offset)) + len(items)) < total,
+    }
 
 
 @app.get("/api/sentiment/{asset}")
@@ -417,7 +464,9 @@ async def console():
             out.append("")
 
     out.append("=" * 74)
-    out.append("TODAY'S NEWS IMPACT FEED")
+    out.append(f"TODAY'S NEWS IMPACT FEED  "
+               f"(showing {min(25, len(data['news_feed']))} of "
+               f"{data.get('news_feed_total', len(data['news_feed']))})")
     out.append("=" * 74)
     for item in data["news_feed"][:25]:
         hit = ", ".join(sorted({i["asset"] for i in item["impacts"]})) or "None"

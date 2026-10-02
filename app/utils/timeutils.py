@@ -59,6 +59,24 @@ def market_today() -> date:
     return now_market().date()
 
 
+def market_day_start_utc(now: Optional[datetime] = None) -> datetime:
+    """
+    The UTC instant at which today's market session began.
+
+    Market-local midnight converted to UTC. This is the ONE boundary that
+    decides where the trading day starts, so the news feed, the sentiment
+    recompute and the article counter cannot drift apart.
+
+    ``published_at_utc`` is what gets compared against this, never a stored
+    "is today" flag: that flag is written once at ingest and never recomputed,
+    so it silently accumulates yesterday's headlines on a long-running process.
+    """
+    ref = now or now_utc()
+    local = ref.astimezone(market_tz())
+    start = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start.astimezone(timezone.utc)
+
+
 def resolve_tz(raw: Optional[str]) -> Optional[timezone]:
     """
     Resolve an arbitrary timezone string.
@@ -78,6 +96,7 @@ def resolve_tz(raw: Optional[str]) -> Optional[timezone]:
 from app.utils.timestamp_parse import (  # noqa: E402
     age_hours,
     is_today,
+    is_within_market_day,
     parse_timestamp,
     within_max_age,
 )
