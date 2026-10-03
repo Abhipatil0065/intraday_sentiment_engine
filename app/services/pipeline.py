@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, delete, exists, func, or_, select
 
 from app.analysis.economic_impact import (
     CalendarSignal,
@@ -117,6 +117,7 @@ class IngestStats:
     calendar_events: int = 0
     calendar_signals: int = 0
     errors: list[str] = field(default_factory=list)
+    purged: dict = field(default_factory=dict)
 
 
 def _importance_weight(importance: EconomicImportance) -> float:
@@ -502,6 +503,81 @@ def _load_existing_guids(session) -> set[str]:
     return {g for (g,) in session.execute(select(NewsArticle.guid)).all()}
 
 
+def purge_old_news(session, *, keep_days: Optional[int] = None) -> dict:
+    """
+    Delete news older than the retention window (section 19a).
+
+    Keeps the last ``keep_days`` calendar days *in the market timezone* -
+    with the default of 2 that means today plus the previous day, and anything
+    older is removed on the next pipeline pass.
+
+    Why the market timezone and not UTC: an article's trading day is decided by
+    the same market-local test the ingest filter uses (``T.is_today``). Cutting
+    on a UTC midnight boundary would keep part of two-day-old news and discard
+    part of yesterday's, because ET midnight is 04:00/05:00 UTC.
+
+    Child rows go with it: ``asset_impact``, ``article_event`` and ``alert``
+    all declare ``ondelete="CASCADE"`` on ``article_id``, so deleting the
+    parent removes them. ``news_event`` does NOT cascade from the article - it
+    is a separate cluster row that many articles share - so events left with no
+    articles are swept separately, otherwise they would accumulate forever.
+
+    Never raises: a retention failure must not take the pipeline down.
+    """
+    keep = settings.news_retention_days if keep_days is None else keep_days
+    result = {"articles": 0, "events": 0, "cutoff": None}
+    if keep <= 0:
+        return result  # purging disabled
+
+    try:
+        from datetime import datetime as _dt, timedelta, timezone
+
+        tz = T.market_tz()
+        today_local = T.now_utc().astimezone(tz).date()
+        cutoff_date = today_local - timedelta(days=keep - 1)
+        cutoff = _dt.combine(cutoff_date, _dt.min.time(), tzinfo=tz)
+        cutoff_utc = cutoff.astimezone(timezone.utc).replace(tzinfo=None)
+        result["cutoff"] = cutoff_utc
+
+        # Articles with no usable timestamp cannot be placed on a day, so they
+        # are kept rather than silently destroyed - ingest rejects them anyway.
+        stale = session.execute(
+            select(NewsArticle.id).where(
+                NewsArticle.published_at_utc.isnot(None),
+                NewsArticle.published_at_utc < cutoff_utc,
+            )
+        ).all()
+        if stale:
+            ids = [r[0] for r in stale]
+            session.execute(
+                delete(NewsArticle).where(NewsArticle.id.in_(ids))
+            )
+            result["articles"] = len(ids)
+
+        # Events are only meaningful while an article still points at them.
+        orphan_events = session.execute(
+            select(NewsEvent.id).where(
+                ~exists().where(ArticleEvent.event_id == NewsEvent.id)
+            )
+        ).all()
+        if orphan_events:
+            eids = [r[0] for r in orphan_events]
+            session.execute(delete(NewsEvent).where(NewsEvent.id.in_(eids)))
+            result["events"] = len(eids)
+
+        session.flush()
+        if result["articles"] or result["events"]:
+            log.info(
+                "Retention: removed %d article(s) and %d orphaned event(s) "
+                "published before %s (keeping %d day(s))",
+                result["articles"], result["events"], cutoff_date, keep,
+            )
+    except Exception as exc:  # noqa: BLE001 - never break the pipeline
+        log.warning("News retention purge skipped: %s", exc)
+        result["error"] = str(exc)
+    return result
+
+
 async def run_once() -> IngestStats:
     """
     Execute one full pipeline pass.
@@ -564,6 +640,13 @@ async def run_once() -> IngestStats:
             _news_since_update += len(new_articles)
             stats.articles_new = len(new_articles)
 
+            # 1b) RETENTION -------------------------------------------------
+            # Runs BEFORE alerts and the sentiment recompute so both work
+            # against an already-trimmed database. Runs on every pass, not
+            # just once a day: the window is date-based, so a machine that
+            # was off overnight still self-corrects on its next tick.
+            stats.purged = purge_old_news(session)
+
             # 2) ALERTS ----------------------------------------------------
             from app.services.alerts import evaluate_and_emit
             evaluate_and_emit(session, stats)
@@ -580,9 +663,9 @@ async def run_once() -> IngestStats:
         _last_update = T.now_utc()
         log.info(
             "Pipeline complete: fetched=%d new=%d rejected=%d dup=%d "
-            "llm_ok=%d llm_fail=%d",
+            "llm_ok=%d llm_fail=%d purged=%d",
             stats.fetched, stats.new_today, stats.rejected, stats.duplicates,
-            stats.llm_ok, stats.llm_failed,
+            stats.llm_ok, stats.llm_failed, stats.purged.get("articles", 0),
         )
         return stats
 

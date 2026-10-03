@@ -111,6 +111,15 @@ class Settings(BaseSettings):
     )
     use_mock_source: bool = False
 
+    # ---------------- retention ----------------
+    # Calendar days of news kept in the database, counted in MARKET_TIMEZONE.
+    # 2 = keep today plus the previous day; anything older is deleted on the
+    # next pipeline pass. Set to 0 (or a negative number) to disable purging
+    # entirely and keep every article forever.
+    news_retention_days: int = Field(
+        default=2, validation_alias=AliasChoices("NEWS_RETENTION_DAYS")
+    )
+
     # ---------------- today-only filter ----------------
     max_article_age_hours: int = 26
     update_window_hours: int = 6

@@ -295,6 +295,172 @@ def test_filler_items_are_still_low_importance():
             is EconomicImportance.LOW
 
 
+# ---------------------------- retention --------------------------------
+def _mk_article(session, *, title: str, published, is_today: bool = True):
+    from app.models.db_models import NewsArticle
+    row = NewsArticle(
+        guid=f"g-{title[:24]}-{published.isoformat()}",
+        source="TestWire", source_quality="TIER_4_OTHER",
+        url=f"https://example.invalid/{title[:12]}",
+        title=title, body="", summary="",
+        published_at_utc=published, is_today=is_today,
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+def _mk_impact(session, article_id, asset="XAUUSD", direction="BULLISH"):
+    from app.models.db_models import AssetImpact
+    row = AssetImpact(article_id=article_id, event_id=None, asset=asset,
+                      direction=direction, strength="LOW", relevance=0.5)
+    session.add(row)
+    session.flush()
+    return row
+
+
+@pytest.fixture()
+def db(tmp_path):
+    """
+    Throwaway SQLite DB. Usage: ``session = db()``.
+
+    ``PRAGMA foreign_keys=ON`` is set because SQLite ignores ``ON DELETE
+    CASCADE`` by default - without it the cascade test would pass or fail for
+    the wrong reason. app/database.py enables the same pragma in production.
+    """
+    from sqlalchemy import create_engine, event
+    from sqlalchemy.orm import sessionmaker
+    from app.models.db_models import Base
+
+    engine = create_engine(f"sqlite:///{tmp_path/'t.db'}", future=True)
+
+    @event.listens_for(engine, "connect")
+    def _fk_on(dbapi_conn, _rec):  # pragma: no cover - driver hook
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA foreign_keys=ON")
+        cur.close()
+
+    Base.metadata.create_all(bind=engine)
+    Session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False,
+                           future=True)
+
+    def _factory():
+        return Session()
+
+    return _factory
+
+
+def test_retention_keeps_today_and_yesterday_only(db):
+    """keep_days=2 must drop anything published before yesterday's midnight."""
+    from datetime import datetime, timedelta, timezone
+    from app.services.pipeline import purge_old_news
+    from app.models.db_models import NewsArticle
+    from app.utils import timeutils as T
+
+    now = T.now_utc()
+    session = db()
+    # 1: today, 2: yesterday, 3: two days ago, 4: five days ago
+    keep_ids = [
+        _mk_article(session, title=f"today{i}",
+                    published=now - timedelta(hours=i)).id
+        for i in (1, 2)
+    ]
+    yday = _mk_article(session, title="yesterday",
+                       published=now - timedelta(days=1)).id
+    drop_ids = [
+        _mk_article(session, title=f"old{i}",
+                    published=now - timedelta(days=2 + i)).id
+        for i in range(3)
+    ]
+
+    res = purge_old_news(session, keep_days=2)
+    session.commit()
+
+    surviving = {a.id for a in session.query(NewsArticle).all()}
+    assert keep_ids[0] in surviving
+    assert yday in surviving
+    for gone in drop_ids:
+        assert gone not in surviving
+    assert res["articles"] == 3
+
+
+def test_retention_cascades_to_child_rows(db):
+    """Deleting an article must remove its impacts, not orphan them."""
+    from datetime import timedelta
+    from app.services.pipeline import purge_old_news
+    from app.models.db_models import AssetImpact
+    from app.utils import timeutils as T
+
+    now = T.now_utc()
+    session = db()
+    old = _mk_article(session, title="old-with-impact",
+                      published=now - timedelta(days=4))
+    new = _mk_article(session, title="new-with-impact", published=now)
+    _mk_impact(session, old.id)
+    _mk_impact(session, new.id)
+
+    purge_old_news(session, keep_days=2)
+    session.commit()
+
+    ids = {a.id for a in session.query(AssetImpact).all()}
+    assert new.id in ids
+    assert old.id not in ids
+
+
+def test_retention_sweeps_orphaned_events(db):
+    """news_event does not cascade from the article, so it is swept separately."""
+    from datetime import timedelta
+    from sqlalchemy import select
+    from app.services.pipeline import purge_old_news
+    from app.models.db_models import ArticleEvent, NewsArticle, NewsEvent
+    from app.utils import timeutils as T
+
+    now = T.now_utc()
+    session = db()
+    old = _mk_article(session, title="old-event-holder",
+                      published=now - timedelta(days=4))
+    keep = _mk_article(session, title="keep-event-holder", published=now)
+
+    for art, key in ((old, "ev-old"), (keep, "ev-keep")):
+        session.add(NewsEvent(event_key=key, canonical_headline=art.title))
+        session.flush()
+        ev = session.execute(select(NewsEvent).where(
+            NewsEvent.event_key == key)).scalar_one()
+        session.add(ArticleEvent(article_id=art.id, event_id=ev.id,
+                                similarity=1.0))
+    session.flush()
+
+    purge_old_news(session, keep_days=2)
+    session.commit()
+
+    keys = {e.event_key for e in session.query(NewsEvent).all()}
+    assert "ev-keep" in keys
+    assert "ev-old" not in keys
+
+
+def test_retention_zero_disables_purging(db):
+    """NEWS_RETENTION_DAYS=0 must keep everything."""
+    from datetime import timedelta
+    from app.services.pipeline import purge_old_news
+    from app.models.db_models import NewsArticle
+    from app.utils import timeutils as T
+
+    now = T.now_utc()
+    session = db()
+    _mk_article(session, title="ancient", published=now - timedelta(days=400))
+    before = session.query(NewsArticle).count()
+
+    res = purge_old_news(session, keep_days=0)
+    session.commit()
+    assert res["articles"] == 0
+    assert session.query(NewsArticle).count() == before
+
+
+def test_retention_default_setting_is_two_days():
+    from app.config import settings
+    assert settings.news_retention_days == 2
+
+
 # ----------------------------- sessions --------------------------------
 @pytest.mark.parametrize("hour,expected", [
     (2, SessionName.ASIA), (9, SessionName.EUROPE),

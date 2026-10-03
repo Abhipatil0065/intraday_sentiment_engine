@@ -344,6 +344,7 @@ See `.env.example` for the full annotated list. Key values:
 | `DISPLAY_TIMEZONE` | `Asia/Kolkata` | Dashboard display |
 | `POLL_INTERVAL_SECONDS` | `180` | Ingestion cadence |
 | `MAX_ARTICLE_AGE_HOURS` | `26` | Hard cap on article age |
+| `NEWS_RETENTION_DAYS` | `2` | Days of news kept in the DB (today + previous day); `0` keeps everything |
 | `DEDUP_SIMILARITY_THRESHOLD` | `0.72` | Event merge threshold |
 | `PRICE_DATA_ENABLED` | `false` | Price-action confirmation |
 | `USE_MOCK_SOURCE` | `false` | Offline synthetic demo |
