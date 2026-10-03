@@ -554,6 +554,16 @@ def purge_old_news(session, *, keep_days: Optional[int] = None) -> dict:
             )
             result["articles"] = len(ids)
 
+        # FLUSH BEFORE looking for orphans. This purge runs in the same session
+        # and transaction as ingestion, so brand-new articles have ArticleEvent
+        # and AssetImpact rows still pending in the unit of work. The orphan
+        # query below is raw SQL and can only see rows already in the database -
+        # pending inserts are invisible to it, so a freshly created event looks
+        # orphaned, gets deleted, and the subsequent flush then fails with
+        # "FOREIGN KEY constraint failed" when its impact row lands. Flushing
+        # first makes the orphan query truthful.
+        session.flush()
+
         # Events are only meaningful while an article still points at them.
         orphan_events = session.execute(
             select(NewsEvent.id).where(

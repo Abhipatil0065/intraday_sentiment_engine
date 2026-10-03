@@ -456,6 +456,58 @@ def test_retention_zero_disables_purging(db):
     assert session.query(NewsArticle).count() == before
 
 
+def test_retention_survives_pending_ingest_rows(db):
+    """
+    Regression: the purge runs in the SAME session as ingestion.
+
+    A brand-new article has ArticleEvent/AssetImpact rows still pending in the
+    unit of work. The orphan-event query is raw SQL and cannot see pending
+    inserts, so a freshly created event looks orphaned, gets deleted, and the
+    later flush dies with "FOREIGN KEY constraint failed".
+
+    This test holds those rows UNFLUSHED on purpose - exactly the state the
+    pipeline is in when purge_old_news is called.
+    """
+    from datetime import timedelta
+    from app.services.pipeline import purge_old_news
+    from app.models.db_models import (ArticleEvent, AssetImpact, NewsArticle,
+                                      NewsEvent)
+    from app.utils import timeutils as T
+
+    now = T.now_utc()
+    session = db()
+
+    # Old article, so the article DELETE actually fires.
+    _mk_article(session, title="old", published=now - timedelta(days=4))
+
+    # Brand-new article + event exist in the DB, but the LINK rows that make
+    # the event non-orphan are still pending in the unit of work. This is
+    # exactly the state the pipeline is in when purge_old_news is called.
+    fresh = NewsArticle(
+        guid="g-pending", source="TestWire", source_quality="TIER_4_OTHER",
+        url="https://example.invalid/pending", title="fresh", body="",
+        summary="", published_at_utc=now, is_today=True,
+    )
+    ev = NewsEvent(event_key="ev-pending", canonical_headline="fresh")
+    session.add_all([fresh, ev])
+    session.flush()          # ids exist now
+    session.add(ArticleEvent(article_id=fresh.id, event_id=ev.id, similarity=1.0))
+    session.add(AssetImpact(article_id=fresh.id, event_id=ev.id,
+                            asset="XAUUSD", direction="BULLISH", strength="LOW",
+                            relevance=0.5))
+    # NOTE: no flush - these two stay pending on purpose.
+
+    res = purge_old_news(session, keep_days=2)  # must not raise
+    session.commit()  # must not raise FK error
+
+    assert res.get("error") is None
+    keys = {e.event_key for e in session.query(NewsEvent).all()}
+    assert "ev-pending" in keys, "a live event was deleted as a false orphan"
+    assert session.query(NewsArticle).count() == 1
+    impacts = session.query(AssetImpact).all()
+    assert len(impacts) == 1 and impacts[0].article_id == fresh.id
+
+
 def test_retention_default_setting_is_two_days():
     from app.config import settings
     assert settings.news_retention_days == 2
