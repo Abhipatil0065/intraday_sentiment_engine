@@ -7,6 +7,7 @@ assets an article is analysed against at all.
 
 from __future__ import annotations
 
+from app.analysis.text_match import contains_phrase
 from app.models.enums import Asset, NewsCategory
 
 # Base relevance 0.0-1.0 per (category, asset).
@@ -30,7 +31,11 @@ RELEVANCE: dict[NewsCategory, dict[Asset, float]] = {
     NewsCategory.OIL_ENERGY:              {Asset.GOLD: 0.44, Asset.SILVER: 0.40, Asset.BITCOIN: 0.22},
     NewsCategory.EQUITIES:                {Asset.GOLD: 0.52, Asset.SILVER: 0.58, Asset.BITCOIN: 0.72},
     NewsCategory.BANKING_FINANCIAL_STRESS: {Asset.GOLD: 0.78, Asset.SILVER: 0.66, Asset.BITCOIN: 0.74},
-    NewsCategory.OTHER:                   {Asset.GOLD: 0.30, Asset.SILVER: 0.30, Asset.BITCOIN: 0.30},
+    # OTHER deliberately sits BELOW MIN_RELEVANCE. An item we could not
+    # classify has no demonstrated transmission path, so it must not reach the
+    # assets on category alone. It still routes once the text explicitly names
+    # an asset, because the +0.25 mention boost lifts it back over the line.
+    NewsCategory.OTHER:                   {Asset.GOLD: 0.10, Asset.SILVER: 0.10, Asset.BITCOIN: 0.10},
 }
 
 # Direct asset mentions override the category default.
@@ -60,7 +65,7 @@ def relevance_for(category: NewsCategory, asset: Asset, text: str) -> float:
     lowered = text.lower()
     base = base_relevance(category, asset)
 
-    mentions = sum(1 for token in DIRECT_MENTION[asset] if token in lowered)
+    mentions = sum(1 for token in DIRECT_MENTION[asset] if contains_phrase(lowered, token))
     if mentions:
         boosted = min(1.0, base + 0.25 * mentions)
         return max(base, boosted)
@@ -68,9 +73,16 @@ def relevance_for(category: NewsCategory, asset: Asset, text: str) -> float:
 
 
 def relevant_assets(category: NewsCategory, text: str) -> list[Asset]:
-    """Which assets this article should be analysed against."""
+    """
+    Which assets this article should be analysed against.
+
+    An article that routes to NO asset is a legitimate outcome and must be
+    allowed to stay empty: the item simply has no demonstrable transmission
+    path to XAUUSD / XAGUSD / BTCUSD. Forcing a fallback asset here is what
+    let a sports-betting marketing story surface as a gold driver.
+    """
     out: list[Asset] = []
     for asset in (Asset.GOLD, Asset.SILVER, Asset.BITCOIN):
         if relevance_for(category, asset, text) >= MIN_RELEVANCE:
             out.append(asset)
-    return out or [Asset.GOLD]  # never silently drop everything
+    return out

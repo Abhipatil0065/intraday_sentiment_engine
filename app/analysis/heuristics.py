@@ -58,6 +58,39 @@ CATEGORY_KEYWORDS: dict[NewsCategory, list[str]] = {
     NewsCategory.OTHER: [],
 }
 
+# Keywords intentionally authored as STEMS rather than whole words. They are
+# matched with a start-anchored prefix test instead of a whole-word test, so
+# "liquidat" still catches "liquidations" without letting an unrelated word
+# containing the fragment trigger the category.
+#
+# Everything NOT listed here is matched as a whole word or its regular plural.
+# That is the point of the registry: prefix matching becomes an explicit,
+# reviewable decision rather than the accidental default that made "credits"
+# match the keyword "credit".
+STEM_KEYWORDS: frozenset[str] = frozenset({
+    "liquidat",      # CRYPTO_MARKET_FLOWS: liquidations / liquidated
+    "escalat",       # GEOPOLITICS: escalation / escalates / escalating
+    "treasur",       # TREASURY_YIELDS: treasury / treasuries
+})
+
+# Keywords that must NEVER accept a plural suffix. Whole-word matching alone is
+# not sufficient overall, because news keywords are usually plural
+# ("strikes", "sanctions", "yields", "ETFs") - but for these particular words
+# the "+s" form is a different word, not a plural:
+#
+#   "credit" + s -> "credits"  (the verb "acknowledges", not bank credit)
+#   "war"    + s -> "wars"      (and "toward"/"warrant"/"warm"/"warn" are
+#                               rejected by the whole-word guard either way)
+#   "ban"    + s -> "banks"     (must not let the crypto keyword match "bank")
+#   "sec"    + s -> "secs"      (must not match "second")
+#   "usd"    + s -> "usds"      (must not match "USDT")
+#   "fed"    + s -> "feds"      (must not match "federated")
+#
+# Everything not listed here matches as a whole word OR its regular plural.
+PLURAL_EXEMPT_KEYWORDS: frozenset[str] = frozenset({
+    "credit", "ban", "war", "fed", "sec", "usd", "pmi",
+})
+
 VERY_HIGH_TRIGGERS = [
     "fomc", "federal reserve announces", "emergency meeting", "interest rate decision",
     "cpi", "consumer price index", "pce", "nonfarm payroll", "jobs report",

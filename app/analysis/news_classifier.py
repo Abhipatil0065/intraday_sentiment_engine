@@ -168,7 +168,16 @@ def heuristic_analyze(title: str, body: str = "") -> ArticleAnalysis:
         )
 
     result.relevance_score = max((a.relevance for a in result.assets), default=0.0)
-    result.note = "Deterministic heuristic classification (no LLM key configured)."
+    if not result.assets:
+        # Routed to no asset: the item has no demonstrable transmission path to
+        # XAUUSD/XAGUSD/BTCUSD. This is a valid, expected outcome - it must not
+        # be padded with a fallback asset just to produce a row.
+        result.note = (
+            "Heuristic: no material intraday impact on "
+            "XAUUSD/XAGUSD/BTCUSD; recorded but excluded from asset scoring."
+        )
+    else:
+        result.note = "Deterministic heuristic classification (no LLM key configured)."
     return result
 # ==========================================================================
 # LLM engine (any OpenAI-compatible provider)

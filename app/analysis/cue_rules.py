@@ -8,11 +8,18 @@ from typing import Optional
 from app.analysis.heuristics import (
     HIGH_TRIGGERS,
     LOW_TRIGGERS,
+    PLURAL_EXEMPT_KEYWORDS,
     PREP_CUES,
     RUMOR_CUES,
+    STEM_KEYWORDS,
     VERY_HIGH_TRIGGERS,
     WRAP_CUES,
     CATEGORY_KEYWORDS,
+)
+from app.analysis.text_match import (
+    contains_cue,
+    cue_hits,
+    keyword_position,
 )
 from app.models.enums import (
     Asset,
@@ -68,8 +75,26 @@ TRANSMISSION: dict[str, dict[Asset, str]] = {
 }
 
 
+# A single repeated word must not dominate the directional score: one story can
+# legitimately repeat a cue (title + body echo), but never many times.
+_MAX_REPEAT_HITS = 2
+
+
 def score_cues(text: str, cues: list[tuple[str, int]]) -> float:
-    return float(sum(w for phrase, w in cues if phrase in text))
+    """
+    Sum the weights of every cue present in the text.
+
+    Cues are matched with inflection tolerance (see
+    :func:`app.analysis.text_match.contains_cue`) so that "plunge" still fires
+    on "plunges". A cue may legitimately appear more than once; each occurrence
+    is counted, capped so a single repeated word cannot dominate the score.
+    """
+    total = 0.0
+    for phrase, weight in cues:
+        hits = cue_hits(text, phrase)
+        if hits:
+            total += weight * min(hits, _MAX_REPEAT_HITS)
+    return total
 
 
 def detect_direction(text: str) -> Direction:
@@ -116,6 +141,11 @@ def detect_category(text: str) -> NewsCategory:
     Ties are broken by which keyword appears EARLIEST in the headline, since
     publishers lead with the most specific driver ("China factory output" is a
     China story, not a generic commodity-supply story).
+
+    Keywords are matched as whole words: "credits" is not the banking keyword
+    "credit", and "bank" is not the crypto keyword "ban". The few keywords that
+    are deliberately stems are listed in ``STEM_KEYWORDS`` and matched with a
+    start-anchored prefix test instead.
     """
     lowered = text.lower()
     best, best_hits, best_pos = NewsCategory.OTHER, 0, 10**9
@@ -125,7 +155,8 @@ def detect_category(text: str) -> NewsCategory:
         hits = 0
         first_pos = 10**9
         for k in keywords:
-            pos = lowered.find(k)
+            pos = keyword_position(lowered, k, stems=STEM_KEYWORDS,
+                                   plural_exempt=PLURAL_EXEMPT_KEYWORDS)
             if pos != -1:
                 hits += 1
                 first_pos = min(first_pos, pos)
@@ -136,30 +167,35 @@ def detect_category(text: str) -> NewsCategory:
 
 def detect_importance(text: str, category: NewsCategory) -> EconomicImportance:
     lowered = text.lower()
-    if any(t in lowered for t in VERY_HIGH_TRIGGERS):
+    # Whole-word matching throughout, using the SAME keyword policy as category
+    # detection: "war" must not fire on "warn"/"toward", "credit" must not fire
+    # on "credits", but "sanctions" and "strikes" must still be recognised.
+    pos = lambda k: keyword_position(  # noqa: E731 - tiny local shorthand
+        lowered, k, stems=STEM_KEYWORDS, plural_exempt=PLURAL_EXEMPT_KEYWORDS)
+    if any(pos(t) != -1 for t in VERY_HIGH_TRIGGERS):
         return EconomicImportance.VERY_HIGH
     # Filler/minor items stay LOW regardless of any macro keyword they contain.
-    if any(t in lowered for t in LOW_TRIGGERS):
+    if any(pos(t) != -1 for t in LOW_TRIGGERS):
         return EconomicImportance.LOW
     if category in (NewsCategory.CENTRAL_BANK, NewsCategory.INFLATION,
                     NewsCategory.BANKING_FINANCIAL_STRESS):
         return EconomicImportance.HIGH
-    if any(t in lowered for t in HIGH_TRIGGERS):
+    if any(pos(t) != -1 for t in HIGH_TRIGGERS):
         return EconomicImportance.HIGH
     return EconomicImportance.MEDIUM
 
 
 def detect_report_kind(text: str) -> ReportKind:
     lowered = text.lower()
-    if any(c in lowered for c in WRAP_CUES):
+    if any(contains_cue(lowered, c) for c in WRAP_CUES):
         return ReportKind.WRAP
-    if any(c in lowered for c in PREP_CUES):
+    if any(contains_cue(lowered, c) for c in PREP_CUES):
         return ReportKind.PREP
     return ReportKind.GENERAL
 
 
 def detect_verification(text: str) -> Verification:
-    if any(c in text.lower() for c in RUMOR_CUES):
+    if any(contains_cue(text.lower(), c) for c in RUMOR_CUES):
         return Verification.UNVERIFIED
     return Verification.CONFIRMED
 
@@ -167,8 +203,8 @@ def detect_verification(text: str) -> Verification:
 def detect_metal_character(text: str) -> Optional[str]:
     """Which side of silver's dual nature is driving the move (section 7)."""
     lowered = text.lower()
-    precious = sum(1 for c in PRECIOUS_CUES if c in lowered)
-    industrial = sum(1 for c in INDUSTRIAL_CUES if c in lowered)
+    precious = sum(1 for c in PRECIOUS_CUES if contains_cue(lowered, c))
+    industrial = sum(1 for c in INDUSTRIAL_CUES if contains_cue(lowered, c))
     if precious and industrial:
         return "BOTH"
     if precious:

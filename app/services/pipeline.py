@@ -117,6 +117,8 @@ class IngestStats:
     calendar_events: int = 0
     calendar_signals: int = 0
     errors: list[str] = field(default_factory=list)
+
+
 def _importance_weight(importance: EconomicImportance) -> float:
     return {
         EconomicImportance.VERY_HIGH: 1.0,
@@ -124,25 +126,6 @@ def _importance_weight(importance: EconomicImportance) -> float:
         EconomicImportance.MEDIUM: 0.42,
         EconomicImportance.LOW: 0.18,
     }.get(importance, 0.42)
-
-
-def _parse_article_time(art: RawArticle):
-    published, label = T.parse_timestamp(art.published_raw)
-    updated, _ = T.parse_timestamp(art.updated_raw)
-    return published, updated, label
-
-
-def _is_update_article(published: Optional[datetime],
-                       updated: Optional[datetime]) -> bool:
-    """
-    Section 19: an old article re-stamped today is NOT a new event.
-
-    A publisher bump within UPDATE_WINDOW_HOURS of original publication is
-    flagged as an update rather than fresh news.
-    """
-    if published is None or updated is None:
-        return False
-    return abs((updated - published).total_seconds()) / 3600.0 <= settings.update_window_hours
 
 
 async def _is_fj_session_report(art: RawArticle) -> bool:

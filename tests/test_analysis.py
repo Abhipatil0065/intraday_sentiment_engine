@@ -7,7 +7,9 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from app.analysis import heuristics as app_heuristics
 from app.analysis.asset_relevance import relevant_assets, relevance_for
+from app.analysis.text_match import keyword_position
 from app.analysis.cue_rules import (
     detect_category,
     detect_direction,
@@ -124,6 +126,173 @@ def test_analysis_always_returns_reason_and_transmission():
     for a in r.assets:
         assert a.reason and a.transmission
         assert a.relevance > 0.0
+
+
+# ------------------ word-boundary matching regressions -------------------
+def test_keywords_do_not_match_inside_other_words():
+    """
+    Regression: "Novig CREDITS Sydney Sweeney..." was classified as
+    BANKING_FINANCIAL_STRESS because the keyword "credit" was substring-matched
+    inside "credits". The headline then inherited HIGH importance and a
+    0.78/0.66/0.74 relevance to gold/silver/bitcoin, and a bullish read from
+    the word "surge" - surfacing a sports-betting marketing story as a top
+    driver for all three assets.
+    """
+    title = ("Novig credits Sydney Sweeney-backed campaign for platform's "
+             "surge in growth")
+    r = heuristic_analyze(title)
+
+    assert r.category is NewsCategory.OTHER
+    # Routed to NO asset: there is no transmission path to any of the three.
+    assert r.assets == []
+    assert r.relevance_score == 0.0
+
+
+def test_unclassified_item_never_forced_onto_an_asset():
+    """relevant_assets must be allowed to return an empty list."""
+    assert relevant_assets(NewsCategory.OTHER, "a local sports story") == []
+
+
+def test_other_category_stays_below_min_relevance():
+    """
+    OTHER must sit below MIN_RELEVANCE so an unclassifiable item cannot reach
+    the assets on category weight alone. An explicit asset mention still lifts
+    it back over the line.
+    """
+    assert (relevance_for(NewsCategory.OTHER, Asset.GOLD, "unrelated item")
+            < 0.20)
+    # ...but naming the asset explicitly is still enough.
+    assert (relevance_for(NewsCategory.OTHER, Asset.GOLD, "gold spikes sharply")
+            >= 0.20)
+
+
+@pytest.mark.parametrize("text,bad_keyword", [
+    ("Novig credits Sydney Sweeney", "credit"),
+    ("Analysts warn of a slowdown", "war"),
+    ("Shares of the bank rose", "ban"),
+    ("A downtown opening drew crowds", "downtown"),
+    ("Undermining confidence in the Fed", "mine"),
+])
+def test_category_keywords_require_whole_words(text, bad_keyword):
+    """No category may be triggered by a fragment of an unrelated word."""
+    from app.analysis.cue_rules import detect_category as _dc
+    from app.analysis.heuristics import CATEGORY_KEYWORDS
+
+    hits = [c.value for c, kws in CATEGORY_KEYWORDS.items()
+            if c is not NewsCategory.OTHER and bad_keyword in kws]
+    if hits:
+        assert _dc(text) not in hits
+
+
+def test_cues_still_match_inflections():
+    """Word-boundary matching must not break ordinary verb inflections."""
+    from app.analysis.cue_rules import score_cues, BULLISH_CUES, BEARISH_CUES
+    assert score_cues("bitcoin surges past resistance", BULLISH_CUES) > 0
+    assert score_cues("bitcoin plunges below support", BEARISH_CUES) > 0
+    assert score_cues("etf inflows accelerate", BULLISH_CUES) > 0
+
+
+def test_repeated_cue_cannot_dominate():
+    """A cue repeated many times must be capped, not multiplied without bound."""
+    from app.analysis.cue_rules import score_cues, BULLISH_CUES
+    once = score_cues("gold rally", BULLISH_CUES)
+    many = score_cues("gold rally " * 20, BULLISH_CUES)
+    assert many <= once * 2 + 0.001
+
+
+def test_stem_keywords_still_match_inflections():
+    """Deliberate stems (liquidat/escalat/treasur) keep working."""
+    assert detect_category("Bitcoin slides after fresh liquidations") \
+        is NewsCategory.CRYPTO_MARKET_FLOWS
+    assert detect_category("Escalating tension in the region") \
+        is NewsCategory.GEOPOLITICS
+
+
+# --------------------- keyword matching matrix --------------------------
+# Guards the three-way policy: declared stem -> prefix match,
+# plural-exempt -> whole word only, otherwise -> whole word or plural.
+KEYWORD_POLICY = dict(
+    stems=app_heuristics.STEM_KEYWORDS,
+    plural_exempt=app_heuristics.PLURAL_EXEMPT_KEYWORDS,
+)
+
+
+@pytest.mark.parametrize("text,keyword,expected", [
+    # the original defect
+    ("Novig credits Sydney Sweeney", "credit", False),
+    ("credit crunch hits lenders", "credit", True),
+    # plural-exempt: whole word only
+    ("toward record highs", "war", False),
+    ("warrant exercise", "war", False),
+    ("war erupts in the region", "war", True),
+    ("wars break out", "war", False),
+    ("bank stress", "ban", False),
+    ("banks cut rates", "ban", False),
+    ("regulators ban bitcoin", "ban", True),
+    ("second quarter", "sec", False),
+    ("sec approves spot etf", "sec", True),
+    ("federated funds", "fed", False),
+    ("fed officials speak", "fed", True),
+    ("usdt peg slips", "usd", False),
+    ("usd rises sharply", "usd", True),
+    # plural tolerated - these must keep matching
+    ("Russia launches massive strikes", "strike", True),
+    ("Iran sanctions tighten", "sanction", True),
+    ("Treasury yields climb", "yield", True),
+    ("Gold ETFs record inflows", "etf", True),
+    ("oil prices surge", "oil", True),
+    ("banks brace for defaults", "bank", True),
+    # declared stems
+    ("fresh liquidations hit crypto", "liquidat", True),
+    ("escalating tensions", "escalat", True),
+    ("treasury auction", "treasur", True),
+    # substring traps that must not fire
+    ("undermining confidence", "mine", False),
+    ("software stocks rally", "war", False),
+])
+def test_keyword_matching_policy(text, keyword, expected):
+    got = keyword_position(text.lower(), keyword, **KEYWORD_POLICY) != -1
+    assert got is expected
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("Novig credits Sydney Sweeney campaign surge growth", NewsCategory.OTHER),
+    ("Russia launches massive strikes on Ukraine energy grid", NewsCategory.GEOPOLITICS),
+    ("Iran sanctions tighten on oil exports", NewsCategory.GEOPOLITICS),
+    ("Gold ETFs record inflows", NewsCategory.ETF_FLOWS),
+    ("Analysts warn of slowdown", NewsCategory.OTHER),
+    ("Wells Fargo raises Micron price target", NewsCategory.OTHER),
+    ("Fed officials hawkish on inflation", NewsCategory.CENTRAL_BANK),
+    ("China factory output disappoints", NewsCategory.CHINA),
+    ("Bitcoin slides after fresh liquidations", NewsCategory.CRYPTO_MARKET_FLOWS),
+    ("Treasury yields climb to 5 percent", NewsCategory.TREASURY_YIELDS),
+])
+def test_category_detection_end_to_end(text, expected):
+    assert detect_category(text) is expected
+
+
+def test_genuine_macro_events_still_reach_very_high():
+    """
+    The fix must not silence real signal. Every one of these was previously
+    promoted to VERY_HIGH by the substring "war" matching inside "toward",
+    "warrant", "warm" and "warn" - 51 false promotions in one day's corpus.
+    Real macro events must still reach the top importance band.
+    """
+    for text in ("FOMC announces rate decision",
+                 "US inflation CPI comes in hotter than expected",
+                 "Israel launches missile strike, ceasefire collapses",
+                 "Major bank defaults, liquidity crisis hits markets"):
+        assert detect_importance(text, detect_category(text)) \
+            is EconomicImportance.VERY_HIGH
+
+
+def test_filler_items_are_still_low_importance():
+    """LOW triggers must survive the whole-word policy."""
+    for text in ("Best shopping guide for holiday deals",
+                 "Weekly horoscope and recipe roundup",
+                 "Limited time giveaway this holiday"):
+        assert detect_importance(text, NewsCategory.OTHER) \
+            is EconomicImportance.LOW
 
 
 # ----------------------------- sessions --------------------------------
