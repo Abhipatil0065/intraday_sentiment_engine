@@ -120,10 +120,6 @@ class Settings(BaseSettings):
         default=2, validation_alias=AliasChoices("NEWS_RETENTION_DAYS")
     )
 
-    # ---------------- today-only filter ----------------
-    max_article_age_hours: int = 26
-    update_window_hours: int = 6
-
     # ---------------- news feed paging ----------------
     # How many articles one dashboard payload carries. Purely a transport
     # concern: /api/news can page through the entire day regardless of this.
@@ -135,9 +131,108 @@ class Settings(BaseSettings):
     # server to serialise an unbounded number of rows.
     news_feed_max_page_size: int = 200
 
-    # ---------------- deduplication ----------------
+    # ---------------- deduplication / clustering ----------------
     dedup_similarity_threshold: float = 0.72
     dedup_time_window_hours: int = 12
+    # A cluster counts as ONE event. Extra INDEPENDENT sources add only a small
+    # capped boost, so five outlets covering one FOMC decision cannot cast
+    # five votes. Same-source repeats never raise the boost.
+    corroboration_per_source: float = 0.10
+    corroboration_max_boost: float = 0.30
+
+    # ---------------- rolling news window (item 3) ----------------
+    # Replaces the "same market-timezone calendar date" gate. A rolling window
+    # admits the overnight US wrap by construction, which is why the old
+    # FinancialJuice / IST date carve-out is no longer needed.
+    news_window_hours: float = 18.0
+    # Age within which a signal counts toward the "changed in last 60 min" delta.
+    delta_window_minutes: int = 60
+    # Hard cap on article age, independent of the window (0 = disabled).
+    max_article_age_hours: int = 26
+    update_window_hours: int = 6
+
+    # ---------------- bias / NO_BIAS thresholds (item 2) ----------------
+    # Score is -100..+100. Below either floor the engine says NO_BIAS rather
+    # than inventing a direction from noise.
+    bias_min_abs_score: float = 12.0
+    bias_min_confidence: float = 0.30
+    bias_score_scale: float = 100.0
+
+    # ---------------- text quality (item 5) ----------------
+    # Token distance within which a subject and verb are treated as related.
+    # Replaces the old fixed 24-character regex window, which failed on long
+    # phrasing and could not be tuned.
+    inversion_max_tokens: int = 8
+    # Tokens a negation may look ahead for its cue.
+    negation_window_tokens: int = 4
+    price_action_weight: float = 0.10
+    priced_in_multiplier: float = 0.45
+    priced_in_floor: float = 0.25
+    surprise_multiplier: float = 1.35
+    hedge_multiplier: float = 0.70
+    hedge_floor: float = 0.35
+
+    # ---------------- decay half-lives in hours, by category (item 7) ---
+    # Exponential decay: weight = 0.5 ** (age_hours / half_life).
+    decay_default_hours: float = 6.0
+    decay_half_lives: str = (
+        "Central Bank=3.0,Interest Rates=3.0,Inflation=3.0,Employment=3.0,"
+        "Treasury Yields=4.0,USD/DXY=5.0,GDP=6.0,Banking/Financial Stress=8.0,"
+        "Geopolitics=8.0,Risk Sentiment=5.0,ETF Flows=24.0,Bitcoin ETF Flows=24.0,"
+        "Crypto Market Flows=12.0,Crypto Regulation=72.0,China=12.0,"
+        "Industrial Demand=12.0,Commodity Supply/Demand=10.0,Oil/Energy=8.0,"
+        "Equities=8.0,Other=6.0"
+    )
+
+    # ---------------- economic calendar (item 8) ----------------
+    # Standardised surprise = (actual - forecast) / std. Std values are per
+    # indicator and configurable; a missing indicator falls back to the default.
+    #
+    # PROVENANCE OF EVERY VALUE BELOW
+    # ================================
+    # These are ORDER-OF-MAGNITUDE ESTIMATES, not measured statistics. They were
+    # chosen so a typical miss lands in a sensible 0-3 z range, not fitted to any
+    # dataset. Each entry is tagged:
+    #
+    #   [RULE-OF-THUMB]  a conventional market figure for this indicator
+    #   [ESTIMATE]        a rough guess that must be replaced
+    #
+    # TODO(verify-std): replace every [ESTIMATE] with the real historical
+    # standard deviation of the published series, computed as
+    #     std(actual - forecast) over >= 10 years of releases,
+    # from FRED or the issuing agency. Until then the surprise BANDS below are
+    # only as trustworthy as these guesses, and SURPRISE_NEUTRAL_BAND /
+    # SURPRISE_STRONG_BAND must be re-tuned in the same pass, because they are
+    # expressed in exactly these std units.
+    #
+    # Basis for the rule-of-thumb figures: sell-side macro notes routinely quote
+    # "CPI >0.1pp", "NFP >50-100k", "DXY >0.3%" as market-moving thresholds.
+    # This table exists to normalise those conventions ACROSS indicators.
+    surprise_std_default: float = 1.0
+    surprise_neutral_band: float = 0.30
+    surprise_strong_band: float = 1.00
+    surprise_std_table: str = (
+        # --- inflation: percentage points of the year-on-year rate ---
+        "cpi=0.3,ppi=0.3,inflation=0.3,"            # [RULE-OF-THUMB]
+        "core cpi=0.2,core pce=0.2,pce=0.2,deflator=0.2,"  # [RULE-OF-THUMB] core is less volatile than headline
+        # --- labour: thousands of jobs (claims also in thousands) ---
+        "nonfarm=120.0,nfp=120.0,payroll=120.0,"   # [ESTIMATE] TODO(verify-std)
+        "employment change=120.0,"                 # [ESTIMATE] TODO(verify-std)
+        "jobless claim=10.0,"                      # [ESTIMATE] TODO(verify-std)
+        "unemployment rate=0.2,"                   # [RULE-OF-THUMB] percentage points
+        # --- policy: percentage points of the target rate ---
+        "rate decision=0.25,ecb=0.25,boe=0.25,boj=0.25,"   # [RULE-OF-THUMB] a 25bp surprise
+        "fomc=0.5,federal reserve=0.5,powell=0.5," # [ESTIMATE] TODO(verify-std)
+        # --- activity: index points ---
+        "gdp=0.5,pmi=0.5,ism=0.5,"                 # [ESTIMATE] TODO(verify-std)
+        "industrial production=0.4,retail sales=0.5,"      # [ESTIMATE] TODO(verify-std)
+        # --- rates and FX ---
+        "treasury yield=0.15,bond yield=0.15,10-year=0.15,"  # [RULE-OF-THUMB] ~15bp
+        "dxy=0.4"                                  # [RULE-OF-THUMB] DXY index points
+    )
+    # A high-impact release this soon makes any standing bias unreliable.
+    event_risk_lookahead_minutes: int = 45
+    event_risk_min_importance: str = "HIGH"
 
     # ---------------- price confirmation ----------------
     price_data_enabled: bool = False
@@ -153,6 +248,11 @@ class Settings(BaseSettings):
 
     # ---------------- assets ----------------
     assets: str = "XAUUSD,XAGUSD,BTCUSD"
+
+    # ---------------- decision log / audit (item 11) ----------------
+    # Every classification and every published bias is appended here so the
+    # transmission map and decay table can be tuned against real outcomes.
+    decision_log_path: str = "logs/decisions.jsonl"
 
     # ---------------- economic calendar ----------------
     economic_calendar_enabled: bool = True
@@ -213,6 +313,36 @@ class Settings(BaseSettings):
     @property
     def supported_assets(self) -> List[str]:
         return [a.strip().upper() for a in self.assets.split(",") if a.strip()]
+
+    def parsed_table(self, raw: str) -> dict:
+        """
+        Parse a ``k=v,k=v`` config string into a lowercase-keyed dict.
+
+        Used for the decay half-life table and the calendar std-dev table so
+        both stay editable as one line in ``.env`` instead of being hard-coded
+        in the modules that read them.
+        """
+        out: dict = {}
+        for chunk in (raw or "").split(","):
+            if "=" not in chunk:
+                continue
+            key, _, value = chunk.partition("=")
+            key = key.strip().lower()
+            try:
+                out[key] = float(value.strip())
+            except ValueError:
+                continue
+        return out
+
+    @property
+    def half_lives(self) -> dict:
+        """Half-life in hours per NewsCategory value."""
+        return self.parsed_table(self.decay_half_lives)
+
+    @property
+    def surprise_stds(self) -> dict:
+        """Historical standard deviation per calendar indicator keyword."""
+        return self.parsed_table(self.surprise_std_table)
 
     @property
     def has_llm(self) -> bool:

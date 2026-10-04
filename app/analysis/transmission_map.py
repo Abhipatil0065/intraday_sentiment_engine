@@ -1,0 +1,580 @@
+"""
+PER-ASSET TRANSMISSION MAP (improvement item 1) - HIGHEST PRIORITY.
+
+The defect this replaces
+------------------------
+Heuristic mode computed ``detect_direction(text)`` ONCE and applied that single
+answer to every asset the article routed to. A headline whose transmission
+differs by asset therefore produced the wrong call for at least one of them.
+
+The model now
+-------------
+Direction is resolved PER ASSET from a declarative map:
+
+    event_type x asset -> (sign, magnitude)
+
+``sign`` is +1 / -1 / 0 and ``magnitude`` (0.0-1.5) is that asset's sensitivity
+to the event. So the SAME headline can be bullish gold and bearish bitcoin:
+
+    "Missile strike widens as sanctions bite"
+        gold   +1 x 1.05   safe-haven bid
+        silver +1 x 0.70   weaker, part industrial
+        btc   -1 x 0.35   liquidity risk-off
+
+The map itself lives in ``app/config/transmission_map.json`` so it can be
+retuned without touching Python. Event-type DETECTION still needs keywords,
+but the direction decision is data, not code.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from enum import Enum
+from functools import lru_cache
+from pathlib import Path
+from typing import Optional
+
+from app.analysis.text_match import contains_phrase, contains_plural
+from app.config import settings
+from app.models.enums import Asset, Direction, NewsCategory
+
+# How much raw cue weight counts as a "full" magnitude. Set above the weight of
+# a single strong cue so that one mention scores meaningfully below full,
+# while several corroborating cues saturate at 1.0.
+CUE_SATURATION = 9.0
+
+# PERSISTENCE per event category (item 6).
+#
+# This is the INDEPENDENT second weight the brief asks for: the cue magnitude
+# says how strong THIS ARTICLE is, and this table says how long THIS KIND OF
+# EVENT stays relevant. Deriving both from the cue score (as the old code did)
+# counted one measurement three times.
+CATEGORY_PERSISTENCE: dict = {
+    "Central Bank": 0.90,
+    "Interest Rates": 0.90,
+    "Inflation": 0.85,
+    "Employment": 0.85,
+    "Treasury Yields": 0.80,
+    "USD/DXY": 0.70,
+    "GDP": 0.60,
+    "Banking/Financial Stress": 0.90,
+    "Geopolitics": 0.75,
+    "Risk Sentiment": 0.55,
+    "ETF Flows": 0.80,
+    "Bitcoin ETF Flows": 0.80,
+    "Crypto Market Flows": 0.65,
+    "Crypto Regulation": 0.95,
+    "China": 0.70,
+    "Industrial Demand": 0.70,
+    "Commodity Supply/Demand": 0.65,
+    "Oil/Energy": 0.55,
+    "Equities": 0.50,
+    "Other": 0.40,
+}
+
+# Intensity qualifiers that make a cue STRONGER without changing its sign.
+# The cue tables cap repeats (a word cannot dominate), so without these a
+# longer, more emphatic headline would score no higher than a bare one -
+# "emergency hike" and "rate hike" would read identically.
+INTENSITY_CUES: tuple[str, ...] = (
+    "emergency", "surprise", "unexpected", "sharply", "dramatically", "record",
+    "massive", "huge", "sweeping", "aggressive", "decisive", "unprecedented",
+    "sticky", "resilient", "accelerating", "soars", "plunges", "spikes",
+    "soar", "jump", "plunge", "spike", "deep", "acute", "severe", "crisis",
+)
+INTENSITY_WEIGHT = 1.5
+
+TRANSMISSION_FILE = Path(__file__).resolve().parent.parent / "config" / "transmission_map.json"
+
+
+class EventType(str, Enum):
+    """Transmission classes. One class per causal mechanism, not per topic."""
+
+    HAWKISH_POLICY = "HAWKISH_POLICY"
+    DOVISH_POLICY = "DOVISH_POLICY"
+    RECESSION_CUT = "RECESSION_CUT"
+    RISING_YIELDS = "RISING_YIELDS"
+    FALLING_YIELDS = "FALLING_YIELDS"
+    STRONG_USD = "STRONG_USD"
+    WEAK_USD = "WEAK_USD"
+    HOT_INFLATION = "HOT_INFLATION"
+    COOL_INFLATION = "COOL_INFLATION"
+    STRONG_JOBS = "STRONG_JOBS"
+    WEAK_JOBS = "WEAK_JOBS"
+    GEOPOLITICAL_RISK = "GEOPOLITICAL_RISK"
+    BANKING_STRESS = "BANKING_STRESS"
+    RISK_ON = "RISK_ON"
+    RISK_OFF = "RISK_OFF"
+    GOLD_ETF_FLOW = "GOLD_ETF_FLOW"
+    BTC_ETF_FLOW = "BTC_ETF_FLOW"
+    CRYPTO_REGULATION = "CRYPTO_REGULATION"
+    CRYPTO_LIQUIDATION = "CRYPTO_LIQUIDATION"
+    CHINA_DEMAND = "CHINA_DEMAND"
+    INDUSTRIAL_DEMAND = "INDUSTRIAL_DEMAND"
+    COMMODITY_SUPPLY = "COMMODITY_SUPPLY"
+    GENERAL_MACRO = "GENERAL_MACRO"
+
+
+@dataclass(frozen=True)
+class Transmission:
+    """How one event type reaches one asset."""
+
+    sign: int          # +1 bullish, -1 bearish, 0 no path
+    magnitude: float   # per-asset sensitivity, 0.0-1.5
+
+    @property
+    def direction(self) -> Direction:
+        if self.sign > 0:
+            return Direction.BULLISH
+        if self.sign < 0:
+            return Direction.BEARISH
+        # sign 0 with a real magnitude means the event type reaches this asset
+        # but does not take a side - "mixed", not "no opinion".
+        return Direction.MIXED if self.magnitude > 0.0 else Direction.NEUTRAL
+
+
+NEUTRAL = Transmission(0, 0.0)
+
+
+@dataclass(frozen=True)
+class ResolvedImpact:
+    """The per-asset answer produced by :func:`resolve`."""
+
+    asset: Asset
+    direction: Direction
+    sign: int
+    magnitude: float            # 0..1.5, the transmission magnitude
+    dominant: "EventType | None"
+    evidence: float             # cue weight behind the dominant event type
+    priced_in: bool = False
+
+
+def _coerce(value) -> Transmission:
+    """Accept ``[sign, magnitude]`` or a mapping; never raise on bad data."""
+    if isinstance(value, dict):
+        return Transmission(int(value.get("sign", 0)), float(value.get("magnitude", 0.0)))
+    if isinstance(value, (list, tuple)) and len(value) >= 2:
+        try:
+            return Transmission(int(value[0]), float(value[1]))
+        except (TypeError, ValueError):
+            return NEUTRAL
+    return NEUTRAL
+
+
+@lru_cache(maxsize=1)
+def load_transmission_map() -> dict:
+    """
+    Load and validate the JSON map.
+
+    Validation is total: a malformed entry degrades to NEUTRAL rather than
+    crashing the pipeline, because a typo in the config must never take the
+    engine down.
+    """
+    try:
+        raw = json.loads(TRANSMISSION_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"Transmission map unreadable at {TRANSMISSION_FILE}: {exc}"
+        ) from exc
+
+    out: dict = {}
+    for key, per_asset in raw.items():
+        if key.startswith("_"):
+            continue
+        try:
+            event_type = EventType(key)
+        except ValueError:
+            continue  # unknown key: ignored, never fatal
+        entry = {}
+        for asset in Asset:
+            entry[asset] = _coerce(per_asset.get(asset.value))
+        out[event_type] = entry
+    return out
+
+
+def transmission(event_type, asset: Asset) -> Transmission:
+    """One lookup. Unknown event type or asset -> NEUTRAL, never a guess."""
+    mapping = load_transmission_map()
+    try:
+        et = EventType(event_type)
+    except ValueError:
+        return NEUTRAL
+    return mapping.get(et, {}).get(asset, NEUTRAL)
+
+
+def direction_for(event_type, asset: Asset) -> Direction:
+    return transmission(event_type, asset).direction
+
+
+def measure_cue_magnitude(text: str) -> float:
+    """
+    The SINGLE cue magnitude for an article, normalised to 0.0-1.0.
+
+    Item 6 requires exactly one magnitude to exist. It is measured once here
+    from the cue tables and reused by direction, strength and persistence, so
+    the same evidence is no longer counted three times under three names.
+    """
+    from app.analysis.cue_rules import BEARISH_CUES, BULLISH_CUES, score_cues
+
+    if not text:
+        return 0.0
+    raw = max(score_cues(text, BULLISH_CUES), score_cues(text, BEARISH_CUES))
+    # Intensity qualifiers raise the magnitude without touching the sign.
+    lowered = (text or "").lower()
+    hits = sum(1 for c in INTENSITY_CUES if contains_phrase(lowered, c))
+    if hits:
+        raw += INTENSITY_WEIGHT * min(hits, 3)
+    # Some mechanisms are directional in themselves rather than by wording: a
+    # regulatory APPROVAL is bullish for crypto, a LIQUIDATION cascade is not.
+    # Without this floor, "SEC approves spot bitcoin ETF" would measure zero
+    # magnitude purely because no bullish keyword happens to appear in it.
+    raw = max(raw, _INTRINSIC_WEIGHT if _has_intrinsic_direction(text) else 0.0)
+    # VERB-DRIVEN headlines need a floor too. The polarity fix REMOVED bare verbs
+    # ("rose", "improved", "faded") from BULLISH_CUES/BEARISH_CUES, because they
+    # carried no subject and read correctly only by accident. The side effect is
+    # that a correctly-resolved headline such as "risk appetite improved across
+    # equity markets" scores 0.0 magnitude, which collapses it to MIXED and
+    # discards the resolution that was just computed. So a headline that the
+    # polarity resolver can place gets the same evidence floor.
+    raw = max(raw, _INTRINSIC_WEIGHT if _has_resolved_polarity(text) else 0.0)
+    return round(min(1.0, raw / CUE_SATURATION), 3)
+
+
+def _has_resolved_polarity(text: str) -> bool:
+    """True when subject+verb polarity resolves this headline to an event."""
+    from app.analysis.event_polarity import resolve_all
+    from app.analysis.text_quality import neutralise_on_negation
+
+    try:
+        return bool(resolve_all(
+            neutralise_on_negation(text or "").lower()))
+    except Exception:  # pragma: no cover - resolver must never break scoring
+        return False
+
+
+# Mechanisms whose SIGN is fixed by the event itself rather than by tone.
+# Value = (EventType, cues that imply a BULLISH reading).
+_INTRINSIC_RULES: tuple[tuple["EventType", tuple[str, ...]], ...] = (
+    (EventType.CRYPTO_REGULATION,
+     ("approves", "approved", "clears", "cleared", "passes", "passed",
+      "wins approval", "legalized", "adopts", "enacts", "institutionalises")),
+    (EventType.BTC_ETF_FLOW,
+     ("inflow", "inflows", "approval", "approved")),
+    (EventType.GOLD_ETF_FLOW,
+     ("inflow", "inflows")),
+)
+_INTRINSIC_WEIGHT = 6.0
+
+# FLOW events need their sign read from the flow wording itself: an inflow is
+# buying and an outflow is selling, even though both are the "same" event type.
+# Without this, "Bitcoin ETF inflow" and "Bitcoin ETF outflow" would resolve
+# identically, which is exactly backwards.
+_FLOW_POSITIVE = ("inflow", "inflows", "in-flow", "demand", "buying",
+                  "accumulation", "inflows surge", "net buying", "creeps in")
+_FLOW_NEGATIVE = ("outflow", "outflows", "out-flow", "redemption",
+                  "redemptions", "out selling", "net selling", "liquidated")
+
+
+def _has_intrinsic_direction(text: str) -> bool:
+    lowered = (text or "").lower()
+    for _, cues in _INTRINSIC_RULES:
+        if any(contains_phrase(lowered, c) for c in cues):
+            return True
+    return False
+
+
+def _flow_sign(text: str) -> int:
+    """
+    +1 for an inflow/buying story, -1 for an outflow/redemption story, 0 when
+    the flow direction is not stated at all.
+    """
+    lowered = (text or "").lower()
+    positive = any(contains_phrase(lowered, c) for c in _FLOW_POSITIVE)
+    negative = any(contains_phrase(lowered, c) for c in _FLOW_NEGATIVE)
+    if positive and not negative:
+        return 1
+    if negative and not positive:
+        return -1
+    return 0
+
+
+# --------------------------------------------------------------------------
+# Event-type detection
+# --------------------------------------------------------------------------
+# Ordered so a SPECIFIC mechanism beats a generic category fallback.
+# Entry = (EventType, required-any-of, required-all-of).
+EVENT_SIGNALS: tuple[tuple[EventType, tuple[str, ...], tuple[str, ...]], ...] = (
+    (EventType.HAWKISH_POLICY, ("hawkish", "rate hike", "raises rates",
+                                 "raise rates", "higher for longer", "tightening",
+                                 "fewer rate cuts", "more rate cuts",
+                                 "rate increase", "lift rates"), ()),
+    (EventType.RECESSION_CUT, ("rate cut", "cut rates", "cuts rates", "dovish",
+                               "easing", "stimulus"),
+     ("recession", "slump", "slowdown", "contraction", "downturn")),
+    (EventType.DOVISH_POLICY, ("dovish", "rate cut", "cuts rates", "cut rates",
+                               "pivot", "easing", "stimulus"), ()),
+    (EventType.RISING_YIELDS, ("yields rise", "yields rose", "yields climbed",
+                               "yields climb", "yields higher", "yields surged",
+                               "higher yields", "rising yields", "real yields",
+                               "bond yield"), ()),
+    (EventType.FALLING_YIELDS, ("yields fall", "yields fell", "yields eased",
+                                "yields decline", "lower yields",
+                                "falling yields"), ()),
+    (EventType.STRONG_USD, ("dollar surges", "dollar rallies", "dollar index rose",
+                            "dollar strengthens", "dollar climbed",
+                            "stronger dollar", "dollar spikes", "dxy rises"), ()),
+    (EventType.WEAK_USD, ("dollar weakens", "dollar falls", "dollar slides",
+                          "weaker dollar", "dollar declines", "dxy falls"), ()),
+    (EventType.HOT_INFLATION, ("hotter than expected", "hot inflation",
+                               "inflation accelerates", "cpi accelerates",
+                               "above expectations"), ()),
+    (EventType.COOL_INFLATION, ("inflation cools", "cooling inflation",
+                                "disinflation", "cpi eases", "below expectations",
+                                "inflation slows"), ()),
+    (EventType.STRONG_JOBS, ("strong payrolls", "payrolls beat", "jobs beat",
+                             "strong employment", "record jobs",
+                             "hiring surge"), ()),
+    (EventType.WEAK_JOBS, ("weak payrolls", "payrolls miss", "jobs report misses",
+                           "unemployment rises", "jobless claims surge",
+                           "layoffs announced"), ()),
+    (EventType.GEOPOLITICAL_RISK, ("missile", "invasion", "war", "conflict",
+                                   "ceasefire", "tension", "escalation",
+                                   "border clash", "coup", "sanctions",
+                                   "embargo"), ()),
+    (EventType.BANKING_STRESS, ("banking crisis", "bank fails", "bank collapse",
+                                "default", "insolvency", "credit crunch",
+                                "liquidity crisis", "contagion", "margin calls",
+                                "bank stress"), ()),
+    (EventType.CRYPTO_LIQUIDATION, ("liquidations", "liquidated", "cascade",
+                                    "forced selling"), ()),
+    (EventType.CRYPTO_REGULATION, ("sec", "cftc", "crypto regulation",
+                                   "stablecoin bill", "custody rule",
+                                   "crypto bill", "ban on"), ()),
+    (EventType.BTC_ETF_FLOW, ("bitcoin etf", "spot etf", "ibit", "fbtc",
+                              "btco", "bitcoin fund", "etf inflow",
+                              "etf outflow"), ("bitcoin", "btc", "crypto")),
+    (EventType.GOLD_ETF_FLOW, ("gold etf", "gld", "gold fund", "gold inflows",
+                               "gold outflows", "etf inflows", "etf outflows"),
+     ("gold", "bullion")),
+    # Risk sentiment. NOTE (VAL-4 fix): the bare subject "risk appetite" and
+    # "investor sentiment improves" are deliberately REMOVED here. A subject
+    # listed without a verb makes every polarity-blind match fire, so "risk
+    # appetite FADED" scored exactly like "risk appetite IMPROVED". Subject+verb
+    # resolution now lives in app/analysis/event_polarity.py; only phrases that
+    # already carry a direction are kept below.
+    (EventType.RISK_ON, ("risk-on", "stocks rally", "equities surge"), ()),
+    (EventType.RISK_OFF, ("risk-off", "risk aversion", "flight to quality",
+                          "panic selling", "safe haven demand",
+                          "safe-haven demand"), ()),
+    (EventType.CHINA_DEMAND, ("china", "chinese", "beijing", "yuan", "caixin",
+                              "shanghai", "renminbi", "pboc"), ()),
+    (EventType.INDUSTRIAL_DEMAND, ("pmi", "manufacturing", "factory output",
+                                   "industrial production", "solar",
+                                   "electronics", "copper"), ()),
+    (EventType.COMMODITY_SUPPLY, ("mine", "mining", "refinery", "gold supply",
+                                  "silver supply", "opec cuts"), ()),
+)
+
+# Category fallback: used ONLY when nothing else matched.
+#
+# VAL-5 FIX: these used to map to DIRECTIONAL events (USD/DXY -> STRONG_USD,
+# Central Bank -> HAWKISH_POLICY). That meant any unplaced headline in a
+# category was handed a direction that the text never stated - "Dollar index
+# fell" matched no phrase, fell through to USD/DXY, and was reported as a
+# STRONG dollar. Every fallback target is now GENERAL_MACRO, whose sign is 0,
+# so an unclassifiable headline yields NEUTRAL/NO_BIAS rather than a guess.
+#
+# Category still matters for RELEVANCE (asset_relevance.RELEVANCE), which is
+# what decides which assets a headline can reach at all.
+CATEGORY_FALLBACK: dict = {
+    NewsCategory.CENTRAL_BANK: EventType.GENERAL_MACRO,
+    NewsCategory.INTEREST_RATES: EventType.GENERAL_MACRO,
+    NewsCategory.TREASURY_YIELDS: EventType.GENERAL_MACRO,
+    NewsCategory.USD_DXY: EventType.GENERAL_MACRO,
+    NewsCategory.INFLATION: EventType.GENERAL_MACRO,
+    NewsCategory.EMPLOYMENT: EventType.GENERAL_MACRO,
+    NewsCategory.GEOPOLITICS: EventType.GENERAL_MACRO,
+    NewsCategory.BANKING_FINANCIAL_STRESS: EventType.GENERAL_MACRO,
+    NewsCategory.RISK_SENTIMENT: EventType.GENERAL_MACRO,
+    NewsCategory.ETF_FLOWS: EventType.GENERAL_MACRO,
+    NewsCategory.BITCOIN_ETF_FLOWS: EventType.GENERAL_MACRO,
+    NewsCategory.CRYPTO_REGULATION: EventType.GENERAL_MACRO,
+    NewsCategory.CRYPTO_MARKET_FLOWS: EventType.GENERAL_MACRO,
+    NewsCategory.CHINA: EventType.GENERAL_MACRO,
+    NewsCategory.INDUSTRIAL_DEMAND: EventType.GENERAL_MACRO,
+    NewsCategory.COMMODITY_SUPPLY_DEMAND: EventType.GENERAL_MACRO,
+    NewsCategory.OIL_ENERGY: EventType.GENERAL_MACRO,
+    NewsCategory.GDP: EventType.GENERAL_MACRO,
+    NewsCategory.EQUITIES: EventType.GENERAL_MACRO,
+}
+
+
+def _has_any(lowered: str, phrases) -> bool:
+    """
+    Whole-word phrase match with plural tolerance.
+
+    News writes "Spot Bitcoin ETFs" and "spot bitcoin ETF" interchangeably;
+    strict matching would silently drop the plural and mis-route the story to
+    the wrong asset family.
+    """
+    return any(contains_plural(lowered, p) for p in phrases)
+
+
+def detect_event_types(text: str, category: NewsCategory) -> list:
+    """
+    Which transmission mechanisms does this headline actually contain?
+
+    Three sources, in priority order:
+
+    1. ``EVENT_SIGNALS`` - explicit phrases that already name a mechanism.
+    2. ``event_polarity`` - subject + verb pairs, so "the dollar index FELL"
+       reads as WEAK_USD rather than defaulting to a strong dollar (VAL-5) and
+       "risk appetite FADED" reads as RISK_OFF (VAL-4).
+    3. ``CATEGORY_FALLBACK`` - only when nothing matched, and only to a NON-
+       DIRECTIONAL event. The old fallback mapped USD/DXY straight to
+       STRONG_USD, which is how "Dollar index fell" came out bearish; a
+       fallback that asserts a direction without reading a verb is exactly the
+       defect this pass removes.
+
+    Negation is applied HERE as well as in cue scoring: "the Fed rules out a
+    rate cut" contains the words "rate cut", and without this guard it would be
+    classified as DOVISH_POLICY - reading a hawkish statement as bullish.
+    """
+    from app.analysis.event_polarity import resolve_all
+    from app.analysis.text_quality import neutralise_on_negation
+
+    lowered = neutralise_on_negation(text or "").lower()
+    found = []
+    for event_type, any_of, qualifier in EVENT_SIGNALS:
+        # ``qualifier`` is an ANY-of guard, not an ALL-of requirement: a story
+        # naming "bitcoin" satisfies it, and requiring "bitcoin" AND "btc" AND
+        # "crypto" together would mean no story ever qualified.
+        if qualifier and not _has_any(lowered, qualifier):
+            continue
+        if _has_any(lowered, any_of):
+            found.append(event_type)
+
+    # Polarity resolution runs AFTER the phrase list so it can OVERRIDE a
+    # polarity-blind phrase match. A bare "risk appetite" phrase must not beat
+    # the verb that says it faded.
+    for name in resolve_all(lowered):
+        try:
+            resolved = EventType(name)
+        except ValueError:
+            continue
+        if resolved not in found:
+            found.append(resolved)
+
+    if not found:
+        # Fallback only to a directionless event. A headline we cannot place
+        # gets a neutral mechanism, never an invented one.
+        fallback = CATEGORY_FALLBACK.get(category)
+        if fallback is not None:
+            found.append(fallback)
+    return found
+
+
+def resolve(text: str, category: NewsCategory,
+            cue_magnitude: Optional[float] = None) -> dict:
+    """
+    Resolve one headline into a PER-ASSET transmission verdict.
+
+    ``cue_magnitude`` is the single measured cue weight for the article (the
+    one magnitude item 6 keeps). When omitted it is MEASURED HERE from the cue
+    tables, so evidence strength scales the result automatically. It scales the
+    map's per-asset sensitivity but never the SIGN, so the map owns direction
+    and the cues own conviction.
+
+    When several mechanisms are present they are SUMMED per asset, which is how
+    "hawkish Fed amid recession fears" lands between the two readings instead
+    of being resolved by whichever keyword happened to appear first.
+    """
+    from app.analysis import text_quality as tq
+    from app.analysis.event_polarity import direct_asset_moves
+    from app.analysis.text_quality import neutralise_on_negation
+
+    event_types = detect_event_types(text, category)
+
+    priced_in_flag = tq.is_price_action(text)
+    if cue_magnitude is None:
+        cue_magnitude = measure_cue_magnitude(text)
+    scale = max(0.0, min(1.5, float(cue_magnitude)))
+    if priced_in_flag:
+        scale *= float(settings.price_action_weight)
+
+    # A headline naming the asset's OWN price ("gold rose") is a direct
+    # statement about that asset. It is resolved FIRST and carried through the
+    # empty-mechanism path below, because "Gold rose" matches no macro event at
+    # all and previously exited here with a silent NEUTRAL / 0.0.
+    direct = direct_asset_moves(
+        neutralise_on_negation(text or "").lower())
+
+    if not event_types:
+        out: dict = {}
+        for asset in Asset:
+            sign = direct.get(asset.value, 0)
+            direction = (Direction.NEUTRAL if sign == 0
+                         else Direction.BULLISH if sign > 0
+                         else Direction.BEARISH)
+            # Same priced-in rule as the mechanism path below.
+            base = 0.0 if priced_in_flag else 1.0
+            out[asset] = ResolvedImpact(
+                asset, direction, sign, base if sign else 0.0, None, scale,
+                priced_in_flag)
+        return out
+
+    out = {}
+    # Flow events carry their own sign from the flow wording (see _FLOW_*).
+    flow_sign = _flow_sign(text)
+    for asset in Asset:
+        signed = 0.0
+        best_weight = -1.0
+        dominant = None
+        for index, event_type in enumerate(event_types):
+            entry = transmission(event_type, asset)
+            if entry.magnitude <= 0.0:
+                continue
+            sign = entry.sign
+            if event_type in (EventType.BTC_ETF_FLOW, EventType.GOLD_ETF_FLOW):
+                if flow_sign != 0:
+                    sign = flow_sign
+                else:
+                    continue  # a flow with no direction is not a signal
+            # Earlier (more specific) mechanisms weigh more.
+            specificity = 1.0 / (1.0 + 0.5 * index)
+            contribution = sign * entry.magnitude * scale * specificity
+            signed += contribution
+            if entry.magnitude > best_weight:
+                best_weight = entry.magnitude
+                dominant = event_type
+
+        # A recognised mechanism with a non-zero magnitude that nets to zero
+        # means opposing evidence cancelled out -> MIXED, not NEUTRAL. NEUTRAL
+        # is reserved for "this article has nothing to say about this asset".
+        if abs(signed) < 0.05:
+            direction = (Direction.MIXED if best_weight > 0.0
+                         else Direction.NEUTRAL)
+            out[asset] = ResolvedImpact(
+                asset, direction, 0, 0.0, dominant, scale, priced_in_flag)
+            continue
+        sign = 1 if signed > 0 else -1
+        out[asset] = ResolvedImpact(
+            asset, Direction.BULLISH if sign > 0 else Direction.BEARISH,
+            sign, min(1.5, abs(signed)), dominant, scale, priced_in_flag)
+
+    # Re-assert the direct-asset override: a headline naming the asset's OWN
+    # price ("gold rose") is a direct statement about that asset and outranks any
+    # macro mechanism read from the surrounding text.
+    for name, asset_sign in direct.items():
+        asset = Asset(name)
+        direction = Direction.BULLISH if asset_sign > 0 else Direction.BEARISH
+        # A headline that is PURE price action ("Gold plunges 2%") reports what
+        # already happened, so it must stay damped - the same rule every other
+        # mechanism follows. Without this, a direct-asset sentence would be the
+        # only path that ignored priced-in status.
+        floor = 0.0 if priced_in_flag else 1.0
+        out[asset] = ResolvedImpact(
+            asset, direction, asset_sign, max(floor, out[asset].magnitude),
+            out[asset].dominant, scale, priced_in_flag)
+    return out

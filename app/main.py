@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import func, select
 
 from app.analysis import fj_sessions, llm_client
+from app.analysis.display import to_display
 from app.config import settings
 from app.database import init_db, session_scope
 from app.ingestion.base import parse_source_config
@@ -120,28 +121,50 @@ def _latest_snapshot(session, asset: str, scope: str):
 
 
 def _block(session, asset: str, scope: str) -> dict:
-    """One sentiment block, or an explicit empty state (never invented data)."""
+    """
+    One sentiment block, or an explicit empty state (never invented data).
+
+    Item 2: the block reports score / confidence / bias, where bias may be
+    NO_BIAS. There is no forced 100% bull/bear split any more.
+    """
     snap = _latest_snapshot(session, asset, scope)
     if snap is None:
+        # The empty state is genuinely NO_BIAS, so it renders NEUTRAL rather
+        # than an empty box - and carries the same display block shape as a
+        # real one, so the UI never has to branch on "is there data".
         return {
             "asset": asset, "scope": scope,
-            "bull_pct": 50.0, "bear_pct": 50.0,
-            "label": Direction.BULLISH.value, "net_bias": 0.0,
-            "confidence": 0.0, "conflicting_signals": 0,
-            "drivers": [], "risks": [], "catalysts": [], "conflicts": [],
-            "contributing_articles": 0,
+            "score": 0.0, "confidence": 0.0, "bias": "NO_BIAS",
+            "display": to_display(0.0, "NO_BIAS"),
+            "mode": "heuristic", "delta_60m": 0.0,
+            "event_risk": False, "event_risk_note": "",
+            "drivers": [], "bull_drivers": [], "bear_drivers": [], "conflict": None,
+            "note": "No sentiment computed yet for this scope.",
+            "contributing_articles": 0, "contributing_clusters": 0,
             "price_note": "Price-action confirmation unavailable.",
             "last_updated": "",
         }
     return {
         "asset": asset, "scope": scope,
-        "bull_pct": snap.bull_pct, "bear_pct": snap.bear_pct,
-        "label": snap.label,
-        "net_bias": snap.net_bias, "confidence": snap.confidence,
-        "conflicting_signals": snap.conflicting_signals,
-        "drivers": snap.drivers or [], "risks": snap.risks or [],
-        "catalysts": snap.catalysts or [], "conflicts": snap.conflicts or [],
+        # score / confidence / bias are the ENGINE's answers and stay exactly
+        # as they are: the decision log, hit-rate tooling and any other
+        # consumer read these fields. "display" is added alongside them for the
+        # dashboard's own use and is never written back.
+        "score": snap.score,
+        "confidence": snap.confidence,
+        "bias": snap.bias,
+        "display": to_display(snap.score, snap.bias),
+        "mode": snap.mode or "heuristic",
+        "delta_60m": snap.delta_60m,
+        "event_risk": bool(snap.event_risk),
+        "event_risk_note": snap.event_risk_note or "",
+        "drivers": snap.drivers or [],
+        "bull_drivers": snap.bull_drivers or [],
+        "bear_drivers": snap.bear_drivers or [],
+        "conflict": snap.conflict,
+        "note": snap.note or "",
         "contributing_articles": snap.contributing_articles,
+        "contributing_clusters": 0,
         "price_note": snap.price_note or "Price-action confirmation unavailable.",
         "last_updated": T.local_clock(snap.computed_at),
     }
@@ -347,10 +370,32 @@ async def financialjuice_sessions():
     The boxes themselves are still FinancialJuice-only, but their gold/silver/
     bitcoin split also folds in HIGH-importance Section B news and the economic
     calendar, so a session is read against the day's real backdrop.
+
+    LEGACY SCORING: this section still returns a forced bull_pct/bear_pct pair
+    that sums to 100, from the older scorer in fj_sessions.py. It is NOT on the
+    current Bias/score/confidence contract and cannot express "no view". The
+    payload carries an explicit ``scoring`` block so any consumer can tell the
+    two systems apart without hard-coding knowledge of the history.
+
+    TODO(unify-fj): port fj_sessions onto the transmission map and the NO_BIAS
+    contract, then delete the marker below.
     """
     with session_scope() as session:
-        return fj_sessions.session_payload_from_db(
+        payload = fj_sessions.session_payload_from_db(
             session, pipeline.current_calendar_signals())
+
+    payload["scoring"] = {
+        "system": "legacy_fj_sessions",
+        "shape": "bull_pct/bear_pct",
+        "sums_to_100": True,
+        "supports_no_bias": False,
+        "note": ("This section uses an older scorer than the rest of the "
+                 "engine. It reports a forced Bullish+Bearish=100% split and "
+                 "cannot express NO_BIAS. The main asset panels use the "
+                 "current Bias/score/confidence contract. Do not compare "
+                 "the two."),
+    }
+    return payload
 
 
 @app.get("/api/news")
@@ -449,17 +494,21 @@ async def console():
                            ("current", "CURRENT DAY-TRADING SENTIMENT")):
             b = asset[key]
             out.append(f"  {title}")
-            out.append(f"    Bullish:       {b['bull_pct']:.1f}%")
-            out.append(f"    Bearish:       {b['bear_pct']:.1f}%")
-            out.append(f"    Sentiment:     {b['label']}")
+            out.append(f"    Bias:          {b['bias']}")
+            out.append(f"    Score:         {b['score']:+.1f}  (-100..+100)")
             out.append(f"    Confidence:    {b['confidence']:.2f} "
-                       f"(articles: {b['contributing_articles']})")
+                       f"(events: {b['contributing_articles']}, "
+                       f"mode: {b['mode']})")
+            if b["delta_60m"]:
+                out.append(f"    Changed 60min: {b['delta_60m']:+.1f}")
             for d in b["drivers"][:3]:
-                out.append(f"    + {d[:88]}")
-            for d in b["risks"][:3]:
-                out.append(f"    - {d[:88]}")
-            for c in b["conflicts"][:1]:
-                out.append(f"    ! CONFLICT: {c['resolution']}")
+                out.append(f"    + {d['contribution']:+.3f}  {d['title'][:74]}")
+            if b["conflict"]:
+                out.append(f"    ! CONFLICT: {b['conflict']['title'][:74]}")
+            if b["event_risk"]:
+                out.append(f"    !! {b['event_risk_note']}")
+            if b["note"]:
+                out.append(f"    Note:          {b['note'][:70]}")
             out.append(f"    Price check:   {b['price_note']}")
             out.append("")
 

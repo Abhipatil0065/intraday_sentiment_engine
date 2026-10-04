@@ -1,0 +1,82 @@
+{
+  "_comment": [
+    "PER-ASSET TRANSMISSION MAP (improvement item 1).",
+    "Each entry is event_type -> asset -> [sign, magnitude].",
+    "  sign      : +1 bullish, -1 bearish, 0 no transmission (MIXED when combined)",
+    "  magnitude : per-asset sensitivity 0.0-1.5. Scales the single cue magnitude.",
+    "Direction is resolved PER ASSET, so one headline can be bullish gold and",
+    "bearish bitcoin at the same time. Edit freely - no code change needed.",
+    "A sign of 0 means the event type has no transmission path to that asset;",
+    "combined with other evidence it contributes MIXED rather than a lean."
+  ],
+
+  "HAWKISH_POLICY": {
+    "XAUUSD": [-1, 1.00], "XAGUSD": [-1, 0.92], "BTCUSD": [-1, 0.88]
+  },
+  "DOVISH_POLICY": {
+    "XAUUSD": [1, 1.00], "XAGUSD": [1, 0.90], "BTCUSD": [1, 0.82]
+  },
+  "RECESSION_CUT": {
+    "XAUUSD": [1, 1.10], "XAGUSD": [0, 0.45], "BTCUSD": [0, 0.55]
+  },
+  "RISING_YIELDS": {
+    "XAUUSD": [-1, 1.10], "XAGUSD": [-1, 0.95], "BTCUSD": [-1, 0.90]
+  },
+  "FALLING_YIELDS": {
+    "XAUUSD": [1, 0.95], "XAGUSD": [1, 0.85], "BTCUSD": [1, 0.80]
+  },
+  "STRONG_USD": {
+    "XAUUSD": [-1, 0.95], "XAGUSD": [-1, 0.90], "BTCUSD": [-1, 0.80]
+  },
+  "WEAK_USD": {
+    "XAUUSD": [1, 0.85], "XAGUSD": [1, 0.80], "BTCUSD": [1, 0.70]
+  },
+  "HOT_INFLATION": {
+    "XAUUSD": [-1, 1.00], "XAGUSD": [-1, 0.92], "BTCUSD": [-1, 0.90]
+  },
+  "COOL_INFLATION": {
+    "XAUUSD": [1, 0.92], "XAGUSD": [1, 0.85], "BTCUSD": [1, 0.82]
+  },
+  "STRONG_JOBS": {
+    "XAUUSD": [-1, 0.90], "XAGUSD": [-1, 0.85], "BTCUSD": [-1, 0.88]
+  },
+  "WEAK_JOBS": {
+    "XAUUSD": [1, 0.85], "XAGUSD": [1, 0.80], "BTCUSD": [1, 0.82]
+  },
+  "GEOPOLITICAL_RISK": {
+    "XAUUSD": [1, 1.05], "XAGUSD": [1, 0.70], "BTCUSD": [-1, 0.35]
+  },
+  "BANKING_STRESS": {
+    "XAUUSD": [1, 1.15], "XAGUSD": [1, 0.60], "BTCUSD": [-1, 0.90]
+  },
+  "RISK_ON": {
+    "XAUUSD": [-1, 0.45], "XAGUSD": [1, 0.55], "BTCUSD": [1, 1.00]
+  },
+  "RISK_OFF": {
+    "XAUUSD": [1, 0.65], "XAGUSD": [1, 0.35], "BTCUSD": [-1, 1.05]
+  },
+  "GOLD_ETF_FLOW": {
+    "XAUUSD": [1, 1.05], "XAGUSD": [0, 0.20], "BTCUSD": [0, 0.05]
+  },
+  "BTC_ETF_FLOW": {
+    "XAUUSD": [0, 0.05], "XAGUSD": [0, 0.10], "BTCUSD": [1, 1.10]
+  },
+  "CRYPTO_REGULATION": {
+    "XAUUSD": [0, 0.05], "XAGUSD": [0, 0.05], "BTCUSD": [1, 1.00]
+  },
+  "CRYPTO_LIQUIDATION": {
+    "XAUUSD": [0, 0.10], "XAGUSD": [0, 0.10], "BTCUSD": [-1, 1.05]
+  },
+  "CHINA_DEMAND": {
+    "XAUUSD": [1, 0.45], "XAGUSD": [1, 1.00], "BTCUSD": [0, 0.25]
+  },
+  "INDUSTRIAL_DEMAND": {
+    "XAUUSD": [0, 0.25], "XAGUSD": [1, 0.90], "BTCUSD": [0, 0.20]
+  },
+  "COMMODITY_SUPPLY": {
+    "XAUUSD": [1, 0.60], "XAGUSD": [1, 0.75], "BTCUSD": [0, 0.10]
+  },
+  "GENERAL_MACRO": {
+    "XAUUSD": [0, 0.30], "XAGUSD": [0, 0.30], "BTCUSD": [0, 0.30]
+  }
+}

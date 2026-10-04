@@ -29,7 +29,15 @@ CATEGORY_KEYWORDS: dict[NewsCategory, list[str]] = {
     NewsCategory.GEOPOLITICS: ["war", "conflict", "sanction", "missile", "invasion",
                                "tension", "strike", "ceasefire", "tariff", "trade war",
                                "election", "coup", "border"],
-    NewsCategory.RISK_SENTIMENT: ["risk-off", "risk-on", "risk sentiment", "safe haven",
+    # "risk appetite" / "risk mood" / "risk tone" belong here: the polarity
+    # resolver already reads them as RISK_ON/RISK_OFF, but without the category
+    # keyword a headline like "risk appetite faded across equity markets" was
+    # classified Other (relevance 0.1, below the 0.20 gate) and discarded before
+    # its correctly-resolved transmission could be used. Category keywords route;
+    # the resolver decides direction. Both are needed.
+    NewsCategory.RISK_SENTIMENT: ["risk-off", "risk-on", "risk sentiment",
+                                 "risk appetite", "risk mood", "risk tone",
+                                 "safe haven",
                                  "flight to quality", "investor sentiment", "panic",
                                  "risk aversion", "volatility", "vix"],
     NewsCategory.ETF_FLOWS: ["etf", "gold fund", "gld", "flows", "holdings", "inflow",

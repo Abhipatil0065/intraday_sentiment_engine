@@ -144,7 +144,8 @@ async def _is_fj_session_report(art: RawArticle) -> bool:
     return classify_fj_session(art.title or "", art.body or "") is not None
 
 
-def _fj_session_report_is_admissible(published: datetime) -> bool:
+def _fj_session_report_is_admissible(published: datetime,
+                                    now: Optional[datetime] = None) -> bool:
     """
     Admit a FinancialJuice session report on the INDIAN trading date.
 
@@ -160,13 +161,17 @@ def _fj_session_report_is_admissible(published: datetime) -> bool:
     section itself applies when rendering (today, plus one lookback day for
     the US Market Wrap). Nothing else about the TODAY filter changes, and no
     non-FJ article is affected.
+
+    ``now`` is injectable so the test suite can pin "today" instead of
+    depending on the wall clock. It defaults to the real clock in production,
+    so behaviour is unchanged.
     """
     from app.analysis.fj_sessions import india_date_of, india_today
 
     report_date = india_date_of(published)
     if report_date is None:
         return False
-    age_days = (india_today() - report_date).days
+    age_days = (india_today(now) - report_date).days
     return 0 <= age_days <= 1
 
 
@@ -174,20 +179,24 @@ async def _ingest_article(art: RawArticle, session, stats: IngestStats):
     """Apply the TODAY filter, classify, cluster and store one article."""
     published, updated, tz_label = _parse_article_time(art)
 
-    # --- TODAY-ONLY FILTER (section 19) ---
+    # --- ROLLING-WINDOW FILTER (improvement item 3) ---
+    # Replaces the "same market-timezone calendar date" gate. Admitting news on
+    # RECENCY rather than on which calendar day it landed in means the overnight
+    # US wrap (~01:05 IST) passes on age alone, so the old FinancialJuice / IST
+    # date carve-out below is no longer needed for ordinary headline flow.
     if published is None:
         stats.rejected += 1
         return None
+    if not T.within_rolling_window(published) or not T.within_max_age(published):
+        stats.rejected += 1
+        return None
     if await _is_fj_session_report(art):
-        # Session reports carry their own IST-based admission rule (see
-        # _fj_session_report_is_admissible); the market-timezone test would
-        # discard the overnight US wrap every evening.
+        # Session reports still get their own IST-date rule on top, because a
+        # US wrap published ~15:35 ET the previous day must be able to appear on
+        # the Indian trading date the dashboard renders it under.
         if not _fj_session_report_is_admissible(published):
             stats.rejected += 1
             return None
-    elif not T.is_today(published) or not T.within_max_age(published):
-        stats.rejected += 1
-        return None
 
     # --- EVENT DEDUPLICATION (section 16) ---
     dedupe = _dedup.match(art.title, published)
@@ -278,6 +287,18 @@ async def _ingest_article(art: RawArticle, session, stats: IngestStats):
 
     stats.new_today += 1
     return row
+
+
+def _decision_log():
+    """Lazy singleton for the item-11 audit log (never blocks the pipeline)."""
+    global _DECISION_LOG
+    if _DECISION_LOG is None:
+        from app.analysis.decision_log import get_decision_log
+        _DECISION_LOG = get_decision_log()
+    return _DECISION_LOG
+
+
+_DECISION_LOG = None
 
 
 def _price_note(asset: Asset) -> str:
@@ -400,12 +421,29 @@ def _recompute_sentiment(session):
     global _last_regime
     _last_regime = assessment
 
+    # Item 8: an imminent high-impact release makes any standing bias unreliable.
+    at_risk, risk_note = (False, "")
+    try:
+        from app.analysis.calendar_risk import event_risk_check
+        at_risk, risk_note = event_risk_check(
+            [s.event for s in _calendar_signals])
+    except Exception as exc:  # noqa: BLE001 - never break the recompute
+        log.debug("event_risk_check failed: %s", exc)
+
     for asset in (Asset.GOLD, Asset.SILVER, Asset.BITCOIN):
         asset_signals = [s for s in signals if s.asset is asset]
 
-        current_result = compute_sentiment(asset_signals, asset)
+        current_result = compute_sentiment(
+            asset_signals, asset, event_risk=at_risk,
+            event_risk_note=risk_note)
         prep = market_prep.build(asset_signals, category_weights, asset)
         wrap = market_wrap.build(asset_signals, asset)
+
+        # Item 11: persist every published bias so it can be scored later.
+        try:
+            _decision_log().record_bias(current_result)
+        except Exception as exc:  # noqa: BLE001 - auditing is best-effort
+            log.debug("decision log write failed: %s", exc)
 
         for scope, result in (
             ("CURRENT", current_result),
@@ -416,26 +454,39 @@ def _recompute_sentiment(session):
                 SentimentSnapshot(
                     asset=asset.value,
                     scope=scope,
-                    bull_pct=result.bull_pct,
-                    bear_pct=result.bear_pct,
-                    label=result.label.value,
-                    net_bias=result.net_bias,
+                    score=result.score,
                     confidence=result.confidence,
-                    conflicting_signals=len(result.conflicts),
-                    drivers=result.drivers,
-                    risks=result.risks,
-                    conflicts=result.conflicts,
+                    bias=result.bias.value,
+                    mode=result.mode,
+                    delta_60m=result.delta_60m,
+                    event_risk=result.event_risk,
+                    event_risk_note=result.event_risk_note,
+                    drivers=[{"title": d.title, "contribution": d.contribution,
+                              "direction": d.direction, "weight": d.weight}
+                             for d in result.drivers],
+                    bull_drivers=[{"title": d.title,
+                                   "contribution": d.contribution,
+                                   "direction": d.direction, "weight": d.weight}
+                                  for d in result.bull_drivers],
+                    bear_drivers=[{"title": d.title,
+                                   "contribution": d.contribution,
+                                   "direction": d.direction, "weight": d.weight}
+                                  for d in result.bear_drivers],
+                    conflict=({"title": result.conflict.title,
+                               "contribution": result.conflict.contribution,
+                               "direction": result.conflict.direction,
+                               "weight": result.conflict.weight}
+                              if result.conflict else None),
+                    note=result.note,
                     contributing_articles=result.contributing_articles,
-                    catalysts=(prep.upcoming_catalysts
-                               if scope == "MARKET_PREP" else []),
                     price_note=_price_note(asset),
                 )
             )
         log.info(
-            "%s: %s bull=%.1f%% bear=%.1f%% (n=%d conf=%.2f)",
-            asset.value, current_result.label.value, current_result.bull_pct,
-            current_result.bear_pct,
+            "%s: %s score=%+.1f (n=%d conf=%.2f event_risk=%s)",
+            asset.value, current_result.bias.value, current_result.score,
             current_result.contributing_articles, current_result.confidence,
+            at_risk,
         )
 
     return signals, assessment

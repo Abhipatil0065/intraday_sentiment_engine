@@ -56,16 +56,69 @@
   .mlabel{font-size:11.5px;letter-spacing:1.4px;color:var(--dim)}
   .msess{color:var(--txt);font-weight:700}
   .msub{font-size:12px;color:var(--dim);letter-spacing:.4px;margin-top:-5px}
-  .mcard .verdict{font-size:13px;padding:6px 14px;border-radius:6px}
-  .mcard .bar{height:18px;border-radius:9px}
-  .mstats{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
-  .mstat{background:var(--panel2);border:1px solid var(--line);border-radius:7px;
-         padding:9px 10px;text-align:center}
-  .mstat .k{font-size:10px;letter-spacing:1.4px;color:var(--dim)}
-  .mstat .v{font-size:26px;font-weight:700;line-height:1.2;margin-top:3px}
-  .mstat.b .v{color:var(--bull)}
-  .mstat.n .v{color:var(--neu)}
-  .mstat.s .v{color:var(--bear)}
+  /* ---- bull/bear split bar ------------------------------------------------
+   The thin bar shows the SAME bull/bear split the headline percentage is
+   drawn from, so the number and the bar can never disagree. The split comes
+   from the server's `display` block, which derives it from the score - the
+   JavaScript only picks widths, it never decides a direction.
+
+   These override the older centred-diverging .bar rules below, which assumed
+   <div class="b">/<div class="s"> children positioned from the midpoint. The
+   markup is now two plain spans sized to the split, and NO_BIAS greys both
+   sides so a withheld verdict reads as withheld. */
+.mcard .bar{height:18px;border-radius:9px;display:flex;overflow:hidden;
+            background:var(--neu);position:static}
+.mcard .bar::after{display:none}
+.mcard .bar .bu{position:static;display:block;height:100%;flex:0 0 auto;
+               background:var(--bull)}
+.mcard .bar .be{position:static;display:block;height:100%;flex:1 1 auto;
+               background:var(--bear)}
+.mcard .bar.neu .bu,.mcard .bar.neu .be{background:var(--neu)}
+/* ---- two-sided split BOXES under the bar --------------------------------
+   Under the split line each side gets its own boxed figure: the BULLISH
+   percentage in a green box, the BEARISH percentage in a red box. Sized to
+   read as a headline number rather than a caption, because for a NO_BIAS card
+   this pair IS the verdict - there is no named side to lean on.
+
+   Both boxes always print, even when the engine names one side. That is the
+   point: the reader sees how lopsided the split actually is.
+
+   For a NEUTRAL card both boxes are greyed via .neu. The numbers still describe
+   the engine's real split (a score of +3 is genuinely 52/48), but nothing on
+   the card may look like a directional call the engine declined to make. The
+   LABEL always comes from bias - these boxes colour it, they never decide it. */
+.mcard .bpct{display:flex;justify-content:space-between;align-items:stretch;
+            gap:10px;margin-top:9px}
+.mcard .bpct .side{flex:1 1 0;display:flex;flex-direction:column;
+                   align-items:center;gap:2px;padding:7px 6px;border-radius:8px;
+                   border:1px solid transparent;background:var(--panel2)}
+/* Green box for the bullish figure, red for the bearish one. */
+.mcard .bpct .side.bull{border-color:rgba(46,160,67,.55);
+                        background:rgba(46,160,67,.14)}
+.mcard .bpct .side.bear{border-color:rgba(248,81,73,.55);
+                        background:rgba(248,81,73,.14)}
+.mcard .bpct .cap{font-size:9.5px;letter-spacing:1.4px;color:var(--dim)}
+.mcard .bpct .fig{font-size:22px;font-weight:700;line-height:1.1;
+                  font-variant-numeric:tabular-nums}
+.mcard .bpct .side.bull .fig{color:var(--bull)}
+.mcard .bpct .side.bear .fig{color:var(--bear)}
+/* No greyed variant. The boxes are permanently green/red, including on a
+   NEUTRAL card, so all three asset cards read identically. Bitcoin in
+   particular sits on the NO_BIAS boundary and flickered between coloured and
+   grey as its confidence crossed the floor, which read as a broken card.
+
+   The withheld call is still stated plainly where it belongs: the verdict chip
+   above stays grey and says NEUTRAL, and the split bar greys too. The boxes
+   answer "what is the split", never "which way does the engine lean". */
+
+/* The verdict chip is the primary read: label + one percentage. */
+.mcard .verdict{font-size:15px;font-weight:700;letter-spacing:1.2px;
+               padding:7px 15px;border-radius:6px;display:inline-block}
+.mcard .verdict.BULLISH{background:rgba(46,160,67,.16)}
+.mcard .verdict.BEARISH{background:rgba(248,81,73,.16)}
+.mcard .verdict.NO_BIAS{background:rgba(110,118,129,.16)}
+/* The .mstats / .mstat boxed-number grid backed the removed SCORE/CONF tiles.
+   No markup references it now, so it is dropped rather than left as dead CSS. */
   .mdrv{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   .mcard .note li{font-size:11px;color:var(--txt)}
   .mcard .note .none{font-size:10.5px;color:var(--dim);font-style:italic}
@@ -97,8 +150,19 @@
   .verdict.BEARISH{color:var(--bear);border-color:var(--bear)}
   .verdict.MIXED{color:var(--gold);border-color:var(--gold)}
   .verdict.NEUTRAL{color:var(--dim)}
-  .bar{display:flex;height:15px;border-radius:8px;overflow:hidden;background:#1b2130}
-  .bar div{height:100%}
+  /* Item 2: NO_BIAS is a real, first-class answer. It must look deliberate,
+     not like a rendering error or an empty state. */
+  .verdict.NO_BIAS{color:var(--dim);border-color:var(--dim);border-style:dashed}
+  .mfoot .risk{color:var(--bear);font-weight:700;letter-spacing:.5px}
+  /* Score bar is a CENTRED diverging bar, not a 100% stacked pair: the fill
+     starts at the midpoint and grows left or right from there. */
+  .bar{position:relative;display:block;height:15px;border-radius:8px;
+       background:#1b2130;overflow:hidden}
+  .bar::after{content:'';position:absolute;left:50%;top:0;bottom:0;width:1px;
+       background:var(--line)}
+  .bar div{position:absolute;top:0;bottom:0;height:100%}
+  .bar .b{left:50%}
+  .bar .s{right:50%}
   .bar .b{background:var(--bull)}
   .bar .s{background:var(--bear)}
   .note{background:var(--panel2);border:1px solid var(--line);border-radius:7px;
@@ -110,6 +174,11 @@
            padding-left:8px;border-left:2px solid var(--line)}
   .note.drv h4{color:var(--bull)} .note.drv li{border-left-color:var(--bull)}
   .note.rsk h4{color:var(--bear)} .note.rsk li{border-left-color:var(--bear)}
+  /* The MARKET PREP card's two driver boxes: bullish on the left, bearish on
+     the right. They reuse the drv/rsk colours above, so the pairing reads the
+     same way as the green/red percentage boxes above them. */
+  .note.bull h4{color:var(--bull)} .note.bull li{border-left-color:var(--bull)}
+  .note.bear h4{color:var(--bear)} .note.bear li{border-left-color:var(--bear)}
   .note.cat h4{color:var(--gold)} .note.cat li{border-left-color:var(--gold)}
   /* Economic calendar rows - visibly distinct from news headlines. */
   .cal{border-left:2px solid var(--gold);padding:6px 0 6px 10px;margin-top:8px}
@@ -194,6 +263,12 @@
   .fjctx{font-size:10.5px;color:var(--dim);margin:0 0 8px;padding:6px 10px;
          border-left:2px solid var(--gold);background:var(--panel2)}
   .fjctx b{color:var(--text)}
+  /* LEGACY-SCORING BANNER: this section still emits the old forced
+     Bullish+Bearish=100% split, unlike the rest of the dashboard which uses
+     BULLISH/BEARISH/NO_BIAS. It is called out so the two are never compared. */
+  .fjlegacy{font-size:10.5px;color:var(--gold);margin:0 0 11px;padding:7px 11px;
+            border:1px dashed rgba(240,180,41,.45);border-radius:7px;
+            background:rgba(240,180,41,.07);line-height:1.45}
   .fjrt{font-size:11px;color:var(--dim);margin-bottom:9px;font-style:italic}
   .fjgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
   .fja{background:var(--panel2);border:1px solid var(--line);border-radius:7px;
@@ -259,36 +334,84 @@ function esc(s){return String(s==null?'':s)
 function n1(v){return (Math.round((+v||0)*10)/10).toFixed(1);}
 function w(v){return Math.max(0,Math.min(100,+v||0));}
 
-/* Compact bar for the top strip (no legend - percentages sit in the footer). */
+/* ---- bull/bear split + verdict label ------------------------------------
+   The engine's `display` block is authoritative for the LABEL and the SPLIT.
+   It is computed server-side by app/analysis/display.py from score + bias, and
+   this function only chooses widths and colours from it.
+
+   The critical detail: the label is taken from `b.bias`, NEVER from the sign of
+   the score or the size of the percentage. The engine deliberately returns
+   NO_BIAS when its evidence is thin, and the score behind such a call is often
+   a small non-zero number - so a sign-driven label would paint a withheld
+   verdict green or red. Here NO_BIAS always renders grey NEUTRAL 50%. */
+function disp(b){
+  b=b||{};
+  if(b.display && typeof b.display.pct==='number') return b.display;
+  /* Fallback for a payload from a server that predates the display block.
+     Same arithmetic, and the label still comes from bias, not from the sign. */
+  var s=Math.max(-100,Math.min(100,+b.score||0));
+  var bull=w(50+s/2);
+  var bias=(b.bias||'NO_BIAS');
+  return {label:bias==='BULLISH'?'BULLISH':bias==='BEARISH'?'BEARISH':'NEUTRAL',
+          pct:bias==='BULLISH'?bull:bias==='BEARISH'?100-bull:50,
+          bull_pct:bull, bear_pct:100-bull};
+}
+function verdictClass(label){
+  /* Reuse the CSS classes the page already defines for a verdict chip
+     (.BULLISH / .BEARISH / .NO_BIAS) so the new "LABEL n%" chip is styled by
+     exactly the rules the old bias chip used, and NO_BIAS keeps its dashed
+     grey "withheld" look. */
+  return label==='BULLISH'?'BULLISH':label==='BEARISH'?'BEARISH':'NO_BIAS';
+}
+/* Thin bar showing the bull/bear split the headline percentage came from. */
 function mbar(b){
-  return '<div class="bar">'
-    +'<div class="b" style="width:'+w(b.bull_pct)+'%"></div>'
-    +'<div class="s" style="width:'+w(b.bear_pct)+'%"></div></div>';
+  var d=disp(b);
+  return '<div class="bar'+(d.label==='NEUTRAL'?' neu':'')+'">'
+    +'<span class="bu" style="width:'+w(d.bull_pct)+'%"></span>'
+    +'<span class="be" style="width:'+w(d.bear_pct)+'%"></span></div>';
+}
+/* BOTH sides as boxed figures, printed directly UNDER the bar line.
+   One green box for the bullish percentage, one red box for the bearish one -
+   the "old dashboard" split read, at headline size.
+
+   The colours are PERMANENT and are keyed to the SIDE, not to the verdict: the
+   bull box is always green and the bear box always red, including on a NEUTRAL
+   card. Greying them for NO_BIAS was tried and reverted - it made the boxes
+   flicker as a borderline asset crossed the floor, and read as a broken card.
+
+   The withheld call is still visible: the verdict chip above and the split bar
+   both grey and say NEUTRAL. These boxes only report the split. */
+function msplit(b){
+  var d=disp(b);
+  return '<div class="bpct">'
+    +'<div class="side bull"><span class="cap">BULLISH</span>'
+    +'<span class="fig">'+Math.round(d.bull_pct)+'%</span></div>'
+    +'<div class="side bear"><span class="cap">BEARISH</span>'
+    +'<span class="fig">'+Math.round(d.bear_pct)+'%</span></div></div>';
 }
 function sessionChain(){
   if(!DATA) return '\u2014';
   return esc(DATA.previous_session)+' &rarr; '+esc(DATA.next_session);
 }
-/* One boxed percentage: BULL / BEAR as explicit numbers. The two always sum
-   to 100%, so together they are the complete picture. */
-function mstat(cls,key,val){
-  return '<div class="mstat '+cls+'"><div class="k">'+key+'</div>'
-    +'<div class="v">'+val+'</div></div>';
-}
-/* TOP DRIVERS / KEY RISKS box - always drawn, "None flagged" when empty. */
+/* TOP DRIVERS box - always drawn, "None flagged" when empty. Driver entries
+   are objects {title, contribution, direction}, not bare strings. */
 function mnote(cls,title,items,limit){
   var list=(items||[]), extra=Math.max(0,list.length-limit);
   var body=(!list.length)
     ? '<div class="none">None flagged.</div>'
     : '<ul>'+list.slice(0,limit).map(function(x){
-        return '<li>'+esc(x)+'</li>';}).join('')
+        var t=(typeof x==='string')?x:(x.title||'');
+        var c=(typeof x==='string')?null:(+x.contribution||0);
+        return '<li>'+(c===null?'':(c>=0?'<b>+'+c.toFixed(3)+'</b> ':'<b>'+c.toFixed(3)+'</b> '))+esc(t)+'</li>';
+      }).join('')
       +(extra?('<li>+' +extra+' more</li>'):'')+'</ul>';
   return '<div class="note '+cls+'"><h4>'+title+'</h4>'+body+'</div>';
 }
 /* Top strip: one compact MARKET PREP card per asset, gold / silver / bitcoin. */
 function prepCard(a){
   var b=a.market_prep||{};
-  var conf=String(b.conflicting_signals||0);
+  var d=disp(b);
+  var risk=b.event_risk?'<span class="risk">EVENT RISK</span>':'';
   return '<div class="mcard '+String(a.label||'').toLowerCase()
     +'" data-goto="asset-'+esc(a.symbol)+'" title="Jump to the '
     +esc(String(a.label||'').toUpperCase())+' economic calendar">'
@@ -298,19 +421,22 @@ function prepCard(a){
     +'<div class="mrow"><span class="mlabel">SESSIONS</span>'
     +'<span class="msess">'+sessionChain()+'</span></div>'
     +'<div class="mrow"><span class="mlabel">MARKET PREP</span>'
-    +'<span class="verdict '+esc(b.label)+'">'+esc(b.label)+'</span></div>'
+    +'<span class="verdict '+verdictClass(d.label)+'">'+d.label+' '+d.pct+'%</span>'
+    +'</div>'
     +'<div class="msub">expected / forward-looking setup</div>'
     +mbar(b)
-    +'<div class="mstats">'
-    +mstat('b','BULL',n1(b.bull_pct)+'%')
-    +mstat('s','BEAR',n1(b.bear_pct)+'%')+'</div>'
+    +msplit(b)
     +'<div class="mdrv">'
-    +mnote('drv','TOP DRIVERS',b.drivers,3)
-    +mnote('rsk','KEY RISKS',b.risks,3)+'</div>'
-    +'<div class="mfoot"><span>NET <b>'+n1(b.net_bias)+'</b></span>'
-    +'<span>conf <b>'+n1((+b.confidence||0)*100)+'%</b></span>'
+    +mnote('bull','BULLISH DRIVERS',b.bull_drivers,3)
+    +mnote('bear','BEARISH DRIVERS',b.bear_drivers,3)+'</div>'
+    /* The conflicting headline explains a verdict that straddles zero, so it
+       stays on the card next to the drivers rather than being dropped. */
+    +(b.conflict?('<div class="msub">&#9888; conflicting headline: '
+      +esc(b.conflict.title||'')+'</div>'):'')
+    +'<div class="mfoot"><span>60min <b>'+n1(b.delta_60m)+'</b></span>'
+    +'<span>mode <b>'+esc(b.mode||'heuristic')+'</b></span>'
     +'<span>n=<b>'+(+b.contributing_articles||0)+'</b></span>'
-    +(conf!=='0'?('<span>conflicting <b>'+conf+'</b></span>'):'')
+    +risk
     +'</div>'
     +'</div>';
 }
@@ -500,9 +626,21 @@ async function loadMore(){
   FEED.busy=false; renderFeed(FEED.items);
 }
 /* ---- FinancialJuice Session Analysis -----------------------------------
-   Renders exactly five boxes in the fixed order supplied by the API. Only
-   Bullish % and Bearish % are shown - there is deliberately no third
-   sentiment category anywhere in this section. */
+   LEGACY SCORING - deliberately NOT converted to Bias/score/confidence.
+
+   This section runs a separate, older scorer (fj_sessions.py) that still emits
+   a forced bull_pct/bear_pct pair summing to 100. It scores ONE publisher's
+   session report with its own weighted-cue model, not the main news pipeline.
+
+   It is labelled in the UI so a reader never confuses the two systems:
+     * the main engine panels above publish BULLISH / BEARISH / NO_BIAS;
+     * this section publishes a split that ALWAYS sums to 100 and therefore
+       cannot express "no view".
+
+   Converting it would change published numbers for existing users, so it is
+   flagged rather than silently rewritten.
+   TODO(unify-fj): port fj_sessions onto the transmission map and the NO_BIAS
+   contract, then remove this banner. */
 function fjAsset(a){
   var bull=+a.bull_pct||0, bear=+a.bear_pct||0;
   var dv=(a.drivers&&a.drivers.length)?a.drivers.slice(0,3).join(' \u00b7 '):'';
@@ -532,7 +670,14 @@ function renderFinancialJuice(d){
       +'</span>'
     +'<span class="fz">Source: FinancialJuice only &middot; times in '
       +esc(d.timezone)+' &middot; Bullish + Bearish = 100%</span>'
-    +'</div>';
+    +'</div>'
+    /* Explicit legacy marker: the difference from the main engine must be
+       impossible to miss. */
+    +'<div class="fjlegacy">LEGACY SCORING &mdash; this section uses a separate '
+    +'older scorer and reports a forced Bullish+Bearish=100% split. The engine '
+    +'panels above use the current contract (BULLISH / BEARISH / NO_BIAS with a '
+    +'signed score and confidence) and can report "no view". Do not compare the '
+    +'numbers between this section and the rest of the dashboard.</div>';
 
   /* The order here is whatever the API returned, which the backend fixes to
      US Market Wrap, Asian Market Wrap, Europe Market Prep, Europe Market

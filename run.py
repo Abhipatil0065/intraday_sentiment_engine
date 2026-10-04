@@ -88,9 +88,18 @@ def run_once_demo() -> None:
                            ("current", "CURRENT DAY-TRADING SENTIMENT")):
             b = asset[key]
             print(f"  {title}")
-            print(f"    Bullish:       {b['bull_pct']:.1f}%")
-            print(f"    Bearish:       {b['bear_pct']:.1f}%")
-            print(f"    Sentiment:     {b['label']}")
+            print(f"    Bias:          {b['bias']}")
+            print(f"    Score:         {b['score']:+.1f}  (-100..+100)")
+            print(f"    Confidence:    {b['confidence']:.2f} "
+                  f"(events: {b['contributing_articles']}, mode: {b['mode']})")
+            if b["delta_60m"]:
+                print(f"    Changed 60min: {b['delta_60m']:+.1f}")
+            for d in b["drivers"][:3]:
+                print(f"    + {d['contribution']:+.3f}  {d['title'][:70]}")
+            if b["conflict"]:
+                print(f"    ! CONFLICT: {b['conflict']['title'][:70]}")
+            if b["event_risk"]:
+                print(f"    !! {b['event_risk_note']}")
             print(f"    Price check:   {b['price_note']}")
 
     print()

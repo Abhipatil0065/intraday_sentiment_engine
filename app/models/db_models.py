@@ -135,7 +135,14 @@ class AssetImpact(Base):
 
 
 class SentimentSnapshot(Base):
-    """Materialised per-asset sentiment at a point in time."""
+    """
+    Materialised per-asset sentiment at a point in time.
+
+    Item 2 replaced bull_pct/bear_pct/label with a signed score, a confidence
+    and a three-state bias that may be NO_BIAS. The explainability fields
+    (item 10) are stored alongside so the dashboard never has to recompute
+    them.
+    """
 
     __tablename__ = "sentiment_snapshot"
 
@@ -143,17 +150,21 @@ class SentimentSnapshot(Base):
     asset: Mapped[str] = mapped_column(String(12), index=True)
     scope: Mapped[str] = mapped_column(String(24), index=True)  # CURRENT / PREP / WRAP
 
-    bull_pct: Mapped[float] = mapped_column(Float, default=0.0)
-    bear_pct: Mapped[float] = mapped_column(Float, default=0.0)
-    label: Mapped[str] = mapped_column(String(16), default="BULLISH")
-    net_bias: Mapped[float] = mapped_column(Float, default=0.0)
-    confidence: Mapped[float] = mapped_column(Float, default=0.0)
-    conflicting_signals: Mapped[int] = mapped_column(Integer, default=0)
+    score: Mapped[float] = mapped_column(Float, default=0.0)      # -100..+100
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)  # 0..1
+    bias: Mapped[str] = mapped_column(String(16), default="NO_BIAS")
+    mode: Mapped[str] = mapped_column(String(24), default="heuristic")
+    delta_60m: Mapped[float] = mapped_column(Float, default=0.0)
+    event_risk: Mapped[bool] = mapped_column(Boolean, default=False)
+    event_risk_note: Mapped[str] = mapped_column(Text, default="")
 
     drivers: Mapped[list] = mapped_column(JSON, default=list)
-    risks: Mapped[list] = mapped_column(JSON, default=list)
-    catalysts: Mapped[list] = mapped_column(JSON, default=list)
-    conflicts: Mapped[list] = mapped_column(JSON, default=list)
+    # Both sides separately, so the dashboard can show a bullish box beside a
+    # bearish box. "drivers" above still holds only the leading side.
+    bull_drivers: Mapped[list] = mapped_column(JSON, default=list)
+    bear_drivers: Mapped[list] = mapped_column(JSON, default=list)
+    conflict: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    note: Mapped[str] = mapped_column(Text, default="")
     contributing_articles: Mapped[int] = mapped_column(Integer, default=0)
 
     price_note: Mapped[str] = mapped_column(Text, default="")

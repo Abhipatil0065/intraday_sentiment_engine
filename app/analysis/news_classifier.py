@@ -78,14 +78,20 @@ class ArticleAnalysis:
 # ==========================================================================
 # Heuristic engine (always available)
 # ==========================================================================
-def _strength_from(mag: float, relevance: float,
+def _strength_from(cue_magnitude: float, relevance: float,
                    importance: EconomicImportance) -> ImpactStrength:
-    """Map cue magnitude + relevance + importance onto a strength band."""
-    if mag >= 8 or importance is EconomicImportance.VERY_HIGH:
+    """
+    Map the ONE cue magnitude + relevance + importance onto a strength band.
+
+    Item 6: ``cue_magnitude`` is the single measured cue score. Persistence is
+    no longer derived from the same number (see ``_persistence_from``), so the
+    same evidence is not counted three times under three names.
+    """
+    if cue_magnitude >= 0.80 or importance is EconomicImportance.VERY_HIGH:
         base = ImpactStrength.VERY_HIGH
-    elif mag >= 5:
+    elif cue_magnitude >= 0.55:
         base = ImpactStrength.HIGH
-    elif mag >= 3:
+    elif cue_magnitude >= 0.33:
         base = ImpactStrength.MEDIUM
     else:
         base = ImpactStrength.LOW
@@ -97,43 +103,54 @@ def _strength_from(mag: float, relevance: float,
     return base
 
 
-def _persistence_from(importance: EconomicImportance, direction: Direction,
-                      category: NewsCategory) -> float:
-    """Expected persistence through TODAY's session (section 13)."""
-    base = {
-        EconomicImportance.VERY_HIGH: 0.90,
-        EconomicImportance.HIGH: 0.70,
-        EconomicImportance.MEDIUM: 0.50,
-        EconomicImportance.LOW: 0.30,
-    }[importance]
-    if category in (NewsCategory.BANKING_FINANCIAL_STRESS, NewsCategory.GEOPOLITICS,
-                    NewsCategory.CENTRAL_BANK):
-        base = min(1.0, base + 0.10)
-    if direction is Direction.MIXED:
-        base *= 0.8
-    return base
+def _persistence_from(category: NewsCategory) -> float:
+    """
+    How long this kind of event should keep influencing today's session.
+
+    Derived from the EVENT TYPE (the category), not from the cue total. This is
+    the item 6 fix: persistence used to be a function of the same cue magnitude
+    as strength and importance, so one measurement drove three multipliers.
+    """
+    from app.analysis.transmission_map import CATEGORY_PERSISTENCE
+
+    return CATEGORY_PERSISTENCE.get(category, 0.5)
 
 
 def _build_reason(asset: Asset, category: NewsCategory, direction: Direction,
-                  text: str) -> str:
+                  text: str, dominant: Optional[str] = None,
+                  priced_in: bool = False) -> str:
     cat_label = category.value if category else "news"
     snippet = " ".join(text.split())[:110]
-    return (
+    parts = [
         f"{cat_label} headline reading net {direction.value.lower()} for "
-        f"{asset.label} ({asset.value}). Relevance from category weight plus "
-        f"explicit asset mention. Snippet: \"{snippet}\""
-    )
+        f"{asset.label} ({asset.value})."
+    ]
+    if dominant:
+        parts.append(f"Transmission path: {dominant}.")
+    if priced_in:
+        parts.append("Price-action report only - directional weight suppressed.")
+    parts.append(f'Snippet: "{snippet}"')
+    return " ".join(parts)
 
 
 def _transmission_for(asset: Asset, direction: Direction) -> str:
     if direction in (Direction.BULLISH, Direction.BEARISH):
         return TRANSMISSION[direction.value].get(asset, "Transmission unclear.")
-    return ("No dominant directional transmission path; treated as neutral "
-            "intraday input.")
+    return ("No dominant directional transmission path; treated as a neutral "
+            "intraday input for this asset.")
 
 
 def heuristic_analyze(title: str, body: str = "") -> ArticleAnalysis:
-    """Deterministic classification - the always-available fallback engine."""
+    """
+    Deterministic classification - the always-available fallback engine.
+
+    Direction is now resolved PER ASSET through the transmission map rather than
+    computed once and stamped onto every routed asset, so a headline that is
+    bullish gold and bearish bitcoin produces exactly that.
+    """
+    from app.analysis import text_quality as tq
+    from app.analysis.transmission_map import measure_cue_magnitude, resolve
+
     text = f"{title} {body}".strip()
     result = ArticleAnalysis(mode="heuristic")
 
@@ -145,24 +162,29 @@ def heuristic_analyze(title: str, body: str = "") -> ArticleAnalysis:
     result.event_summary = (body or title)[:300].strip()
 
     lowered = text.lower()
-    bull = score_cues(lowered, BULLISH_CUES)
-    bear = score_cues(lowered, BEARISH_CUES)
-    direction = detect_direction(lowered)
-    mag = max(bull, bear)
+    # THE single cue magnitude for this article (item 6).
+    cue_magnitude = measure_cue_magnitude(text)
+    resolved = resolve(text, result.category, cue_magnitude)
+    persistence = _persistence_from(result.category)
+    quality = tq.analyse(text)
 
     char = detect_metal_character(lowered)
     for asset in relevant_assets(result.category, text):
         rel = relevance_for(result.category, asset, text)
+        impact = resolved[asset]
         result.assets.append(
             AssetAnalysis(
                 asset=asset,
-                direction=direction,
-                strength=_strength_from(mag, rel, result.importance),
+                direction=impact.direction,
+                strength=_strength_from(cue_magnitude, rel, result.importance),
                 relevance=rel,
-                persistence=_persistence_from(result.importance, direction,
-                                              result.category),
-                reason=_build_reason(asset, result.category, direction, text),
-                transmission=_transmission_for(asset, direction),
+                persistence=persistence,
+                reason=_build_reason(asset, result.category, impact.direction,
+                                     text,
+                                     dominant=impact.dominant.value
+                                     if impact.dominant else None,
+                                     priced_in=quality["price_action"]),
+                transmission=_transmission_for(asset, impact.direction),
                 metal_character=char if asset is Asset.SILVER else None,
             )
         )
@@ -216,7 +238,6 @@ Return ONLY a JSON object with this exact schema:
     "Bitcoin ETF Flows","Crypto Market Flows","Oil/Energy","Equities",
     "Banking/Financial Stress","Other",
   "importance": "VERY_HIGH|HIGH|MEDIUM|LOW",
-  "report_kind": "MARKET_PREP|MARKET_WRAP|GENERAL",
   "verification": "CONFIRMED|UNVERIFIED",
   "event_title": "canonical EVENT name (not a restatement of the headline)",
   "event_summary": "one sentence describing what happened",
@@ -225,10 +246,10 @@ Return ONLY a JSON object with this exact schema:
     {
       "asset": "XAUUSD|XAGUSD|BTCUSD",
       "direction": "BULLISH|BEARISH|NEUTRAL|MIXED",
-      "strength": "VERY_HIGH|HIGH|MEDIUM|LOW",
-      "relevance": 0.0-1.0,
-      "persistence": 0.0-1.0,
-      "reason": "WHY this affects the asset - 1-2 specific sentences",
+      "magnitude": 0.0-1.0,
+      "horizon": "intraday|session|multi_day",
+      "priced_in": true|false,
+      "reason": "WHY this affects the asset - ONE line",
       "transmission": "the causal CHAIN using -> arrows",
       "metal_character": "PRECIOUS|INDUSTRIAL|BOTH|null"
     }
@@ -240,10 +261,14 @@ Return ONLY a JSON object with this exact schema:
 - If the item has NO material effect on gold, silver or bitcoin (e.g. a
   routine corporate filing, a sports result, an isolated local story),
   return an EMPTY array: "assets": []. That is a correct and expected answer.
-- Never force an entry just to fill the array.
+- Never force an entry just to fill the array. Never list an asset twice.
 - At most 3 entries, ordered by relevance descending.
-- Keep "reason" under 60 words and "transmission" under 40 words so the
-  whole object stays well inside the token limit."""
+- "magnitude" is YOUR conviction for that asset (0.0-1.0), not a probability.
+- Set "priced_in": true when the market already expected this ("as expected",
+  "in line with forecasts"); it reduces the weight the engine gives the item.
+- If the headline only REPORTS a price move ("gold plunges 2%"), the move has
+  already happened: keep magnitude low and say so in the reason.
+- Keep "reason" to ONE line and "transmission" under 40 words."""
 
 
 def _coerce_enum(enum_cls, raw, fallback):
@@ -258,77 +283,107 @@ def _clamp(value, low: float = 0.0, high: float = 1.0) -> float:
         return max(low, min(high, float(value)))
     except (TypeError, ValueError):
         return low
+def _magnitude_to_strength(magnitude: float) -> ImpactStrength:
+    """Map the model's own 0-1 conviction onto the strength bands."""
+    if magnitude >= 0.75:
+        return ImpactStrength.VERY_HIGH
+    if magnitude >= 0.50:
+        return ImpactStrength.HIGH
+    if magnitude >= 0.25:
+        return ImpactStrength.MEDIUM
+    return ImpactStrength.LOW
+
+
+def _horizon_to_persistence(horizon: str) -> float:
+    """How long the model says the effect lasts -> a persistence weight."""
+    return {"intraday": 0.45, "session": 0.75, "multi_day": 0.95}.get(
+        horizon, 0.6)
+
+
+async def _llm_call(system_prompt: str, user_prompt: str):
+    """Indirection point so tests can stub the provider call."""
+    return await llm_client.chat_json(system_prompt, user_prompt)
+
+
 async def llm_analyze(title: str, body: str = "") -> ArticleAnalysis:
-    """Ask the configured LLM to classify. Raises on failure so the caller can fall back."""
+    """
+    Ask the LLM to classify, VALIDATE the response, retry once, then give up.
+
+    Raises on persistent failure so :func:`analyze_article` can fall back to the
+    deterministic heuristic engine. A malformed response is never partially
+    trusted: it is either fully valid or it is discarded.
+    """
+    from app.analysis.llm_schema import validate_llm_payload
+    from app.config import settings
+
     body = (body or "")[:MAX_BODY_CHARS]
     user_prompt = (
         f"HEADLINE:\n{title}\n\n"
         f"ARTICLE BODY (may be truncated or empty):\n{body or '[not available]'}"
     )
-    data = await llm_client.chat_json(SYSTEM_PROMPT, user_prompt)
 
-    from app.config import settings
-
-    result = ArticleAnalysis(mode="llm")
-    result.category = _coerce_enum(NewsCategory, data.get("category"), NewsCategory.OTHER)
-    result.importance = _coerce_enum(
-        EconomicImportance, data.get("importance"), EconomicImportance.LOW)
-    result.report_kind = _coerce_enum(ReportKind, data.get("report_kind"), ReportKind.GENERAL)
-    result.verification = _coerce_enum(
-        Verification, data.get("verification"), Verification.CONFIRMED)
-    result.event_title = str(data.get("event_title") or title)[:300]
-    result.event_summary = str(data.get("event_summary") or "")[:500]
-    result.relevance_score = _clamp(data.get("relevance_score"))
-
-    raw_assets = data.get("assets")
-    entries: list = []
-    if isinstance(raw_assets, list):
-        entries = raw_assets[:3]
-    elif isinstance(raw_assets, dict):
-        # Some models key the map by asset name instead of using a list.
-        entries = [
-            {"asset": key, **(value if isinstance(value, dict) else {})}
-            for key, value in list(raw_assets.items())[:3]
-        ]
-    elif raw_assets is None:
-        # Genuinely malformed response - the key is missing entirely.
-        raise ValueError(
-            "LLM response has no 'assets' key. Keys=" f"{sorted(data.keys())}"
-        )
-
-    for entry in entries:
-        if not isinstance(entry, dict):
+    last_error: Exception | None = None
+    for attempt in range(2):   # item 9: exactly one retry
+        try:
+            raw = await _llm_call(SYSTEM_PROMPT, user_prompt)
+            # Models occasionally key the map by asset instead of using a list.
+            if isinstance(raw, dict) and isinstance(raw.get("assets"), dict):
+                raw = {**raw, "assets": [
+                    {"asset": k, **(v if isinstance(v, dict) else {})}
+                    for k, v in raw["assets"].items()
+                ]}
+            data = validate_llm_payload(raw)
+        except Exception as exc:   # noqa: BLE001 - any failure is retryable
+            last_error = exc
+            log.warning("LLM classification attempt %d/2 failed: %s",
+                        attempt + 1, exc)
             continue
-        asset = _coerce_enum(Asset, entry.get("asset"), None)
-        if asset is None:
-            continue
-        char = entry.get("metal_character") if asset is Asset.SILVER else None
-        result.assets.append(
-            AssetAnalysis(
-                asset=asset,
-                direction=_coerce_enum(Direction, entry.get("direction"), Direction.NEUTRAL),
-                strength=_coerce_enum(ImpactStrength, entry.get("strength"), ImpactStrength.LOW),
-                relevance=_clamp(entry.get("relevance")),
-                persistence=_clamp(entry.get("persistence"), 0.05, 1.0),
-                reason=str(entry.get("reason") or "")[:600],
-                transmission=str(entry.get("transmission") or "")[:600],
-                metal_character=char if char in ("PRECIOUS", "INDUSTRIAL", "BOTH") else None,
+
+        result = ArticleAnalysis(mode="llm")
+        result.category = data.category
+        result.importance = _coerce_enum(
+            EconomicImportance, data.importance, EconomicImportance.LOW)
+        result.report_kind = detect_report_kind(f"{title} {body}")
+        result.verification = data.verification
+        result.event_title = (data.event_title or title)[:300]
+        result.event_summary = (data.event_summary or "")[:500]
+        result.relevance_score = data.relevance_score
+
+        for entry in data.assets:
+            # Relevance for the aggregate still comes from the category matrix
+            # plus an explicit mention - the model does not get to invent how
+            # much an asset should matter.
+            rel = relevance_for(result.category, entry.asset, title)
+            magnitude = entry.magnitude
+            if entry.priced_in:
+                magnitude *= float(settings.priced_in_multiplier)
+            result.assets.append(
+                AssetAnalysis(
+                    asset=entry.asset,
+                    direction=Direction(entry.direction),
+                    strength=_magnitude_to_strength(entry.magnitude),
+                    relevance=rel,
+                    persistence=_horizon_to_persistence(entry.horizon),
+                    reason=entry.reason or f"{settings.llm_model}: {entry.asset}",
+                    transmission=entry.transmission or _transmission_for(
+                        entry.asset, Direction(entry.direction)),
+                    metal_character=(entry.metal_character
+                                     if entry.asset is Asset.SILVER else None),
+                )
             )
-        )
 
-    if not result.assets:
-        # An EMPTY assets array is a VALID answer, not a failure: the model is
-        # correctly reporting that this item does not materially affect
-        # XAUUSD/XAGUSD/BTCUSD. It must not be discarded or silently
-        # upgraded to a directional call.
-        result.note = (
-            f"{settings.llm_model}: no material intraday impact on "
-            f"{'/'.join(Asset.values())}."
-        )
+        if not result.assets:
+            # An EMPTY assets array is a VALID answer: the model is correctly
+            # reporting no material intraday impact. It must not be discarded or
+            # upgraded into a directional call.
+            result.note = (f"{settings.llm_model}: no material intraday impact "
+                           f"on {'/'.join(Asset.values())}.")
+            return result
+
+        result.note = f"Classified by {settings.llm_model} (validated)."
         return result
 
-    result.note = f"Classified by {settings.llm_model}."
-    return result
+    raise RuntimeError(f"LLM classification failed after 2 attempts: {last_error}")
 
 
 async def analyze_article(title: str, body: str = "") -> tuple[ArticleAnalysis, bool]:

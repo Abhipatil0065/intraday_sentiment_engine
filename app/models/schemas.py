@@ -79,22 +79,37 @@ class NewsItemOut(BaseModel):
     event_article_count: int = 1
 
 
+class DriverOut(BaseModel):
+    """One headline's contribution to an asset's score (item 10)."""
+
+    title: str
+    contribution: float = 0.0
+    direction: str = ""
+    weight: float = 0.0
+
+
 class SentimentBlock(BaseModel):
-    """One asset's directional scores. Always sums to 100%."""
+    """
+    One asset's directional read for a scope.
+
+    Item 2 replaced the forced 100% bull/bear split with a signed score, a
+    confidence, and a three-state bias that is allowed to be NO_BIAS.
+    """
 
     asset: Asset
     scope: str = "CURRENT"
-    bull_pct: float = 0.0
-    bear_pct: float = 0.0
-    label: Direction = Direction.BULLISH
-    net_bias: float = 0.0
-    confidence: float = 0.0
-    conflicting_signals: int = 0
-    drivers: list[str] = Field(default_factory=list)
-    risks: list[str] = Field(default_factory=list)
-    catalysts: list[str] = Field(default_factory=list)
-    conflicts: list[dict[str, Any]] = Field(default_factory=list)
+    score: float = 0.0            # -100 .. +100
+    confidence: float = 0.0       # 0 .. 1
+    bias: str = "NO_BIAS"         # BULLISH | BEARISH | NO_BIAS
+    mode: str = "heuristic"       # LLM/heuristic stamp on every result
+    drivers: list[DriverOut] = Field(default_factory=list)
+    conflict: Optional[DriverOut] = None
+    delta_60m: float = 0.0        # score movement in the last hour
+    event_risk: bool = False
+    event_risk_note: str = ""
     contributing_articles: int = 0
+    contributing_clusters: int = 0
+    note: str = ""
     price_note: str = ""
     last_updated: str = ""
 

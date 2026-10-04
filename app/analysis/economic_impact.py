@@ -301,30 +301,38 @@ def evaluate(event: CalendarEvent, asset: Asset,
     hot_bias = profile.hot_bias.get(asset, Direction.MIXED)
     importance = importance_from_impact(event.impact, profile)
 
-    # ---- RELEASED: direction from the realised surprise ----
+    # ---- RELEASED: direction from the STANDARDISED surprise ----
     if event.actual is not None and event.forecast is not None:
-        surprise = event.actual - event.forecast
-        scale = abs(event.forecast) if abs(event.forecast) > 0.01 else 1.0
-        # Normalised so a 0.1pt CPI miss and a 50k payroll miss compare fairly.
-        relative = surprise / scale
+        from app.analysis.calendar_risk import (
+            standardised_surprise, surprise_band,
+        )
 
-        if abs(relative) < 0.02 or hot_bias is Direction.MIXED:
+        surprise = event.actual - event.forecast
+        # Item 8: measure the miss in standard deviations of THIS indicator
+        # rather than as a flat percentage of the forecast, so a 0.2% CPI miss
+        # and a 120k payroll miss are comparable.
+        z = standardised_surprise(event.actual, event.forecast, event.title)
+        band = surprise_band(z)
+
+        if band == "NEUTRAL" or hot_bias is Direction.MIXED:
             direction = Direction.NEUTRAL
             reason = (f"{event.title} came in at {event.actual:g} vs "
-                      f"{event.forecast:g} forecast - no material surprise.")
+                      f"{event.forecast:g} forecast - no material surprise "
+                      f"({band.lower()}).")
         else:
-            is_hot = relative > 0
+            is_hot = (z or 0.0) > 0
             direction = hot_bias if is_hot else _opposite(hot_bias)
             qualifier = "above" if is_hot else "below"
             reason = (f"{event.title} released {event.actual:g}, {qualifier} the "
-                      f"{event.forecast:g} forecast ({surprise:+g}).")
+                      f"{event.forecast:g} forecast ({surprise:+g}, "
+                      f"{band.lower()} surprise, {z:+.2f} sigma).")
 
         return CalendarSignal(
             event=event, profile=profile, asset=asset, direction=direction,
-            strength=_strength_for(event.impact, importance, relative),
+            strength=_strength_for(event.impact, importance, z),
             importance=importance, relevance=relevance,
             persistence=0.75, mode="RELEASED", reason=reason,
-            transmission=profile.transmission, surprise=round(surprise, 4),
+            transmission=profile.transmission, surprise=round(z or 0.0, 4),
         )
 
     # ---- EXPECTED: direction from published consensus only ----

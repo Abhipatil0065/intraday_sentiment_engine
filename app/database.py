@@ -43,22 +43,58 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False
 
 def _purge_legacy_snapshots() -> None:
     """
-    Migrate sentiment_snapshot off the old three-way (bull/neutral/bear) era.
+    Migrate sentiment_snapshot off every earlier era.
 
-    Two things have to change when the engine goes binary-only:
+    The table has been reshaped twice, and a database created by an older
+    revision will still carry the old columns:
 
-    1. Existing rows carry a neutral slice and can be labelled NEUTRAL/MIXED,
-       so they no longer add up to 100 and are not one of the two views the
-       dashboard shows. Snapshots are a derived view rebuilt in full on every
-       pipeline pass (and primed at startup), so they are cleared, not
-       migrated.
-    2. The legacy ``neutral_pct`` column is ``NOT NULL`` in databases created
-       by the old model, so leaving it behind would break every INSERT. It is
-       dropped outright - SQLite has supported DROP COLUMN since 3.35.
+    1. Three-way (bull/neutral/bear) era: rows carry a neutral slice and can be
+       labelled NEUTRAL/MIXED. ``neutral_pct`` is NOT NULL in those databases,
+       so leaving it behind would break every INSERT.
+    2. Forced-100% era: ``bull_pct`` / ``bear_pct`` / ``label`` / ``net_bias`` /
+       ``conflicting_signals`` / ``risks`` / ``catalysts`` / ``conflicts`` are
+       replaced by the score / confidence / bias trio plus the item-10
+       explainability fields.
 
-    Both steps are idempotent and never block startup.
+    Snapshots are a DERIVED view rebuilt in full on every pipeline pass (and
+    primed at startup), so the rows are cleared rather than migrated - there is
+    nothing worth preserving in a stale sentiment reading.
+
+    IDEMPOTENCE
+    -----------
+    init_db() runs on every process start, and the watchdog restarts the server
+    often, so this must be safe to run any number of times. It is:
+      * column existence is read from PRAGMA each run, never cached;
+      * a column is dropped only if PRAGMA reports it present;
+      * a column is added only if PRAGMA reports it ABSENT after the drops;
+      * the DELETE is idempotent (a second run deletes zero rows).
+    Running it N times leaves exactly the same schema as running it once,
+    which tests/test_migration_idempotent.py asserts directly.
     """
     from sqlalchemy import text
+
+    # Old column -> dropped, because the row data it held is regenerated.
+    drop_columns = (
+        "neutral_pct", "bull_pct", "bear_pct", "label", "net_bias",
+        "conflicting_signals", "risks", "catalysts", "conflicts",
+    )
+    # New columns -> added when absent, so an old DB keeps working. "bias" is
+    # listed here rather than handled separately because it may have existed in
+    # the forced-100% era as NOT NULL with the wrong default.
+    add_columns = {
+        "score": "FLOAT DEFAULT 0.0",
+        "bias": "VARCHAR(16) DEFAULT 'NO_BIAS'",
+        "mode": "VARCHAR(24) DEFAULT 'heuristic'",
+        "delta_60m": "FLOAT DEFAULT 0.0",
+        "event_risk": "BOOLEAN DEFAULT 0",
+        "event_risk_note": "TEXT DEFAULT ''",
+        "conflict": "JSON",
+        "note": "TEXT DEFAULT ''",
+        # Both driver sides, so the dashboard can show a bullish box beside a
+        # bearish one. Additive: "drivers" is unchanged.
+        "bull_drivers": "JSON",
+        "bear_drivers": "JSON",
+    }
 
     try:
         with engine.begin() as conn:
@@ -70,20 +106,64 @@ def _purge_legacy_snapshots() -> None:
             if not columns:
                 return  # table absent on a brand-new database
 
+            # Only a genuinely LEGACY table needs its rows cleared. Deleting
+            # unconditionally would wipe every snapshot written since the last
+            # start on EVERY restart - and the dashboard runs under a watchdog
+            # that restarts it every few minutes. Snapshots are cheap to
+            # recompute, but blanking the feed each restart is not acceptable.
+            legacy = bool(columns & set(drop_columns)) or (
+                "bias" in columns and "score" not in columns)
             deleted = 0
-            if columns:
+            if legacy:
                 deleted = conn.execute(
                     text("DELETE FROM sentiment_snapshot")).rowcount
 
-            if "neutral_pct" in columns:
-                conn.execute(
-                    text("ALTER TABLE sentiment_snapshot DROP COLUMN neutral_pct")
-                )
-                log.info("Dropped legacy column sentiment_snapshot.neutral_pct")
+            dropped = []
+            present = set(columns)
+            for column in drop_columns:
+                if column in present:
+                    conn.execute(text(
+                        f"ALTER TABLE sentiment_snapshot DROP COLUMN {column}"))
+                    dropped.append(column)
+                    present.discard(column)
 
+            # "bias" existed in the forced-100% era as NOT NULL with different
+            # semantics (BULLISH/BEARISH only). Its value must survive the
+            # reshape, so read it out before dropping and write it back after.
+            preserved_bias = None
+            if "bias" in columns and "score" in columns:
+                try:
+                    row = conn.execute(text(
+                        "SELECT bias FROM sentiment_snapshot LIMIT 1")).first()
+                    if row and row[0]:
+                        preserved_bias = str(row[0])
+                except Exception:  # noqa: BLE001 - best effort
+                    preserved_bias = None
+
+            if "bias" in present:
+                conn.execute(
+                    text("ALTER TABLE sentiment_snapshot DROP COLUMN bias"))
+                dropped.append("bias")
+                present.discard("bias")
+
+            # Only add what is genuinely missing AFTER the drops above, so a
+            # column that was dropped as legacy is correctly re-added below.
+            for column, ddl in add_columns.items():
+                if column not in present:
+                    conn.execute(text(
+                        f"ALTER TABLE sentiment_snapshot ADD COLUMN {column} {ddl}"))
+
+            if preserved_bias and not legacy:
+                conn.execute(text(
+                    "UPDATE sentiment_snapshot SET bias = :b").bindparams(
+                        b=preserved_bias))
+
+            if dropped:
+                log.info("Dropped legacy sentiment_snapshot columns: %s",
+                         ", ".join(dropped))
             if deleted:
                 log.info("Cleared %d legacy sentiment snapshot(s) from the "
-                         "three-way (bull/neutral/bear) era", deleted)
+                         "pre score/bias era", deleted)
     except Exception as exc:  # noqa: BLE001 - never block startup
         log.warning("Legacy snapshot migration skipped: %s", exc)
 

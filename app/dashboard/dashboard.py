@@ -12,6 +12,8 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 
+from app.analysis import display
+
 API = "http://127.0.0.1:8000"
 
 st.set_page_config(
@@ -32,16 +34,22 @@ def fetch(path: str = "/api/dashboard"):
 
 
 def bar_figure(b: dict) -> go.Figure:
+    """
+    Bull/bear split bar.
+
+    Widths come from the same `display` block the headline percentage uses, so
+    the bar and the number are two views of one value and cannot disagree. The
+    label still comes from the engine's `bias` - never from the sign of the
+    split - so a NO_BIAS block renders as an even grey bar.
+    """
+    d = display.to_display(b.get("score", 0.0), b.get("bias", "NO_BIAS"))
+    colour = {"BULLISH": "#2ea043", "BEARISH": "#f85149"}.get(d["label"], "#6e7681")
     fig = go.Figure()
-    for value, name, colour in (
-        (b["bull_pct"], "Bullish", "#2ea043"),
-        (b["bear_pct"], "Bearish", "#f85149"),
-    ):
-        fig.add_trace(go.Bar(
-            y=["Sentiment"], x=[value], name=name,
-            orientation="h", marker_color=colour))
+    fig.add_trace(go.Bar(
+        x=[d["bull_pct"], d["bear_pct"]], y=["Split"], orientation="h",
+        marker_color=[colour, colour]))
     fig.update_layout(
-        barmode="stack", height=90, showlegend=False,
+        height=90, showlegend=False, barmode="stack",
         margin=dict(l=0, r=0, t=0, b=0),
         xaxis=dict(range=[0, 100], visible=False),
         yaxis=dict(visible=False),
@@ -56,15 +64,57 @@ def render_block(b: dict) -> None:
         st.plotly_chart(bar_figure(b), use_container_width=True,
                         config={"displayModeBar": False})
     with c2:
+        # Label comes from the engine's bias, never from the percentage's sign,
+        # so the display cannot contradict a NO_BIAS verdict.
+        d = display.to_display(b.get("score", 0.0), b.get("bias", "NO_BIAS"))
+        st.markdown(f"**Verdict:** `{d['label']} {d['pct']}%`")
+        # Both sides as boxed figures under the bar - the old-dashboard read:
+        # a green box for the bullish figure, a red box for the bearish one.
+        #
+        # Colour is keyed to the SIDE, never to the verdict, and is PERMANENT:
+        # a green box for the bull figure, a red box for the bear one,
+        # including on a NEUTRAL card. Greying them for NO_BIAS was tried and
+        # reverted - a borderline asset flickered between coloured and grey as
+        # its confidence crossed the floor, which read as a broken card. The
+        # withheld call is still stated by the verdict chip above.
+        bull_col, bull_border = "#2ea043", "rgba(46,160,67,.55)"
+        bear_col, bear_border = "#f85149", "rgba(248,81,73,.55)"
+        bull_bg, bear_bg = "rgba(46,160,67,.14)", "rgba(248,81,73,.14)"
+        left, right = st.columns(2)
+        with left:
+            st.markdown(
+                f"<div style='background:{bull_bg};"
+                f"border:1px solid {bull_border};"
+                f"border-radius:8px;padding:8px;text-align:center'>"
+                f"<div style='font-size:10px;letter-spacing:1.4px;"
+                f"color:#8b98a9'>BULLISH</div>"
+                f"<div style='font-size:22px;font-weight:700;color:{bull_col}'>"
+                f"{d['bull_pct']}%</div></div>",
+                unsafe_allow_html=True)
+        with right:
+            st.markdown(
+                f"<div style='background:{bear_bg};"
+                f"border:1px solid {bear_border};"
+                f"border-radius:8px;padding:8px;text-align:center'>"
+                f"<div style='font-size:10px;letter-spacing:1.4px;"
+                f"color:#8b98a9'>BEARISH</div>"
+                f"<div style='font-size:22px;font-weight:700;color:{bear_col}'>"
+                f"{d['bear_pct']}%</div></div>",
+                unsafe_allow_html=True)
         st.markdown(
-            f"**Bullish {b['bull_pct']:.1f}%** · "
-            f"**Bearish {b['bear_pct']:.1f}%**"
+            f"**Bias:** `{b.get('bias', 'NO_BIAS')}` &nbsp;·&nbsp; "
+            f"mode `{b.get('mode', 'heuristic')}`"
         )
-        st.markdown(
-            f"**Sentiment:** `{b['label']}` &nbsp;·&nbsp; "
-            f"Confidence {b['confidence'] * 100:.0f}% &nbsp;·&nbsp; "
-            f"n={b['contributing_articles']}"
-        )
+        delta = float(b.get("delta_60m", 0.0))
+        if delta:
+            st.markdown(f"**Changed in last 60 min:** `{delta:+.1f}`")
+        if b.get("event_risk"):
+            st.warning(b.get("event_risk_note", "Event risk imminent."))
+        for d_ in (b.get("drivers") or [])[:3]:
+            st.markdown(f"- `{float(d_.get('contribution', 0.0)):+.3f}` "
+                        f"{d_.get('title', '')}")
+        if b.get("conflict"):
+            st.markdown(f"⚠️ Conflict: {b['conflict'].get('title', '')}")
 data = fetch()
 
 if "_error" in data:

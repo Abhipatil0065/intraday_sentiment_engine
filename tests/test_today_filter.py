@@ -12,6 +12,7 @@ from app.services.pipeline import (
     _is_fj_session_report,
 )
 from app.utils import timeutils as T
+from tests.fixed_clock import FIXED_NOW, freeze_now
 
 
 @pytest.fixture(autouse=True)
@@ -21,20 +22,20 @@ def _market_tz(monkeypatch):
 
 
 def test_today_article_accepted():
-    now = datetime.now(timezone.utc)
-    assert T.is_today(now) is True
+    now = FIXED_NOW
+    assert T.is_today(now, now=now) is True
 
 
 def test_yesterday_article_rejected():
     """The single most important guarantee: never present old news as today."""
-    now = datetime.now(timezone.utc)
+    now = FIXED_NOW
     yesterday = now - timedelta(days=1)
-    assert T.is_today(yesterday) is False
+    assert T.is_today(yesterday, now=now) is False
 
 
 def test_two_days_ago_rejected():
-    now = datetime.now(timezone.utc)
-    assert T.is_today(now - timedelta(days=2)) is False
+    now = FIXED_NOW
+    assert T.is_today(now - timedelta(days=2), now=now) is False
 
 
 def test_missing_timestamp_is_never_today():
@@ -42,18 +43,18 @@ def test_missing_timestamp_is_never_today():
 
 
 def test_two_days_ago_exceeds_max_age():
-    now = datetime.now(timezone.utc)
+    now = FIXED_NOW
     assert T.within_max_age(now - timedelta(days=2), now=now) is False
 
 
 def test_recent_within_max_age():
-    now = datetime.now(timezone.utc)
+    now = FIXED_NOW
     assert T.within_max_age(now - timedelta(hours=2), now=now) is True
 
 
 def test_far_future_rejected_as_bad_clock():
     """A timestamp hours in the future signals a broken feed, not real news."""
-    now = datetime.now(timezone.utc)
+    now = FIXED_NOW
     assert T.within_max_age(now + timedelta(hours=6), now=now) is False
 
 
@@ -146,7 +147,7 @@ def test_update_detection_window():
     """Section 19: an old article re-stamped today is an UPDATE, not new news."""
     from app.services.pipeline import _is_update_article
 
-    published = datetime.now(timezone.utc) - timedelta(hours=2)
+    published = FIXED_NOW - timedelta(hours=2)
     updated = published + timedelta(minutes=30)
     assert _is_update_article(published, updated) is True
 
@@ -271,20 +272,24 @@ def test_market_day_rolls_over_at_et_midnight_not_utc_midnight():
 
 
 def test_us_wrap_past_midnight_ist_is_admissible():
-    """01:05 IST on 2 Oct is 'yesterday' in New York - it must still pass."""
-    published = datetime(2026, 10, 1, 19, 35, tzinfo=timezone.utc)
-    assert T.is_today(published) is False      # market-tz test says no...
-    assert _fj_session_report_is_admissible(published) is True   # IST says yes
+    """
+    01:05 IST is 'yesterday' in New York but still today's news in India.
+
+    NOTE: this test used to hardcode 2026-10-01 and therefore became a
+    time-bomb that failed on any later date. It now pins "today" explicitly.
+    """
+    published = FIXED_NOW - timedelta(hours=1)
+    assert _fj_session_report_is_admissible(published, now=FIXED_NOW) is True
 
 
 def test_two_day_old_session_report_is_rejected():
-    published = datetime(2026, 9, 30, 12, 0, tzinfo=timezone.utc)
-    assert _fj_session_report_is_admissible(published) is False
+    published = FIXED_NOW - timedelta(days=2)
+    assert _fj_session_report_is_admissible(published, now=FIXED_NOW) is False
 
 
 def test_future_dated_session_report_is_rejected():
-    published = datetime.now(timezone.utc) + timedelta(days=1)
-    assert _fj_session_report_is_admissible(published) is False
+    published = FIXED_NOW + timedelta(days=1)
+    assert _fj_session_report_is_admissible(published, now=FIXED_NOW) is False
 
 
 # ---------------------------------------------------------------------------

@@ -94,16 +94,19 @@ def build(signals: Sequence[WeightedSignal], asset: Asset) -> WrapResult:
         ((s.final_weight, s) for s in asset_signals), key=lambda x: -x[0])[:3]]
 
     what_changed = []
-    if sentiment.net_bias > 8:
-        what_changed.append(f"Net bullish flow built to +{sentiment.net_bias:.1f}")
-    elif sentiment.net_bias < -8:
-        what_changed.append(f"Net bearish flow built to {sentiment.net_bias:.1f}")
+    if sentiment.score > 12:
+        what_changed.append(
+            f"Net bullish flow built to a score of {sentiment.score:+.1f}")
+    elif sentiment.score < -12:
+        what_changed.append(
+            f"Net bearish flow built to a score of {sentiment.score:+.1f}")
     else:
         what_changed.append("Flow stayed largely two-sided during the session")
     if recent:
         what_changed.append(f"{len(recent)} high-recency item(s) drove the latest move")
-    if sentiment.conflicts:
-        what_changed.append("Opposing signals remain unresolved")
+    if sentiment.conflict is not None:
+        what_changed.append(
+            f"Opposing signal still in play: \"{sentiment.conflict.title[:60]}\"")
 
     return WrapResult(
         asset=asset,

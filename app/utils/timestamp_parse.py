@@ -117,6 +117,44 @@ def is_today(utc_dt: Optional[datetime], *, now: Optional[datetime] = None) -> b
     return utc_dt.astimezone(tz).date() == ref.astimezone(tz).date()
 
 
+def within_rolling_window(utc_dt: Optional[datetime], *,
+                          now: Optional[datetime] = None) -> bool:
+    """
+    Rolling-window admission test (improvement item 3).
+
+    Replaces the strict "same market-timezone calendar date" gate. A rolling
+    window admits the overnight US wrap by CONSTRUCTION, which is why the old
+    FinancialJuice / IST date carve-out is no longer needed: a report published
+    at 01:05 IST is only a few hours old, so it passes on age alone.
+
+    Rules, in order:
+      * an unparseable / absent timestamp is REJECTED (never fabricated)
+      * a timestamp more than ``NEWS_WINDOW_HOURS`` old is rejected
+      * a timestamp far in the future is rejected (bad feed / bad clock)
+
+    Timezone-independent by construction, which is the whole point: an article
+    is admitted on how RECENT it is, not on which calendar day it happened to
+    land in.
+    """
+    if utc_dt is None:
+        return False
+    ref = now or datetime.now(timezone.utc)
+    if utc_dt.tzinfo is None:
+        utc_dt = utc_dt.replace(tzinfo=timezone.utc)
+
+    hours = age_hours(utc_dt, now=ref)
+    if hours is None:
+        return False
+    # >2h in the future means a broken feed or a broken clock, not news.
+    if hours < -2:
+        return False
+
+    window = float(getattr(settings, "news_window_hours", 18.0))
+    if window <= 0:
+        return True
+    return hours <= window
+
+
 def age_hours(utc_dt: Optional[datetime], *, now: Optional[datetime] = None) -> Optional[float]:
     if utc_dt is None:
         return None

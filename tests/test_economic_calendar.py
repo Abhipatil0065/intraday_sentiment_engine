@@ -32,7 +32,21 @@ from app.models.enums import (
     NewsCategory,
 )
 
-NOW = datetime.now(timezone.utc)
+# Pinned clock: the horizon sweep in signals_for_events() reads the real clock
+# internally, so an unpinned NOW would make these tests time-dependent.
+from tests.fixed_clock import FIXED_NOW as NOW, freeze_now
+
+
+@pytest.fixture(autouse=True)
+def _pinned_clock(monkeypatch):
+    """
+    Freeze the clock.
+
+    signals_for_events() calls datetime.now() internally, so an event built
+    relative to a pinned NOW would fall outside the horizon whenever the real
+    clock had drifted from it.
+    """
+    freeze_now(monkeypatch)
 
 
 def _event(**kwargs) -> CalendarEvent:

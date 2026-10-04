@@ -79,6 +79,82 @@ TRANSMISSION: dict[str, dict[Asset, str]] = {
 # legitimately repeat a cue (title + body echo), but never many times.
 _MAX_REPEAT_HITS = 2
 
+# How much one subject/verb inversion moves the score.
+_INVERSION_WEIGHT = 2.0
+
+# --------------------------------------------------------------------------
+# Subject-aware inversion via TOKEN DISTANCE (replaces a fixed 24-char regex)
+# --------------------------------------------------------------------------
+# The old regex bounded the subject and verb by 24 CHARACTERS, which broke on
+# long phrasing ("The 10-year Treasury yield rose to a four-week high") and on
+# short-but-legitimate ones. Distance is measured in TOKENS instead, and the
+# window is configurable (INVERSION_MAX_TOKENS), so it can be tuned without
+# touching code.
+YIELD_SUBJECTS: tuple[str, ...] = (
+    "yield", "yields", "treasury", "dollar", "usd", "dxy", "currency",
+    "greenback", "real yield", "real yields", "bond yield", "bond yields",
+)
+UP_VERBS: tuple[str, ...] = (
+    "rise", "rises", "rising", "rose", "climb", "climbs", "climbed", "higher",
+    "up", "advance", "advances", "advanced", "strengthen", "strengthens",
+    "strengthened", "gain", "gains", "gained", "jump", "jumps", "jumped",
+)
+METAL_SUBJECTS: tuple[str, ...] = (
+    "gold", "silver", "bitcoin", "btc", "xau", "xag",
+)
+DOWN_VERBS: tuple[str, ...] = (
+    "fall", "falls", "fell", "drop", "drops", "dropped", "slump", "slumps",
+    "slumped", "tumble", "tumbles", "tumbled", "decline", "declines",
+    "declined", "sink", "sinks", "sank", "slide", "slides", "slid", "ease",
+    "eases", "eased", "soften", "softens", "softened",
+)
+
+_TOKEN_SPLIT = re.compile(r"[a-z0-9']+")
+
+
+def _token_list(text: str) -> list[str]:
+    return _TOKEN_SPLIT.findall((text or "").lower())
+
+
+def detect_inversion_subjects(
+    text: str,
+    subjects: tuple[str, ...] = YIELD_SUBJECTS,
+    verbs: tuple[str, ...] = UP_VERBS,
+    max_tokens: Optional[int] = None,
+) -> list[str]:
+    """
+    Subjects that are followed closely by one of `verbs`.
+
+    Returns each matched subject once. The subject and verb must sit within
+    ``max_tokens`` tokens of each other (default from config), which is what
+    makes this robust to long phrasing: a subject and verb separated by a full
+    clause are treated as unrelated, exactly as a reader would treat them.
+    """
+    if not text:
+        return []
+    if max_tokens is None:
+        from app.config import settings
+        max_tokens = int(settings.inversion_max_tokens)
+
+    tokens = _token_list(text)
+    if not tokens:
+        return []
+
+    matched: list[str] = []
+    for index, token in enumerate(tokens):
+        for subject in subjects:
+            if not contains_cue(token, subject):
+                continue
+            window = tokens[index:index + max_tokens + len(subject.split()) + 1]
+            for verb in verbs:
+                if any(contains_cue(w, verb) for w in window):
+                    matched.append(subject)
+                    break
+            break
+    # De-duplicate while preserving order.
+    seen: set = set()
+    return [s for s in matched if not (s in seen or seen.add(s))]
+
 
 def score_cues(text: str, cues: list[tuple[str, int]]) -> float:
     """
@@ -103,29 +179,45 @@ def detect_direction(text: str) -> Direction:
 
     Subject-aware inversion: "Treasury YIELDS RISE" is bearish gold even
     though the verb "rise" is in the bullish-verb list, because the subject is
-    a yield/currency. Checking the word *before* the verb avoids the most
-    damaging class of naive-substring error.
+    a yield/currency. Proximity is measured in TOKENS (configurable), not
+    characters, so long phrasing still inverts correctly.
+
+    Negation and the text-quality multipliers are applied here so that a
+    negated or hedged headline cannot produce a directional read at all.
     """
-    bull = score_cues(text, BULLISH_CUES)
-    bear = score_cues(text, BEARISH_CUES)
+    from app.analysis import text_quality as tq
 
-    # Invert yield/currency "up" verbs - higher yields/USD pressure metals.
-    for m in re.finditer(
-        r"\b(yields?|treasur\w*|dollar|usd|dxy|currency)\b[^.;]{0,24}?"
-        r"\b(rise|rose|rising|climb\w*|higher|up|advance|strengthen\w*|gain\w*)\b",
-        text,
-    ):
-        bull = max(0.0, bull - 2.0)
-        bear += 2.0
+    # A negated cue must not score: "rules out a rate cut" is not a rate cut.
+    scored = tq.neutralise_on_negation(text)
 
-    # Invert metal "down" verbs - falling gold/silver/btc is bearish.
-    for m in re.finditer(
-        r"\b(gold|silver|bitcoin|btc)\b[^.;]{0,24}?"
-        r"\b(fall\w*|fell|drop\w*|slump\w*|tumble\w*|decline\w*|sink\w*)\b",
-        text,
-    ):
-        bull = max(0.0, bull - 2.0)
-        bear += 2.0
+    bull = score_cues(scored, BULLISH_CUES)
+    bear = score_cues(scored, BEARISH_CUES)
+
+    for subject in detect_inversion_subjects(scored, YIELD_SUBJECTS, UP_VERBS):
+        bull = max(0.0, bull - _INVERSION_WEIGHT)
+        bear += _INVERSION_WEIGHT
+
+    for subject in detect_inversion_subjects(scored, METAL_SUBJECTS, DOWN_VERBS):
+        bull = max(0.0, bull - _INVERSION_WEIGHT)
+        bear += _INVERSION_WEIGHT
+
+    # Symmetric case: the generic verb tables list "rise" as bearish (it
+    # usually describes yields or the dollar), so a RISING metal must be
+    # corrected the other way or "gold rose" reads bearish. Without this the
+    # metal-down rule below would only ever be half the story.
+    for subject in detect_inversion_subjects(scored, METAL_SUBJECTS, UP_VERBS):
+        bull += _INVERSION_WEIGHT
+        bear = max(0.0, bear - _INVERSION_WEIGHT)
+
+    if bull == 0 and bear == 0:
+        return Direction.NEUTRAL
+
+    # Certainty + priced-in scale the magnitude, never the sign.
+    quality = (tq.certainty_multiplier(text)
+               * tq.priced_in_multiplier(text)
+               * tq.directional_multiplier(text))
+    bull *= quality
+    bear *= quality
 
     if bull == 0 and bear == 0:
         return Direction.NEUTRAL
