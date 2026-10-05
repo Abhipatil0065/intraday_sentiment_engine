@@ -29,6 +29,21 @@ from app.analysis.cue_rules import (
     DOWN_VERBS,
     UP_VERBS,
 )
+
+
+def _contribution(text: str, asset) -> float:
+    """Signed contribution of one headline to one asset.
+
+    An asset the headline does not route to has NO entry in the outcome map at
+    all, because routing is relevance-gated. That absence is the same fact as a
+    0.0 contribution - the asset was never in scope - so it is reported as 0.0
+    instead of raising. Gold must not be forced to produce an outcome for every
+    headline in the suite, and an unrelated asset must read as neutral.
+    """
+    from tests.golden_runner import classify
+
+    outcome = classify(text)["outcomes"].get(asset.value)
+    return float(outcome.contribution) if outcome is not None else 0.0
 from app.analysis.text_quality import (
     CONFIRMATION_CUES,
     PRICED_IN_CUES,
@@ -257,8 +272,12 @@ def test_mirrored_cue_pairs_all_resolve_to_opposite_signs():
     )
     for asset in Asset:
         for up_text, down_text in checks:
-            up = classify(up_text)["outcomes"][asset.value].contribution
-            down = classify(down_text)["outcomes"][asset.value].contribution
+            # A headline that does not route to this asset produces NO outcome
+            # entry at all. That is the same fact as a 0.0 contribution - the
+            # asset was never in scope - so an absent key reads as neutral here
+            # rather than being an error.
+            up = _contribution(up_text, asset)
+            down = _contribution(down_text, asset)
             if up == 0.0 or down == 0.0:
                 continue
             assert (up >= 0) != (down >= 0), (
@@ -401,8 +420,8 @@ def test_rose_and_fell_are_opposite_signs(asset, up_text, down_text):
     """
     from tests.golden_runner import classify
 
-    up = classify(up_text)["outcomes"][asset.value].contribution
-    down = classify(down_text)["outcomes"][asset.value].contribution
+    up = _contribution(up_text, asset)
+    down = _contribution(down_text, asset)
 
     if asset is not PAIR_SUBJECT_ASSET[up_text]:
         assert up == 0.0 and down == 0.0, (

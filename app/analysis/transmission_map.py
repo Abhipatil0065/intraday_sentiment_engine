@@ -113,6 +113,11 @@ class EventType(str, Enum):
     CHINA_DEMAND = "CHINA_DEMAND"
     INDUSTRIAL_DEMAND = "INDUSTRIAL_DEMAND"
     COMMODITY_SUPPLY = "COMMODITY_SUPPLY"
+    # Oil-specific mechanisms. Kept separate from COMMODITY_SUPPLY because crude
+    # has a genuine supply curve of its own: OPEC decisions, inventory prints and
+    # physical disruptions drive it far more than they drive gold or silver.
+    OIL_SUPPLY_TIGHTNESS = "OIL_SUPPLY_TIGHTNESS"
+    OIL_SUPPLY_GLUT = "OIL_SUPPLY_GLUT"
     GENERAL_MACRO = "GENERAL_MACRO"
 
 
@@ -263,6 +268,26 @@ _INTRINSIC_RULES: tuple[tuple["EventType", tuple[str, ...]], ...] = (
      ("inflow", "inflows", "approval", "approved")),
     (EventType.GOLD_ETF_FLOW,
      ("inflow", "inflows")),
+    # A supply cut, an inventory draw or an outage is directional IN ITSELF: the
+    # headline needs no bullish adjective ("OPEC+ extends output cuts") to be a
+    # bullish crude story, and without this floor it would measure zero magnitude
+    # and collapse to MIXED - discarding the resolution that was just computed.
+    (EventType.OIL_SUPPLY_TIGHTNESS,
+     ("output cuts", "production cuts", "supply cut", "supply cuts",
+      "cuts output", "cuts production", "supply disruption", "supply shock",
+      "force majeure", "pipeline shutdown", "refinery outage", "refinery fire",
+      "field outage", "hormuz", "tanker attack", "oil embargo",
+      "crude draw", "crude stocks draw", "crude inventories fell",
+      "draw in crude", "draw in oil", "output cuts", "production cuts",
+      "extends cuts", "tighten supply", "tightening supply", "supply squeeze")),
+    (EventType.OIL_SUPPLY_GLUT,
+     ("raises output", "raises production", "output increase",
+      "production increase", "supply surge", "supply glut", "oversupply",
+      "surplus", "oil glut", "crude build", "crude stocks build",
+      "crude inventories rose", "build in crude", "build in oil",
+      "build in stocks", "supply increase", "boost output",
+      "raises oil production", "production target", "output target",
+      "demand worries", "demand weakness", "consumption falls")),
 )
 _INTRINSIC_WEIGHT = 6.0
 
@@ -374,6 +399,35 @@ EVENT_SIGNALS: tuple[tuple[EventType, tuple[str, ...], tuple[str, ...]], ...] = 
                                    "electronics", "copper"), ()),
     (EventType.COMMODITY_SUPPLY, ("mine", "mining", "refinery", "gold supply",
                                   "silver supply", "opec cuts"), ()),
+    # Oil supply/demand. Ordered BEFORE COMMODITY_SUPPLY because these carry the
+    # actual direction; "opec cuts" below is only the weaker generic reading.
+    # Tightness = bullish crude (production cut, physical disruption, stock draw).
+    (EventType.OIL_SUPPLY_TIGHTNESS,
+     ("opec cuts", "opec+ cuts", "cuts output", "output cut", "production cut",
+      "supply cut", "supply disruption", "supply shock", "force majeure",
+      "pipeline shutdown", "refinery fire", "refinery outage", "field outage",
+      "strait of hormuz", "hormuz", "suez", "shipping attack", "tanker attack",
+      "blockade", "oil embargo", "sanctions on oil", "crude stocks fell",
+      "crude stocks draw", "crude inventories fell", "crude drawdown",
+      "api crude draw", "eia crude draw", "oil supply tight", "tightening supply",
+      "shale output cut", "extends cuts", "output cuts", "production cuts",
+      "draw in crude", "draw in oil", "tighten supply",
+      "sharpen supply", "supply squeeze"), ()),
+    # Glut = bearish crude (output increase, inventory build, demand worry).
+    (EventType.OIL_SUPPLY_GLUT,
+     ("opec raises output", "opec increases output", "opec boost",
+      "opec+ raises", "output increase", "supply surge", "supply glut",
+      "oversupply", "surplus", "oil glut", "crude stocks rose", "crude stocks build",
+      "crude inventories rose", "crude build", "api crude build",
+      "eia crude build", "demand worries", "demand slowdown", "demand weakness",
+      "oil demand falls", "consumption falls", "weak consumption",
+      "pipeline reopened", "supply returns",
+      "raises output", "raises production", "increase production",
+      "production increase", "output hike", "supply increase", "boost output",
+      "adds barrels", "build in oil", "build in crude", "build in stocks",
+      "build in inventories", "raises oil production", "raises crude output",
+      "production target", "output target",
+      "gluts", "ramping output"), ()),
 )
 
 # Category fallback: used ONLY when nothing else matched.

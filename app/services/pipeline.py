@@ -27,6 +27,8 @@ from app.analysis.event_deduplication import EventDeduplicator
 from app.analysis.fj_sessions import FINANCIAL_JUICE_SOURCE
 from app.analysis.news_classifier import analyze_article
 from app.analysis.sentiment_engine import WeightedSignal
+from app.analysis.signal_factory import build_signal
+from app.services.bias_snapshots import AssetVerdict
 from app.config import settings
 from app.database import session_scope
 from app.ingestion.base import RawArticle
@@ -289,6 +291,30 @@ async def _ingest_article(art: RawArticle, session, stats: IngestStats):
     return row
 
 
+def _last_signal_age_min(signals, now: datetime) -> Optional[float]:
+    """
+    Minutes since the NEWEST signal that actually carried weight.
+
+    "Carried weight" means a signal that survived ``_signal_weight``'s decay
+    floor - a headline already decayed to zero is not evidence of a recent
+    view, so counting it would make a stale asset look fresh.
+
+    Returns None when the asset has no usable signal at all, which phase 4
+    treats as maximally stale and the snapshot log records as NULL.
+
+    Derived from news timestamps only. No price is involved.
+    """
+    ages = []
+    for s in signals:
+        if s.published_at is None or s.final_weight <= 0:
+            continue
+        hours = T.age_hours(s.published_at, now=now)
+        if hours is None:
+            continue
+        ages.append(max(0.0, float(hours) * 60.0))
+    return round(min(ages), 2) if ages else None
+
+
 def _decision_log():
     """Lazy singleton for the item-11 audit log (never blocks the pipeline)."""
     global _DECISION_LOG
@@ -318,7 +344,7 @@ def _calendar_signal_to_weighted(sig: CalendarSignal) -> WeightedSignal:
     where a direction is decided.
     """
     event = sig.event
-    return WeightedSignal(
+    return build_signal(
         asset=sig.asset,
         title=calendar_headline(event, sig),
         direction=sig.direction,
@@ -329,6 +355,10 @@ def _calendar_signal_to_weighted(sig: CalendarSignal) -> WeightedSignal:
         persistence=sig.persistence,
         # Official statistical releases are primary sources.
         source_quality="TIER_1_OFFICIAL",
+        source_name=event.provider,
+        # Phase 1: a scheduled print decays on its own category's half-life,
+        # same as a news article. Without this it used the 6h default.
+        category=sig.profile.category,
         session_multiplier=1.0,
         is_primary=True,
         event_key=event.event_key,
@@ -371,6 +401,9 @@ def _recompute_sentiment(session):
 
     signals: list[WeightedSignal] = []
     category_weights: dict = {}
+    # Phase 2: verdicts collected per asset, logged once after the loop so the
+    # snapshot rows are written after every asset's verdict is persisted.
+    verdicts: list = []
 
     for row in rows:
         if row.published_at_utc is None:
@@ -384,8 +417,12 @@ def _recompute_sentiment(session):
             cat_enum = NewsCategory.OTHER
 
         for impact in row.impacts:
+            # Phase 1: category drives the decay half-life, and the event key
+            # is the cluster identity - both were previously left at their
+            # dataclass defaults, which pinned every article to the 6h "Other"
+            # half-life and left corroboration at 1.0.
             signals.append(
-                WeightedSignal(
+                build_signal(
                     asset=Asset(impact.asset),
                     title=row.title,
                     direction=Direction(impact.direction),
@@ -395,8 +432,13 @@ def _recompute_sentiment(session):
                     relevance=impact.relevance,
                     persistence=impact.persistence,
                     source_quality=row.source_quality,
+                    source_name=row.source,
+                    category=cat_enum,
                     is_primary=is_primary,
                     event_key=event.event_key if event else "",
+                    # An event covered by several outlets is corroborated; a
+                    # single-source story is not.
+                    independent_sources=(event.article_count if event else 1),
                     reason=impact.reason,
                     transmission=impact.transmission,
                     report_kind=ReportKind(row.report_kind),
@@ -430,7 +472,7 @@ def _recompute_sentiment(session):
     except Exception as exc:  # noqa: BLE001 - never break the recompute
         log.debug("event_risk_check failed: %s", exc)
 
-    for asset in (Asset.GOLD, Asset.SILVER, Asset.BITCOIN):
+    for asset in Asset:
         asset_signals = [s for s in signals if s.asset is asset]
 
         current_result = compute_sentiment(
@@ -488,6 +530,28 @@ def _recompute_sentiment(session):
             current_result.contributing_articles, current_result.confidence,
             at_risk,
         )
+        verdicts.append(AssetVerdict(
+            asset=asset,
+            score=current_result.score,
+            confidence=current_result.confidence,
+            bias=current_result.bias.value,
+            article_count=current_result.contributing_articles,
+            last_signal_age_min=_last_signal_age_min(
+                asset_signals, T.now_utc()),
+            bull_drivers=current_result.bull_drivers,
+            bear_drivers=current_result.bear_drivers,
+        ))
+
+    # Phase 2: append-only validation log, written AFTER every verdict is
+    # already persisted. Wrapped so it can never break or slow a poll.
+    try:
+        from app.services.bias_snapshots import write_bias_snapshots
+
+        written = write_bias_snapshots(session, verdicts)
+        if written:
+            log.debug("bias_snapshots: %d row(s) appended", written)
+    except Exception as exc:  # noqa: BLE001 - diagnostics never break a poll
+        log.warning("bias snapshot stage skipped: %s", exc)
 
     return signals, assessment
 

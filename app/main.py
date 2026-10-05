@@ -319,7 +319,7 @@ def build_payload(session) -> dict:
     state = pipeline.runtime_state()
 
     assets_out = []
-    for asset in (Asset.GOLD, Asset.SILVER, Asset.BITCOIN):
+    for asset in Asset:
         assets_out.append({
             "asset": asset.value,
             "label": asset.label,

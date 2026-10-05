@@ -172,6 +172,55 @@ class SentimentSnapshot(Base):
         DateTime(timezone=True), default=utcnow, index=True)
 
 
+class BiasSnapshot(Base):
+    """
+    Append-only audit log for manual review (phase 2).
+
+    One row per asset per poll, written AFTER the verdict is published, so it
+    can only ever describe a decision that was already shown to the reader.
+
+    NEWS-ONLY BY DESIGN. This table records what the engine believed and why -
+    the bias, the score, the confidence, and the headlines that drove it. It
+    holds no price and no price-derived number of any kind. Price comparison is
+    done manually against this log; nothing here is ever used to score, weight,
+    validate or adjust a verdict.
+
+    Separate from ``sentiment_snapshot``, which is a rebuildable view of NOW.
+    This one is durable history and is never rewritten.
+    """
+
+    __tablename__ = "bias_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    timestamp_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True)
+    # Same instant in the display timezone, 12-hour clock, for reading by hand.
+    timestamp_ist: Mapped[str] = mapped_column(String(32), default="")
+    asset: Mapped[str] = mapped_column(String(12), index=True)
+
+    bias: Mapped[str] = mapped_column(String(16), default="NO_BIAS")
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # The display split, captured verbatim so a manual reader compares against
+    # exactly what was shown and never a re-derived number.
+    bullish_pct: Mapped[float] = mapped_column(Float, default=50.0)
+    bearish_pct: Mapped[float] = mapped_column(Float, default=50.0)
+
+    article_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Age of the newest signal behind this verdict, in minutes. Null when the
+    # asset has no usable signal at all.
+    last_signal_age_min: Mapped[float | None] = mapped_column(
+        Float, nullable=True)
+
+    # Top 3 drivers each side, with the weight each carried.
+    bull_drivers: Mapped[list] = mapped_column(JSON, default=list)
+    bear_drivers: Mapped[list] = mapped_column(JSON, default=list)
+
+    __table_args__ = (Index("ix_bias_snapshots_asset_ts", "asset",
+                            "timestamp_utc"),)
+
+
 class Alert(Base):
     __tablename__ = "alert"
 

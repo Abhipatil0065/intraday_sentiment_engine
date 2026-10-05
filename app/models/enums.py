@@ -6,11 +6,12 @@ from enum import Enum
 
 
 class Asset(str, Enum):
-    """The three supported instruments. Nothing else is ever analysed."""
+    """The supported instruments. Nothing else is ever analysed."""
 
     GOLD = "XAUUSD"
     SILVER = "XAGUSD"
     BITCOIN = "BTCUSD"
+    OIL = "USOIL"
 
     @property
     def label(self) -> str:
@@ -18,6 +19,7 @@ class Asset(str, Enum):
             Asset.GOLD: "Gold",
             Asset.SILVER: "Silver",
             Asset.BITCOIN: "Bitcoin",
+            Asset.OIL: "Oil",
         }[self]
 
     @classmethod

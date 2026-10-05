@@ -52,6 +52,26 @@ class EventProfile:
     transmission: str
 
 
+# Oil's read-through for each macro class, used when a profile does not pass an
+# explicit oil figure. Kept beside the profiles so adding a class stays a
+# one-line change. Hot data is bearish for crude when it tightens policy or
+# strengthens the dollar (both demand-negative); supply- and China-led classes
+# read the other way.
+_OIL_BY_CATEGORY: dict[NewsCategory, tuple[float, Direction]] = {
+    NewsCategory.CENTRAL_BANK: (0.70, Direction.BEARISH),
+    NewsCategory.INTEREST_RATES: (0.66, Direction.BEARISH),
+    NewsCategory.INFLATION: (0.62, Direction.BEARISH),
+    NewsCategory.EMPLOYMENT: (0.60, Direction.BEARISH),
+    NewsCategory.GDP: (0.74, Direction.BEARISH),
+    NewsCategory.TREASURY_YIELDS: (0.50, Direction.BEARISH),
+    NewsCategory.USD_DXY: (0.78, Direction.BEARISH),
+    NewsCategory.GEOPOLITICS: (0.72, Direction.BULLISH),
+    NewsCategory.COMMODITY_SUPPLY_DEMAND: (0.85, Direction.NEUTRAL),
+    NewsCategory.INDUSTRIAL_DEMAND: (0.76, Direction.BULLISH),
+    NewsCategory.CHINA: (0.66, Direction.BULLISH),
+}
+
+
 def _p(
     category: NewsCategory,
     gold: float,
@@ -60,11 +80,16 @@ def _p(
     hot: tuple[Direction, Direction, Direction],
     importance: EconomicImportance,
     chain: str,
+    oil: Optional[tuple[float, Direction]] = None,
 ) -> EventProfile:
+    oil_rel, oil_bias = oil if oil is not None else _OIL_BY_CATEGORY.get(
+        category, (0.30, Direction.MIXED))
     return EventProfile(
         category=category,
-        relevance={Asset.GOLD: gold, Asset.SILVER: silver, Asset.BITCOIN: btc},
-        hot_bias={Asset.GOLD: hot[0], Asset.SILVER: hot[1], Asset.BITCOIN: hot[2]},
+        relevance={Asset.GOLD: gold, Asset.SILVER: silver,
+                   Asset.BITCOIN: btc, Asset.OIL: oil_rel},
+        hot_bias={Asset.GOLD: hot[0], Asset.SILVER: hot[1],
+                  Asset.BITCOIN: hot[2], Asset.OIL: oil_bias},
         base_importance=importance,
         transmission=chain,
     )
@@ -371,7 +396,7 @@ def signals_for_event(event: CalendarEvent) -> list[CalendarSignal]:
     if profile is None:
         return []
     out: list[CalendarSignal] = []
-    for asset in (Asset.GOLD, Asset.SILVER, Asset.BITCOIN):
+    for asset in Asset:
         sig = evaluate(event, asset, profile)
         if sig is not None:
             out.append(sig)

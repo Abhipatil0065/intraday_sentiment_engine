@@ -139,6 +139,9 @@ class Settings(BaseSettings):
     # five votes. Same-source repeats never raise the boost.
     corroboration_per_source: float = 0.10
     corroboration_max_boost: float = 0.30
+    # Phase 1: when false, every signal keeps corroboration=1.0 exactly as it
+    # did before the wiring fix, so the change can be switched off in one place.
+    corroboration_enabled: bool = True
 
     # ---------------- rolling news window (item 3) ----------------
     # Replaces the "same market-timezone calendar date" gate. A rolling window
@@ -233,6 +236,16 @@ class Settings(BaseSettings):
     # A high-impact release this soon makes any standing bias unreliable.
     event_risk_lookahead_minutes: int = 45
     event_risk_min_importance: str = "HIGH"
+
+    # ---------------- bias snapshot log (phase 2) ----------------
+    # Append one row per asset per poll into ``bias_snapshots`` so a published
+    # bias can be reviewed by hand. Purely additive: rows are written after
+    # sentiment is persisted and are read only by scripts/export_snapshots.py,
+    # so switching it off cannot affect a verdict.
+    #
+    # NEWS-ONLY: this log deliberately holds no price and no price-derived
+    # number. Price comparison is done manually.
+    bias_snapshot_enabled: bool = True
 
     # ---------------- price confirmation ----------------
     price_data_enabled: bool = False

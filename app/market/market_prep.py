@@ -45,6 +45,13 @@ ASSET_CATALYSTS: dict[Asset, list[str]] = {
         "Stablecoin and exchange liquidity",
         "Crypto regulatory developments",
     ],
+    Asset.OIL: [
+        "OPEC+ output decisions and compliance",
+        "EIA / API weekly crude and product inventories",
+        "Middle East supply and Strait of Hormuz shipping risk",
+        "Global growth and fuel-demand signals",
+        "USD direction and refinery utilisation",
+    ],
 }
 
 MACRO_DRIVER_LABELS: dict[NewsCategory, str] = {

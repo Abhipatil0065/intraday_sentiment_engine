@@ -327,6 +327,12 @@ ASSET_CUES: dict = {
                     "risk-off", "etf", "bitcoin", "btc", "crypto", "liquidity",
                     "equity", "equities", "hawkish", "dovish", "geopolit",
                     "stablecoin", "outflow", "inflow"),
+    # Crude's own drivers first, then the macro families that move it.
+    Asset.OIL: ("oil", "crude", "wti", "brent", "opec", "opec+", "barrel",
+                "refinery", "petroleum", "inventory", "inventories", "hormuz",
+                "saudi", "aramco", "supply", "demand", "production", "output",
+                "fed", "rate", "yield", "dollar", "dxy", "growth", "geopolit",
+                "sanction", "hawkish", "dovish", "pipeline", "shale"),
 }
 
 
@@ -527,7 +533,7 @@ def analyse_report_text(text: str, context=None) -> dict:
     body = text or ""
     results: dict = {}
 
-    for asset in (Asset.GOLD, Asset.SILVER, Asset.BITCOIN):
+    for asset in Asset:
         bull, bear, drivers = _asset_evidence(body, asset)
 
         if context is not None:
