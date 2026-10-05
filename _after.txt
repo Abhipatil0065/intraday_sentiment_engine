@@ -1,0 +1,60 @@
+cap = 1.30   window = 15 min   mode = per_asset
+
+fixture                          asset                      BEFORE -> AFTER
+------------------------------------------------------------------------------
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - XAUUSD has 4 prints totaling 3.720 relevance, scaled by 0.349 to reach the 1.30 cap
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - XAGUSD has 4 prints totaling 3.680 relevance, scaled by 0.353 to reach the 1.30 cap
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - BTCUSD has 4 prints totaling 3.344 relevance, scaled by 0.389 to reach the 1.30 cap
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - USOIL has 4 prints totaling 2.728 relevance, scaled by 0.477 to reach the 1.30 cap
+CPI headline+core (m/m + y/y)    XAUUSD                     3.7200 -> 1.3000  (capped)
+                                 XAGUSD                     3.6800 -> 1.3000  (capped)
+                                 BTCUSD                     3.3440 -> 1.3000  (capped)
+                                 USOIL                      2.7280 -> 1.3000  (capped)
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - XAUUSD has 2 prints totaling 1.860 relevance, scaled by 0.699 to reach the 1.30 cap
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - XAGUSD has 2 prints totaling 1.840 relevance, scaled by 0.707 to reach the 1.30 cap
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - BTCUSD has 2 prints totaling 1.672 relevance, scaled by 0.778 to reach the 1.30 cap
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - USOIL has 2 prints totaling 1.364 relevance, scaled by 0.953 to reach the 1.30 cap
+PCE headline+core                XAUUSD                     1.8600 -> 1.3000  (capped)
+                                 XAGUSD                     1.8400 -> 1.3000  (capped)
+                                 BTCUSD                     1.6720 -> 1.3000  (capped)
+                                 USOIL                      1.3640 -> 1.3000  (capped)
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - XAUUSD has 2 prints totaling 1.600 relevance, scaled by 0.812 to reach the 1.30 cap
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - XAGUSD has 2 prints totaling 1.520 relevance, scaled by 0.855 to reach the 1.30 cap
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - BTCUSD has 2 prints totaling 1.560 relevance, scaled by 0.833 to reach the 1.30 cap
+NFP + unemployment (+wages)      XAUUSD                     1.6000 -> 1.3000  (capped)
+                                 XAGUSD                     1.5200 -> 1.3000  (capped)
+                                 BTCUSD                     1.5600 -> 1.3000  (capped)
+                                 USOIL                      1.2000 -> 1.2000
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - XAUUSD has 5 prints totaling 4.320 relevance, scaled by 0.301 to reach the 1.30 cap
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - XAGUSD has 5 prints totaling 4.200 relevance, scaled by 0.310 to reach the 1.30 cap
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - BTCUSD has 5 prints totaling 3.992 relevance, scaled by 0.326 to reach the 1.30 cap
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - USOIL has 5 prints totaling 3.184 relevance, scaled by 0.408 to reach the 1.30 cap
+CPI + employment together        XAUUSD                     4.3200 -> 1.3000  (capped)
+                                 XAGUSD                     4.2000 -> 1.3000  (capped)
+                                 BTCUSD                     3.9920 -> 1.3000  (capped)
+                                 USOIL                      3.1840 -> 1.3000  (capped)
+
+per-asset totals through the FULL pipeline (resolve_calendar_signals):
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - BTCUSD has 2 prints totaling 1.672 relevance, scaled by 0.778 to reach the 1.30 cap
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - USOIL has 2 prints totaling 1.364 relevance, scaled by 0.953 to reach the 1.30 cap
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - XAGUSD has 2 prints totaling 1.840 relevance, scaled by 0.707 to reach the 1.30 cap
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - XAUUSD has 2 prints totaling 1.860 relevance, scaled by 0.699 to reach the 1.30 cap
+  CPI headline+core (m/m + y/y)    BTCUSD=1.3000  USOIL=1.3000  XAGUSD=1.3000  XAUUSD=1.3000
+                                   breach: none
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - BTCUSD has 2 prints totaling 1.672 relevance, scaled by 0.778 to reach the 1.30 cap
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - USOIL has 2 prints totaling 1.364 relevance, scaled by 0.953 to reach the 1.30 cap
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - XAGUSD has 2 prints totaling 1.840 relevance, scaled by 0.707 to reach the 1.30 cap
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - XAUUSD has 2 prints totaling 1.860 relevance, scaled by 0.699 to reach the 1.30 cap
+  PCE headline+core                BTCUSD=1.3000  USOIL=1.3000  XAGUSD=1.3000  XAUUSD=1.3000
+                                   breach: none
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - BTCUSD has 2 prints totaling 1.560 relevance, scaled by 0.833 to reach the 1.30 cap
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - XAGUSD has 2 prints totaling 1.520 relevance, scaled by 0.855 to reach the 1.30 cap
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - XAUUSD has 2 prints totaling 1.600 relevance, scaled by 0.812 to reach the 1.30 cap
+  NFP + unemployment (+wages)      BTCUSD=1.3000  USOIL=1.2000  XAGUSD=1.3000  XAUUSD=1.3000
+                                   breach: none
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - BTCUSD has 4 prints totaling 3.232 relevance, scaled by 0.402 to reach the 1.30 cap
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - USOIL has 4 prints totaling 2.564 relevance, scaled by 0.507 to reach the 1.30 cap
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - XAGUSD has 4 prints totaling 3.360 relevance, scaled by 0.387 to reach the 1.30 cap
+2026-10-05 21:24:09 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - XAUUSD has 4 prints totaling 3.460 relevance, scaled by 0.376 to reach the 1.30 cap
+  CPI + employment together        BTCUSD=1.3000  USOIL=1.3000  XAGUSD=1.3000  XAUUSD=1.3000
+                                   breach: none

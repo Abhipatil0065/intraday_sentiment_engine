@@ -8,6 +8,8 @@ without touching a single line of application code (see NEWS_SOURCES).
 from __future__ import annotations
 
 import os
+import re
+from datetime import timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import List, Literal
@@ -278,6 +280,124 @@ class Settings(BaseSettings):
     # How far ahead an event is allowed to influence PREP (hours).
     economic_calendar_horizon_hours: int = 48
 
+    # ---------------- calendar providers (phase 1/2) ----------------
+    # Order is PRIORITY: the first provider holding a value for a field wins
+    # and the others only fill gaps. Merging is by country + normalised title +
+    # time proximity, so priority decides which value is authoritative.
+    calendar_providers: str = "financialjuice,faireconomy"
+
+    # FinancialJuice economic calendar. Ships OFF until live-verified.
+    #
+    # This provider renders a public, JS-driven page with PLAIN Chromium: no
+    # --disable-blink-features=AutomationControlled, no stealth plugin, no
+    # fingerprint spoofing, no challenge solving. Live verification showed the
+    # calendar hydrates identically with and without such flags, so none is
+    # used. A Cloudflare challenge is treated as a FAILED poll and backed off
+    # for 30 minutes - never retried rapidly, never solved.
+    financialjuice_calendar_enabled: bool = False
+    # Fewer rows than this means the SPA had not hydrated, which is a FAILURE,
+    # never "no events today". The page carries 190+ rows when live.
+    fj_calendar_min_rows: int = 10
+    # Hard ceiling on one render, wall-clock seconds.
+    fj_calendar_timeout_seconds: int = 40
+    # Backoff after a detected challenge/block, minutes.
+    fj_calendar_backoff_minutes: int = 30
+    # The browser context is pinned to UTC because FJ renders clocks in the
+    # BROWSER's timezone (verified: the same page rendered under two context
+    # timezones shifted every clock by exactly their offset). Pinning to UTC
+    # makes the rendered clock UTC, so this value MUST stay "UTC" or every
+    # timestamp would be skewed. fj_calendar.render_tz_matches() enforces it.
+    fj_calendar_render_timezone: str = "UTC"
+
+    # FJ is a heavy render (10-17s), so it polls far less often than news.
+    fj_calendar_poll_seconds: int = 600
+    # ...accelerating around a HIGH impact release: every 60s from this many
+    # minutes before, until this many minutes after.
+    fj_calendar_pre_release_minutes: int = 15
+    fj_calendar_post_release_minutes: int = 30
+    fj_calendar_burst_seconds: int = 60
+
+    # Cross-provider merge tuning.
+    calendar_merge_similarity: float = 0.85
+    calendar_merge_time_tolerance_minutes: int = 5
+
+    # Phase 1 follow-up: faireeconomy rate-limits (HTTP 429) under repeated
+    # polling. Back off rather than retrying into the limit - FinancialJuice
+    # and the cache cover the gap. A Retry-After header wins when present.
+    calendar_fe_429_backoff_minutes: int = 15
+    # Ceiling applied to a Retry-After header, so a hostile or absurd value
+    # cannot park the calendar for a day.
+    calendar_fe_429_max_retry_after_minutes: int = 60
+# Shared Chromium render slot. Measured concurrent news + calendar renders
+    # cost +12 processes and ~1.0 GB RSS at peak, so the two serialise. A
+    # waiter that cannot get the slot within this many seconds skips its render
+    # and leaves it to the next poll, rather than stalling the pipeline.
+    chromium_lock_wait_seconds: float = 60.0
+
+    # Phase 5: per-country weight on a calendar signal. A Japanese print moves
+    # Japanese assets; it does not move gold as much as a US one. Values are
+    # multipliers in 0..1 applied to relevance, keyed by country code.
+    calendar_country_multipliers_enabled: bool = True
+    calendar_country_multipliers: str = (
+        "USD=1.0,EUR=0.6,GBP=0.4,JPY=0.4,CNY=0.5,CHF=0.3,CAD=0.3,"
+        "AUD=0.3,NZD=0.3"
+    )
+    # Anything not listed above.
+    calendar_country_multiplier_default: float = 0.25
+    # Asset-specific overrides, keyed "COUNTRY:ASSET". CNY needs this because
+    # silver and oil follow China's industrial cycle far more closely than
+    # gold or bitcoin do.
+    calendar_country_asset_overrides: str = "CNY:XAGUSD=0.8,CNY:USOIL=0.8"
+
+    # Phase 8 cache: serve the last good payload when every provider fails.
+    calendar_cache_enabled: bool = True
+    calendar_cache_max_age_days: int = 7
+
+    # Phase 8: conditional requests where a provider supports them. FJ is a
+    # browser render and cannot send ETag; faireconomy can.
+    calendar_conditional_requests: bool = True
+    # Serve a stale cache when every provider fails. Never for older than
+    # calendar_cache_max_age_days.
+    calendar_serve_stale_on_failure: bool = True
+
+    # Phase 6: a scheduled time that has passed with no actual yet. After the
+    # grace period the EXPECTED signal is damped, and after the timeout it is
+    # dropped entirely - a stale expectation is not evidence.
+    calendar_awaiting_release_grace_minutes: int = 10
+    calendar_awaiting_release_timeout_minutes: int = 120
+    calendar_awaiting_release_penalty: float = 0.35
+    calendar_awaiting_release_enabled: bool = True
+
+    # Phase 6: several prints share one timestamp (NFP + unemployment + wages).
+    # They are combined into one composite release so a single macro moment is
+    # not counted three times.
+    calendar_composite_cluster_enabled: bool = True
+    calendar_composite_window_minutes: int = 15
+    calendar_composite_max_weight: float = 1.30
+
+    # How the composite cap is applied:
+    #   "per_asset" - cap each asset independently, so one asset hitting the
+    #                 limit never drags the others down. A single CPI release
+    #                 can then carry the full 1.30 for gold.
+    #   "global"    - old behaviour: scale every signal in the cluster by one
+    #                 shared factor, so four assets share the 1.30 between
+    #                 them and each ends up near 0.33.
+    calendar_composite_cap_mode: str = "per_asset"
+
+    # Phase 3: per-indicator polarity. An unemployment rate above forecast is a
+    # WEAKER economy, the opposite of payrolls above forecast.
+    calendar_polarity_enabled: bool = True
+    # "title-keyword=+1|-1" where -1 means a higher-than-forecast print is COLD.
+    calendar_inverse_indicators: str = (
+        "unemployment rate=-1,jobless claim=-1,initial claim=-1,"
+        "initial jobless claim=-1,continuing claim=-1,"
+        "consumer confidence=1,business confidence=1"
+    )
+    # Core measures are the better read of the same release.
+    calendar_core_bonus: float = 0.20
+    # When a release publishes both m/m and y/y, keep one row per asset.
+    calendar_dedupe_mom_yoy: bool = True
+
     # ---------------- ports ----------------
     dashboard_port: int = 8501
     api_host: str = "127.0.0.1"
@@ -356,6 +476,36 @@ class Settings(BaseSettings):
     def surprise_stds(self) -> dict:
         """Historical standard deviation per calendar indicator keyword."""
         return self.parsed_table(self.surprise_std_table)
+
+    @property
+    def calendar_provider_list(self) -> List[str]:
+        """Provider names in PRIORITY order (first wins conflicts)."""
+        return [p.strip().lower() for p in self.calendar_providers.split(",")
+                if p.strip()]
+
+    @property
+    def fj_render_tz(self) -> timezone:
+        """Timezone the FJ page renders its clock times in, as a UTC offset.
+
+        Parsed from ``fj_calendar_render_timezone`` ("UTC+05:30"), verified
+        against faireeconomy's copy of the same event rather than assumed.
+        A malformed value falls back to UTC and logs nothing silently wrong.
+        """
+        raw = (self.fj_calendar_render_timezone or "UTC").strip().upper()
+        if raw in ("UTC", "Z", "+00:00"):
+            return timezone.utc
+        match = re.match(r"^(?:UTC|GMT)?\s*([+-])\s*(\d{1,2})(?::?(\d{2}))?$", raw)
+        if not match:
+            return timezone.utc
+        sign = 1 if match.group(1) == "+" else -1
+        hours = int(match.group(2))
+        minutes = int(match.group(3) or 0)
+        return timezone(sign * timedelta(hours=hours, minutes=minutes))
+
+    @property
+    def country_multipliers(self) -> dict:
+        """Per-country signal-weight multipliers (phase 5), keyed by code."""
+        return self.parsed_table(self.calendar_country_multipliers)
 
     @property
     def has_llm(self) -> bool:

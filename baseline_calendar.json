@@ -1,0 +1,498 @@
+{
+  "generated_for_now_utc": "2026-10-05T11:53:43.825862+00:00",
+  "note": "calendar-only baseline; no price involved",
+  "cases": {
+    "RELEASED hot CPI": {
+      "title": "US CPI m/m",
+      "country": "USD",
+      "profile": "Inflation",
+      "assets": {
+        "XAUUSD": {
+          "direction": "BEARISH",
+          "strength": "HIGH",
+          "importance": "VERY_HIGH",
+          "relevance": 0.86,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 1.0
+        },
+        "XAGUSD": {
+          "direction": "BEARISH",
+          "strength": "HIGH",
+          "importance": "VERY_HIGH",
+          "relevance": 0.84,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 1.0
+        },
+        "BTCUSD": {
+          "direction": "BEARISH",
+          "strength": "HIGH",
+          "importance": "VERY_HIGH",
+          "relevance": 0.76,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 1.0
+        },
+        "USOIL": {
+          "direction": "BEARISH",
+          "strength": "HIGH",
+          "importance": "VERY_HIGH",
+          "relevance": 0.62,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 1.0
+        }
+      },
+      "error": null
+    },
+    "RELEASED in-line CPI": {
+      "title": "US CPI m/m",
+      "country": "USD",
+      "profile": "Inflation",
+      "assets": {
+        "XAUUSD": {
+          "direction": "NEUTRAL",
+          "strength": "MEDIUM",
+          "importance": "VERY_HIGH",
+          "relevance": 0.86,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 0.0333
+        },
+        "XAGUSD": {
+          "direction": "NEUTRAL",
+          "strength": "MEDIUM",
+          "importance": "VERY_HIGH",
+          "relevance": 0.84,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 0.0333
+        },
+        "BTCUSD": {
+          "direction": "NEUTRAL",
+          "strength": "MEDIUM",
+          "importance": "VERY_HIGH",
+          "relevance": 0.76,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 0.0333
+        },
+        "USOIL": {
+          "direction": "NEUTRAL",
+          "strength": "MEDIUM",
+          "importance": "VERY_HIGH",
+          "relevance": 0.62,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 0.0333
+        }
+      },
+      "error": null
+    },
+    "EXPECTED CPI": {
+      "title": "US CPI m/m",
+      "country": "USD",
+      "profile": "Inflation",
+      "assets": {
+        "XAUUSD": {
+          "direction": "BEARISH",
+          "strength": "VERY_HIGH",
+          "importance": "VERY_HIGH",
+          "relevance": 0.86,
+          "persistence": 0.35,
+          "mode": "EXPECTED",
+          "surprise_z": null
+        },
+        "XAGUSD": {
+          "direction": "BEARISH",
+          "strength": "VERY_HIGH",
+          "importance": "VERY_HIGH",
+          "relevance": 0.84,
+          "persistence": 0.35,
+          "mode": "EXPECTED",
+          "surprise_z": null
+        },
+        "BTCUSD": {
+          "direction": "BEARISH",
+          "strength": "VERY_HIGH",
+          "importance": "VERY_HIGH",
+          "relevance": 0.76,
+          "persistence": 0.35,
+          "mode": "EXPECTED",
+          "surprise_z": null
+        },
+        "USOIL": {
+          "direction": "BEARISH",
+          "strength": "VERY_HIGH",
+          "importance": "VERY_HIGH",
+          "relevance": 0.62,
+          "persistence": 0.35,
+          "mode": "EXPECTED",
+          "surprise_z": null
+        }
+      },
+      "error": null
+    },
+    "RELEASED NFP": {
+      "title": "US Nonfarm Payrolls",
+      "country": "USD",
+      "profile": "Employment",
+      "assets": {
+        "XAUUSD": {
+          "direction": "BEARISH",
+          "strength": "VERY_HIGH",
+          "importance": "VERY_HIGH",
+          "relevance": 0.8,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 1.0
+        },
+        "XAGUSD": {
+          "direction": "BEARISH",
+          "strength": "VERY_HIGH",
+          "importance": "VERY_HIGH",
+          "relevance": 0.76,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 1.0
+        },
+        "BTCUSD": {
+          "direction": "BEARISH",
+          "strength": "VERY_HIGH",
+          "importance": "VERY_HIGH",
+          "relevance": 0.78,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 1.0
+        },
+        "USOIL": {
+          "direction": "BEARISH",
+          "strength": "VERY_HIGH",
+          "importance": "VERY_HIGH",
+          "relevance": 0.6,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 1.0
+        }
+      },
+      "error": null
+    },
+    "RELEASED Unemployment": {
+      "title": "US Unemployment Rate",
+      "country": "USD",
+      "profile": "Employment",
+      "assets": {
+        "XAUUSD": {
+          "direction": "BEARISH",
+          "strength": "VERY_HIGH",
+          "importance": "VERY_HIGH",
+          "relevance": 0.8,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 1.5
+        },
+        "XAGUSD": {
+          "direction": "BEARISH",
+          "strength": "VERY_HIGH",
+          "importance": "VERY_HIGH",
+          "relevance": 0.76,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 1.5
+        },
+        "BTCUSD": {
+          "direction": "BEARISH",
+          "strength": "VERY_HIGH",
+          "importance": "VERY_HIGH",
+          "relevance": 0.78,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 1.5
+        },
+        "USOIL": {
+          "direction": "BEARISH",
+          "strength": "VERY_HIGH",
+          "importance": "VERY_HIGH",
+          "relevance": 0.6,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 1.5
+        }
+      },
+      "error": null
+    },
+    "RELEASED FOMC": {
+      "title": "FOMC Statement",
+      "country": "USD",
+      "profile": "Central Bank",
+      "assets": {
+        "XAUUSD": {
+          "direction": "BEARISH",
+          "strength": "HIGH",
+          "importance": "VERY_HIGH",
+          "relevance": 0.9,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 0.5
+        },
+        "XAGUSD": {
+          "direction": "BEARISH",
+          "strength": "HIGH",
+          "importance": "VERY_HIGH",
+          "relevance": 0.88,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 0.5
+        },
+        "BTCUSD": {
+          "direction": "BEARISH",
+          "strength": "HIGH",
+          "importance": "VERY_HIGH",
+          "relevance": 0.86,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 0.5
+        },
+        "USOIL": {
+          "direction": "BEARISH",
+          "strength": "HIGH",
+          "importance": "VERY_HIGH",
+          "relevance": 0.7,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 0.5
+        }
+      },
+      "error": null
+    },
+    "RELEASED ECB": {
+      "title": "ECB Rate Decision",
+      "country": "EUR",
+      "profile": "Central Bank",
+      "assets": {
+        "XAUUSD": {
+          "direction": "BEARISH",
+          "strength": "VERY_HIGH",
+          "importance": "VERY_HIGH",
+          "relevance": 0.9,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 1.0
+        },
+        "XAGUSD": {
+          "direction": "BEARISH",
+          "strength": "VERY_HIGH",
+          "importance": "VERY_HIGH",
+          "relevance": 0.88,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 1.0
+        },
+        "BTCUSD": {
+          "direction": "BEARISH",
+          "strength": "VERY_HIGH",
+          "importance": "VERY_HIGH",
+          "relevance": 0.86,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 1.0
+        },
+        "USOIL": {
+          "direction": "BEARISH",
+          "strength": "VERY_HIGH",
+          "importance": "VERY_HIGH",
+          "relevance": 0.7,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 1.0
+        }
+      },
+      "error": null
+    },
+    "RELEASED DXY": {
+      "title": "US Dollar Index",
+      "country": "USD",
+      "profile": "USD/DXY",
+      "assets": {
+        "XAUUSD": {
+          "direction": "BEARISH",
+          "strength": "MEDIUM",
+          "importance": "HIGH",
+          "relevance": 0.88,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 1.0
+        },
+        "XAGUSD": {
+          "direction": "BEARISH",
+          "strength": "MEDIUM",
+          "importance": "HIGH",
+          "relevance": 0.84,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 1.0
+        },
+        "BTCUSD": {
+          "direction": "NEUTRAL",
+          "strength": "MEDIUM",
+          "importance": "HIGH",
+          "relevance": 0.7,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 1.0
+        },
+        "USOIL": {
+          "direction": "BEARISH",
+          "strength": "MEDIUM",
+          "importance": "HIGH",
+          "relevance": 0.78,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": 1.0
+        }
+      },
+      "error": null
+    },
+    "Crude Oil Inventories": {
+      "title": "Crude Oil Inventories",
+      "country": "USD",
+      "profile": null,
+      "assets": {
+        "XAUUSD": null,
+        "XAGUSD": null,
+        "BTCUSD": null,
+        "USOIL": null
+      },
+      "error": null
+    },
+    "OPEC+ Meeting": {
+      "title": "OPEC+ Meeting",
+      "country": "USD",
+      "profile": null,
+      "assets": {
+        "XAUUSD": null,
+        "XAGUSD": null,
+        "BTCUSD": null,
+        "USOIL": null
+      },
+      "error": null
+    },
+    "Baker Hughes Rigs": {
+      "title": "Baker Hughes Oil Rig Count",
+      "country": "USD",
+      "profile": null,
+      "assets": {
+        "XAUUSD": null,
+        "XAGUSD": null,
+        "BTCUSD": null,
+        "USOIL": null
+      },
+      "error": null
+    },
+    "China Gold Imports": {
+      "title": "China Gold Imports",
+      "country": "CNY",
+      "profile": "China",
+      "assets": {
+        "XAUUSD": {
+          "direction": "NEUTRAL",
+          "strength": "MEDIUM",
+          "importance": "HIGH",
+          "relevance": 0.52,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": -5.0
+        },
+        "XAGUSD": {
+          "direction": "BEARISH",
+          "strength": "MEDIUM",
+          "importance": "HIGH",
+          "relevance": 0.8,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": -5.0
+        },
+        "BTCUSD": null,
+        "USOIL": {
+          "direction": "BEARISH",
+          "strength": "MEDIUM",
+          "importance": "HIGH",
+          "relevance": 0.66,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": -5.0
+        }
+      },
+      "error": null
+    },
+    "Japan CPI y/y": {
+      "title": "Japan CPI y/y",
+      "country": "JPY",
+      "profile": "Inflation",
+      "assets": {
+        "XAUUSD": {
+          "direction": "BULLISH",
+          "strength": "MEDIUM",
+          "importance": "HIGH",
+          "relevance": 0.86,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": -1.3333
+        },
+        "XAGUSD": {
+          "direction": "BULLISH",
+          "strength": "MEDIUM",
+          "importance": "HIGH",
+          "relevance": 0.84,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": -1.3333
+        },
+        "BTCUSD": {
+          "direction": "BULLISH",
+          "strength": "MEDIUM",
+          "importance": "HIGH",
+          "relevance": 0.76,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": -1.3333
+        },
+        "USOIL": {
+          "direction": "BULLISH",
+          "strength": "MEDIUM",
+          "importance": "HIGH",
+          "relevance": 0.62,
+          "persistence": 0.75,
+          "mode": "RELEASED",
+          "surprise_z": -1.3333
+        }
+      },
+      "error": null
+    },
+    "UNPARSEABLE '<0.1%'": {
+      "title": "US CPI m/m",
+      "country": "USD",
+      "profile": "Inflation",
+      "assets": {
+        "XAUUSD": "CRASH",
+        "XAGUSD": "CRASH",
+        "BTCUSD": "CRASH",
+        "USOIL": "CRASH"
+      },
+      "error": "TypeError: unsupported operand type(s) for -: 'str' and 'str'"
+    },
+    "UNPARSEABLE '-'": {
+      "title": "US CPI m/m",
+      "country": "USD",
+      "profile": "Inflation",
+      "assets": {
+        "XAUUSD": "CRASH",
+        "XAGUSD": "CRASH",
+        "BTCUSD": "CRASH",
+        "USOIL": "CRASH"
+      },
+      "error": "TypeError: unsupported operand type(s) for -: 'str' and 'str'"
+    }
+  }
+}

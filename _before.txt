@@ -1,0 +1,38 @@
+cap = 1.30   window = 15 min   mode = per_asset
+
+fixture                          asset                      BEFORE -> AFTER
+------------------------------------------------------------------------------
+2026-10-05 21:20:13 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - 16 prints total 13.472 relevance, scaled by 0.096 to reach the 1.30 cap
+CPI headline+core (m/m + y/y)    XAUUSD                     3.7200 -> 0.3590  (capped)
+                                 XAGUSD                     3.6800 -> 0.3551  (capped)
+                                 BTCUSD                     3.3440 -> 0.3227  (capped)
+                                 USOIL                      2.7280 -> 0.2632  (capped)
+2026-10-05 21:20:13 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - 8 prints total 6.736 relevance, scaled by 0.193 to reach the 1.30 cap
+PCE headline+core                XAUUSD                     1.8600 -> 0.3590  (capped)
+                                 XAGUSD                     1.8400 -> 0.3551  (capped)
+                                 BTCUSD                     1.6720 -> 0.3227  (capped)
+                                 USOIL                      1.3640 -> 0.2632  (capped)
+2026-10-05 21:20:13 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - 8 prints total 5.880 relevance, scaled by 0.221 to reach the 1.30 cap
+NFP + unemployment (+wages)      XAUUSD                     1.6000 -> 0.3537  (capped)
+                                 XAGUSD                     1.5200 -> 0.3361  (capped)
+                                 BTCUSD                     1.5600 -> 0.3449  (capped)
+                                 USOIL                      1.2000 -> 0.2653
+2026-10-05 21:20:13 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - 20 prints total 15.696 relevance, scaled by 0.083 to reach the 1.30 cap
+CPI + employment together        XAUUSD                     4.3200 -> 0.3578  (capped)
+                                 XAGUSD                     4.2000 -> 0.3479  (capped)
+                                 BTCUSD                     3.9920 -> 0.3306  (capped)
+                                 USOIL                      3.1840 -> 0.2637  (capped)
+
+per-asset totals through the FULL pipeline (resolve_calendar_signals):
+2026-10-05 21:20:13 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - 8 prints total 6.736 relevance, scaled by 0.193 to reach the 1.30 cap
+  CPI headline+core (m/m + y/y)    BTCUSD=0.3227  USOIL=0.2632  XAGUSD=0.3551  XAUUSD=0.3590
+                                   breach: none
+2026-10-05 21:20:13 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - 8 prints total 6.736 relevance, scaled by 0.193 to reach the 1.30 cap
+  PCE headline+core                BTCUSD=0.3227  USOIL=0.2632  XAGUSD=0.3551  XAUUSD=0.3590
+                                   breach: none
+2026-10-05 21:20:13 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - 8 prints total 5.880 relevance, scaled by 0.221 to reach the 1.30 cap
+  NFP + unemployment (+wages)      BTCUSD=0.3449  USOIL=0.2653  XAGUSD=0.3361  XAUUSD=0.3537
+                                   breach: none
+2026-10-05 21:20:13 | INFO     | app.analysis.economic_impact | Calendar: composite release at 2026-10-08 12:30:00+00:00 - 16 prints total 12.616 relevance, scaled by 0.103 to reach the 1.30 cap
+  CPI + employment together        BTCUSD=0.3330  USOIL=0.2642  XAGUSD=0.3462  XAUUSD=0.3565
+                                   breach: none

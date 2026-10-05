@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Sequence
 
+from app.config import settings
 from app.logging_conf import get_logger
 from app.models.enums import (
     Asset,
@@ -164,6 +165,110 @@ _IMPACT_RANK = {"holiday": 0, "low": 1, "medium": 2, "high": 3}
 
 
 # --------------------------------------------------------------------------
+# Phase 3: per-indicator polarity
+# --------------------------------------------------------------------------
+# "Hot" is only hot for SOME indicators. A payrolls beat is a hot economy; an
+# unemployment-rate beat is a COLD economy. Treating every indicator as
+# "above forecast = hot" is a straight sign error on the two prints that carry
+# the most labour-market information, and it points gold the wrong way.
+#
+# The map is CONFIGURABLE rather than hard-coded so the behaviour can be
+# corrected without a release.
+_INVERSE_KEYWORDS: tuple[str, ...] = ()
+_CORE_KEYWORDS = (
+    "core",          # core CPI / core PCE exclude food and energy
+    "excl. food",
+    "excluding food",
+    "core pce",
+)
+
+
+def _inverse_indicators() -> tuple[str, ...]:
+    """
+    Keywords whose ABOVE-FORECAST print means a COLD (weak) economy.
+
+    Parsed from ``calendar_inverse_indicators`` as "keyword=+1|-1" pairs; -1
+    marks an inverse indicator. Longer keywords are tested first so "initial
+    jobless claim" wins over the shorter "jobless claim" on an overlapping
+    title - both mean the same thing, but matching the shorter needle first
+    would make the intent depend on dict ordering.
+    """
+    global _INVERSE_KEYWORDS
+    if _INVERSE_KEYWORDS:
+        return _INVERSE_KEYWORDS
+    parsed: list[str] = []
+    for pair in (settings.calendar_inverse_indicators or "").split(","):
+        keyword, _, sign = pair.partition("=")
+        keyword = keyword.strip().lower()
+        if keyword and sign.strip() == "-1":
+            parsed.append(keyword)
+    parsed.sort(key=len, reverse=True)
+    _INVERSE_KEYWORDS = tuple(parsed)
+    return _INVERSE_KEYWORDS
+
+
+def indicator_polarity(event: CalendarEvent) -> int:
+    """
+    +1 when a higher-than-forecast print is HOT, -1 when it is COLD.
+
+    Defaults to +1. Only a title that matches a configured inverse indicator
+    flips, so an unrecognised print keeps the ordinary reading rather than
+    being inverted by guesswork.
+    """
+    if not settings.calendar_polarity_enabled:
+        return 1
+    lowered = (event.title or "").lower()
+    for keyword in _inverse_indicators():
+        if keyword in lowered:
+            return -1
+    return 1
+
+
+def is_core_release(event: CalendarEvent) -> bool:
+    """True for the headline-measure variant of a release (core CPI, core PCE)."""
+    lowered = (event.title or "").lower()
+    return any(needle in lowered for needle in _CORE_KEYWORDS)
+
+
+def _frequency_of(title: str) -> str:
+    """
+    Which frequency variant a row is, so m/m and y/y can be told apart.
+
+    Returns "mom", "yoy" or "" (neither). Used to stop one release being
+    counted twice: a single CPI print publishes both and they are the same
+    macro moment, not two.
+    """
+    lowered = (title or "").lower()
+    # Check the spelled forms first, then the terse ones providers also use.
+    if any(n in lowered for n in ("y/y", "yy", "yoy", "year-on-year",
+                                  "year over year", "12-month", "12 month")):
+        return "yoy"
+    if any(n in lowered for n in ("m/m", "mm", "mom", "month-on-month",
+                                  "month over month")):
+        return "mom"
+    return ""
+
+
+def release_family(event: CalendarEvent) -> str:
+    """
+    The release a row belongs to, with its frequency variant stripped.
+
+    "US CPI MoM" and "US CPI YoY" both reduce to "us cpi", so a dedupe can
+    tell they are one release rather than two unrelated events.
+    """
+    lowered = (event.title or "").lower()
+    stripped = lowered
+    for variant in ("month-on-month", "month over month", "year-on-year",
+                    "year over year", "12-month", "12 month",
+                    "y/y", "m/m", "yoy", "mom", "yy", "mm"):
+        stripped = stripped.replace(variant, " ")
+    # Collapse the punctuation left behind by the strip.
+    cleaned = " ".join("".join(ch if ch.isalnum() else " "
+                              for ch in stripped).split())
+    return cleaned
+
+
+# --------------------------------------------------------------------------
 # Event + signal records
 # --------------------------------------------------------------------------
 @dataclass
@@ -212,25 +317,70 @@ class CalendarSignal:
 # Parsing + classification
 # --------------------------------------------------------------------------
 def to_float(raw) -> Optional[float]:
-    """Parse '3.5%', '-0.2%', '1.2K', '250B' into a float, else None."""
+    """
+    Parse a calendar value into a float, or None when it is not a number.
+
+    Handles what real providers actually send:
+        '3.4%'  '-0.2%'  '235K'  '1.2M'  '$74.2B'  '1,250'
+    Returns None - never a guess - for anything it cannot read:
+        None  ''  '-'  '--'  'N/A'  '<0.1%'  '>'  '1.5|2.1'  '?'  'TBC'
+    '<0.1%' is a BOUND, not a measurement, so treating it as 0.1 would invent
+    a number the provider never published.
+
+    A pipe ('1.5|2.1') is a revised|original pair; it is ambiguous rather than
+    a single value, so it yields None and the caller computes no surprise.
+    """
     if raw is None:
         return None
-    text = str(raw).strip().replace(",", "")
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        value = float(raw)
+        return value if value == value and abs(value) != float("inf") else None
+
+    text = str(raw).strip()
     if not text:
         return None
+
+    # Reject anything that is not a single unambiguous number. Checked BEFORE
+    # stripping so a bound or a revision pair is never coerced.
+    lowered = text.lower()
+    if lowered in {"-", "--", "---", "n/a", "na", "none", "null", "tbc",
+                   "?", "tba", "unchanged", "no change"}:
+        return None
+    if "|" in text:                      # '1.5|2.1' revised|original
+        return None
+    if text.startswith(("<", ">", "≈", "~")):   # '<' '>' bounds
+        return None
+
+    text = text.replace(",", "").replace("$", "").replace(" ", " ")
+    text = text.strip()
+    if not text:
+        return None
+
+    # Trailing unit: % K M B T
     multiplier = 1.0
     if text.endswith("%"):
         text = text[:-1]
-    elif text[-1:].upper() == "K":
-        multiplier, text = 1_000.0, text[:-1]
-    elif text[-1:].upper() == "M":
-        multiplier, text = 1_000_000.0, text[:-1]
-    elif text[-1:].upper() == "B":
-        multiplier, text = 1_000_000_000.0, text[:-1]
+    else:
+        suffix = text[-1:].upper()
+        for letter, factor in (("T", 1e12), ("B", 1e9),
+                               ("M", 1e6), ("K", 1e3)):
+            if suffix == letter:
+                multiplier, text = factor, text[:-1]
+                break
+
+    text = text.strip()
+    if not text:
+        return None
     try:
-        return float(text) * multiplier
+        value = float(text) * multiplier
     except ValueError:
         return None
+    # A non-finite result is not a measurement either.
+    if value != value or abs(value) == float("inf"):
+        return None
+    return value
 
 
 def classify_event(event: CalendarEvent) -> Optional[EventProfile]:
@@ -262,6 +412,65 @@ def importance_from_impact(impact: str,
         1: EconomicImportance.MEDIUM,
         0: EconomicImportance.LOW,
     }[combined]
+
+
+def _country_multiplier(event: CalendarEvent, asset: Asset) -> float:
+    """
+    How much a country's print should move ONE asset, as a 0..1 multiplier.
+
+    A Japanese CPI print moves Japanese assets; it does not move gold the way
+    a US print does. Without this the engine applies a US-calibrated relevance
+    to every country, which over-weights the quiet ones.
+
+    Parsed from config as "CCY=weight" pairs, plus optional "CCY:ASSET"
+    overrides. Anything unlisted gets a conservative default rather than the
+    US weight, so a newly added country cannot be over-weighted by omission.
+    """
+    if not settings.calendar_country_multipliers_enabled:
+        return 1.0
+
+    overrides: dict[str, float] = {}
+    for pair in (settings.calendar_country_asset_overrides or "").split(","):
+        key, _, value = pair.partition("=")
+        key = key.strip().upper()
+        if key and value.strip():
+            try:
+                overrides[key] = float(value)
+            except ValueError:
+                continue
+
+    country = (event.country or "").upper()
+    # The asset-specific override wins: China's industrial cycle matters far
+    # more to silver and oil than to gold or bitcoin.
+    for key in (f"{country}:{asset.value}", f"{country}:{asset.name}"):
+        if key in overrides:
+            return overrides[key]
+
+    weights: dict[str, float] = {}
+    for pair in (settings.calendar_country_multipliers or "").split(","):
+        key, _, value = pair.partition("=")
+        key = key.strip().upper()
+        if key and value.strip():
+            try:
+                weights[key] = float(value)
+            except ValueError:
+                continue
+
+    return weights.get(country,
+                       float(settings.calendar_country_multiplier_default))
+
+
+def _apply_polarity(bias: Direction, polarity: int) -> Direction:
+    """
+    Flip a hot-bias for an inverse indicator.
+
+    A MIXED bias is left alone: it means "this class does not move the asset on
+    its own", and inverting it would manufacture a direction that does not
+    exist.
+    """
+    if polarity >= 0 or bias is Direction.MIXED:
+        return bias
+    return _opposite(bias)
 
 
 def _opposite(direction: Direction) -> Direction:
@@ -326,43 +535,85 @@ def evaluate(event: CalendarEvent, asset: Asset,
     hot_bias = profile.hot_bias.get(asset, Direction.MIXED)
     importance = importance_from_impact(event.impact, profile)
 
+    # Phase 3: "hot" depends on the INDICATOR. An unemployment rate above
+    # forecast means a weaker economy, so the print is COLD even though the
+    # number is higher. Applying that sign here - at the single point where
+    # direction is decided - keeps every branch below consistent.
+    polarity = indicator_polarity(event)
+    hot_bias = _apply_polarity(hot_bias, polarity)
+
+    # A core measure (core CPI, core PCE) is the cleaner read of the same
+    # release, so it carries slightly more weight than the food-and-energy
+    # headline it sits beside.
+    core_bonus = (float(settings.calendar_core_bonus)
+                  if is_core_release(event) else 0.0)
+
+    # Phase 5: scale relevance by the country. Applied to RELEVANCE rather than
+    # to strength, because relevance is the "how much does this print mean for
+    # this asset" factor - exactly what a quiet country's print changes.
+    country_multiplier = _country_multiplier(event, asset)
+    weighted_relevance = relevance * country_multiplier
+
     # ---- RELEASED: direction from the STANDARDISED surprise ----
     if event.actual is not None and event.forecast is not None:
         from app.analysis.calendar_risk import (
             standardised_surprise, surprise_band,
         )
 
-        surprise = event.actual - event.forecast
+        # Both operands must be REAL numbers. A provider placeholder ('-',
+        # '<0.1%', '1.5|2.1') that reached here unparsed would raise a TypeError
+        # on the subtraction below and could take the poll down, so a non-numeric
+        # value is treated as "no usable data" and yields no signal - never a
+        # guess and never an exception.
+        actual_v = to_float(event.actual)
+        forecast_v = to_float(event.forecast)
+        if actual_v is None or forecast_v is None:
+            log.info("Calendar: %s has a non-numeric actual/forecast "
+                     "(actual=%r forecast=%r) - no surprise computed",
+                     event.title[:70], event.actual, event.forecast)
+            return None
+
+        surprise = actual_v - forecast_v
         # Item 8: measure the miss in standard deviations of THIS indicator
         # rather than as a flat percentage of the forecast, so a 0.2% CPI miss
         # and a 120k payroll miss are comparable.
-        z = standardised_surprise(event.actual, event.forecast, event.title)
+        z = standardised_surprise(actual_v, forecast_v, event.title)
         band = surprise_band(z)
 
         if band == "NEUTRAL" or hot_bias is Direction.MIXED:
             direction = Direction.NEUTRAL
-            reason = (f"{event.title} came in at {event.actual:g} vs "
-                      f"{event.forecast:g} forecast - no material surprise "
+            reason = (f"{event.title} came in at {actual_v:g} vs "
+                      f"{forecast_v:g} forecast - no material surprise "
                       f"({band.lower()}).")
         else:
             is_hot = (z or 0.0) > 0
             direction = hot_bias if is_hot else _opposite(hot_bias)
             qualifier = "above" if is_hot else "below"
-            reason = (f"{event.title} released {event.actual:g}, {qualifier} the "
-                      f"{event.forecast:g} forecast ({surprise:+g}, "
+            reason = (f"{event.title} released {actual_v:g}, {qualifier} the "
+                      f"{forecast_v:g} forecast ({surprise:+g}, "
                       f"{band.lower()} surprise, {z:+.2f} sigma).")
 
         return CalendarSignal(
             event=event, profile=profile, asset=asset, direction=direction,
             strength=_strength_for(event.impact, importance, z),
-            importance=importance, relevance=relevance,
+            importance=importance,
+            relevance=min(1.0, weighted_relevance * (1.0 + core_bonus)),
             persistence=0.75, mode="RELEASED", reason=reason,
             transmission=profile.transmission, surprise=round(z or 0.0, 4),
         )
 
     # ---- EXPECTED: direction from published consensus only ----
     if event.forecast is not None and event.previous is not None:
-        delta = event.forecast - event.previous
+        # Same rule as the released path: a placeholder is "no data", not 0.0.
+        forecast_v = to_float(event.forecast)
+        previous_v = to_float(event.previous)
+        if forecast_v is None or previous_v is None:
+            log.info("Calendar: %s has a non-numeric forecast/previous "
+                     "(forecast=%r previous=%r) - no signal",
+                     event.title[:70], event.forecast, event.previous)
+            return None
+
+        delta = forecast_v - previous_v
         if abs(delta) < 1e-9 or hot_bias is Direction.MIXED:
             direction = Direction.NEUTRAL
             reason = (f"{event.title} is scheduled; consensus is unchanged from "
@@ -378,7 +629,8 @@ def evaluate(event: CalendarEvent, asset: Asset,
         return CalendarSignal(
             event=event, profile=profile, asset=asset, direction=direction,
             strength=_strength_for(event.impact, importance, None),
-            importance=importance, relevance=relevance,
+            importance=importance,
+            relevance=min(1.0, weighted_relevance * (1.0 + core_bonus)),
             persistence=0.35, mode="EXPECTED", reason=reason,
             transmission=profile.transmission, surprise=None,
         )
@@ -410,19 +662,280 @@ def signals_for_events(events: Sequence[CalendarEvent],
 
     Events older than two hours are excluded: that print is history, and the
     news feed already covers it.
+
+    Delegates to :func:`resolve_calendar_signals`, which applies the Phase 3
+    and Phase 6 stages after resolution.
     """
-    now = datetime.now(timezone.utc)
-    cutoff = now + timedelta(hours=max(0, horizon_hours))
+    return resolve_calendar_signals(events, horizon_hours=horizon_hours)
+
+
+# --------------------------------------------------------------------------
+# Phase 3: m/m vs y/y dedupe
+# --------------------------------------------------------------------------
+def dedupe_frequency_variants(
+        signals: Sequence[CalendarSignal],
+) -> list[CalendarSignal]:
+    """
+    Keep ONE signal per (asset, release, minute) when a release publishes both
+    a monthly and a yearly figure.
+
+    A single CPI print arrives as "CPI MoM" and "CPI YoY" at the same minute.
+    Both are real and they usually agree, but counting both would enter the
+    same macro moment twice and double the move it implies - which is the
+    "one evidence, two names" problem the news side already guards against.
+
+    The KEPT row is chosen on evidence, not on title order:
+
+      1. the row that actually produced a usable surprise, then
+      2. the core measure, because it excludes food and energy noise, then
+      3. the larger absolute surprise, which carries more information.
+
+    Returns a new list; the input is not mutated.
+    """
+    if not settings.calendar_dedupe_mom_yoy:
+        return list(signals)
+
+    # Group key: one asset, one release, one release minute. The release minute
+    # keeps two genuinely separate prints (this month vs next week) apart.
+    groups: dict[tuple[str, str, str], list[CalendarSignal]] = {}
+    for sig in signals:
+        key = (sig.asset.value,
+               release_family(sig.event),
+               sig.event.when_utc.strftime("%Y%m%dT%H%M"))
+        groups.setdefault(key, []).append(sig)
+
+    kept: list[CalendarSignal] = []
+    for bucket in groups.values():
+        variants = {_frequency_of(s.event.title) for s in bucket} - {""}
+        if len(variants) < 2:
+            # Not an m/m + y/y pair: every row is genuinely distinct.
+            kept.extend(bucket)
+            continue
+
+        def rank(sig: CalendarSignal):
+            return (
+                sig.surprise is not None,
+                is_core_release(sig.event),
+                abs(sig.surprise or 0.0),
+            )
+
+        kept.append(max(bucket, key=rank))
+
+    kept.sort(key=lambda s: (s.event.when_utc, s.asset.value))
+    return kept
+
+
+# --------------------------------------------------------------------------
+# Phase 6: awaiting-release dampening + composite release cap
+# --------------------------------------------------------------------------
+def apply_awaiting_release(signals: Sequence[CalendarSignal],
+                           now: Optional[datetime] = None
+                           ) -> list[CalendarSignal]:
+    """
+    Damp or drop an EXPECTED signal whose scheduled time has already passed
+    with no actual yet.
+
+    Four states, all honest about what is actually known:
+
+      before the time      unchanged - it is still a live expectation
+      within the grace     unchanged - a print can legitimately be late
+      past grace..timeout  DAMPED    - the wait is itself information
+      past the timeout     DROPPED   - a stale expectation is not evidence
+
+    Only EXPECTED signals are touched: a RELEASED print is never damped,
+    because its actual value is known regardless of the clock.
+    """
+    if not settings.calendar_awaiting_release_enabled:
+        return list(signals)
+
+    reference = now or datetime.now(timezone.utc)
+    grace = timedelta(minutes=float(
+        settings.calendar_awaiting_release_grace_minutes))
+    timeout = timedelta(minutes=float(
+        settings.calendar_awaiting_release_timeout_minutes))
+    penalty = float(settings.calendar_awaiting_release_penalty)
+
     out: list[CalendarSignal] = []
+    for sig in signals:
+        if sig.mode != "EXPECTED" or sig.event.when_utc is None:
+            out.append(sig)
+            continue
+
+        overdue = reference - sig.event.when_utc
+        if overdue <= grace:
+            out.append(sig)
+            continue
+        if overdue >= timeout:
+            log.info("Calendar: dropping %r - still no actual %s after its "
+                     "scheduled time", sig.event.title[:60], _ago(overdue))
+            continue
+
+        out.append(_damp(sig, penalty,
+                         f"{sig.reason} Awaiting release, damped "
+                         f"{_ago(overdue)} past its scheduled time."))
+    return out
+
+
+def _damp(sig: CalendarSignal, penalty: float, note: str) -> CalendarSignal:
+    """Copy a signal with reduced weight, carrying the reason forward."""
+    return CalendarSignal(
+        event=sig.event, profile=sig.profile, asset=sig.asset,
+        direction=sig.direction, strength=sig.strength,
+        importance=sig.importance,
+        relevance=sig.relevance * penalty,
+        persistence=sig.persistence * penalty,
+        mode=sig.mode, reason=note, transmission=sig.transmission,
+        surprise=sig.surprise,
+    )
+
+
+def _ago(delta: timedelta) -> str:
+    minutes = int(delta.total_seconds() // 60)
+    return "%d min" % minutes if minutes < 90 else "%dh%02dm" % divmod(
+        minutes, 60)
+
+
+def cap_composite_release(
+        signals: Sequence[CalendarSignal],
+        max_weight: Optional[float] = None,
+) -> list[CalendarSignal]:
+    """
+    Cap the weight a SINGLE macro moment can contribute.
+
+    Several prints share one timestamp - NFP arrives with the unemployment
+    rate and average hourly earnings. They are genuinely separate data, but
+    they are one market moment, and summing all three would let a single
+    release outweigh everything else in the calendar combined.
+
+    THE CAP IS APPLIED PER ASSET. For each asset independently, that asset's
+    signals are summed across the cluster and, if the total exceeds the cap,
+    scaled down proportionally. One asset's scaling never touches another
+    asset's weights, so a release that is overwhelmingly relevant to gold does
+    not suppress the same release's read for silver or oil.
+
+    This matters because a cluster always contains one signal per asset per
+    print. Under a single shared factor, a 4-asset cluster split the cap four
+    ways and every asset landed near 0.33 - far below the configured 1.30 for
+    any one of them, which is not what "cap one macro moment" means.
+
+    When a cluster exceeds the cap its signals are scaled PROPORTIONALLY, so
+    relative weighting within the asset is preserved. Nothing is dropped and no
+    direction is reversed: the cap reduces the total, it does not hide it.
+
+    ``calendar_composite_cap_mode = "global"`` restores the previous shared-
+    factor behaviour.
+    """
+    limit = (float(max_weight) if max_weight is not None
+             else float(settings.calendar_composite_max_weight))
+    if limit <= 0:
+        return list(signals)
+
+    per_asset = (settings.calendar_composite_cap_mode or "per_asset"
+                 ).strip().lower() == "per_asset"
+
+    window = timedelta(minutes=float(
+        settings.calendar_composite_window_minutes))
+
+    # Sort by time first so clustering walks the calendar in order. Events with
+    # no timestamp sort first and each starts its own cluster.
+    ordered = sorted(
+        signals,
+        key=lambda s: (s.event.when_utc is None,
+                       s.event.when_utc or datetime(1970, 1, 1,
+                                                    tzinfo=timezone.utc)))
+
+    clusters: list[list[CalendarSignal]] = []
+    for sig in ordered:
+        when = sig.event.when_utc
+        previous = clusters[-1][0].event.when_utc if clusters else None
+        if (when is not None and previous is not None
+                and when - previous <= window):
+            clusters[-1].append(sig)
+        else:
+            clusters.append([sig])
+
+    out: list[CalendarSignal] = []
+    for cluster in clusters:
+        if len(cluster) == 1:
+            out.append(cluster[0])
+            continue
+
+        if per_asset:
+            # Group this cluster BY ASSET and cap each group on its own. An
+            # asset already under the limit is left completely untouched, so
+            # scaling one asset can never change another asset's weight.
+            by_asset: dict[Asset, list[CalendarSignal]] = {}
+            for sig in cluster:
+                by_asset.setdefault(sig.asset, []).append(sig)
+
+            for asset, group in by_asset.items():
+                total = sum(s.relevance for s in group)
+                if total <= limit:
+                    out.extend(group)
+                    continue
+                scale = limit / total
+                log.info("Calendar: composite release at %s - %s has %d prints "
+                         "totaling %.3f relevance, scaled by %.3f to reach the "
+                         "%.2f cap", cluster[0].event.when_utc, asset.value,
+                         len(group), total, scale, limit)
+                for sig in group:
+                    out.append(_damp(sig, scale,
+                                     f"{sig.reason} Part of a {len(group)}-print"
+                                     f" {asset.value} release; combined weight "
+                                     f"capped."))
+            continue
+
+        # Global mode: one shared factor across the whole cluster. Retained so
+        # the previous behaviour is recoverable from config alone.
+        total = sum(s.relevance for s in cluster)
+        if total <= limit:
+            out.extend(cluster)
+            continue
+        scale = limit / total
+        log.info("Calendar: composite release at %s - %d prints total %.3f "
+                 "relevance, scaled by %.3f to reach the %.2f cap",
+                 cluster[0].event.when_utc, len(cluster), total, scale, limit)
+        for sig in cluster:
+            out.append(_damp(sig, scale,
+                             f"{sig.reason} Part of a {len(cluster)}-print "
+                             f"release; combined weight capped."))
+    return out
+
+
+def resolve_calendar_signals(events: Sequence[CalendarEvent],
+                             horizon_hours: int = 48,
+                             now: Optional[datetime] = None,
+                             ) -> list[CalendarSignal]:
+    """
+    The full calendar pipeline, in the order the phases depend on each other:
+
+      1. resolve each event into per-asset signals
+      2. collapse the m/m and y/y rows of one release    (Phase 3)
+      3. damp or drop overdue expectations               (Phase 6)
+      4. cap the weight of one shared-timestamp cluster  (Phase 6)
+
+    Order matters: the m/m+y/y collapse MUST run before the cluster cap. If it
+    ran after, one print would arrive twice, pass the cap on its own merits,
+    and then be halved again by the cluster it duplicated.
+
+    ``signals_for_events`` is kept as the pre-Phase-3 entry point and delegates
+    here, so existing callers pick the new behaviour up automatically.
+    """
+    reference = now or datetime.now(timezone.utc)
+    cutoff = reference + timedelta(hours=max(0, horizon_hours))
+    signals: list[CalendarSignal] = []
     for event in events:
         if event.when_utc is None:
             continue
-        if event.when_utc < now - timedelta(hours=2):
+        if event.when_utc < reference - timedelta(hours=2):
             continue
         if event.when_utc > cutoff:
             continue
-        out.extend(signals_for_event(event))
-    return out
+        signals.extend(signals_for_event(event))
+
+    signals = dedupe_frequency_variants(signals)
+    signals = apply_awaiting_release(signals, now=reference)
+    return cap_composite_release(signals)
 
 
 def headline(event: CalendarEvent, signal: CalendarSignal) -> str:

@@ -28,6 +28,7 @@ from zoneinfo import ZoneInfo
 
 from app.config import settings
 from app.ingestion.base import RawArticle, SourceSpec, strip_html
+from app.ingestion.chromium_lock import chromium_slot
 from app.logging_conf import get_logger
 
 log = get_logger(__name__)
@@ -248,49 +249,68 @@ class FinancialJuiceSource:
         from playwright.async_api import async_playwright
 
         articles = []
-        async with async_playwright() as pw:
-            browser = await pw.chromium.launch(
-                headless=True,
-                args=["--no-sandbox",
-                      "--disable-blink-features=AutomationControlled"],
-            )
-            try:
-                # A thin read means the SPA had not hydrated. Reload once
-                # rather than returning a short list: a headline missed now is
-                # invisible forever, so retrying beats a silent gap.
-                for attempt in range(2):
-                    ctx = await browser.new_context(
-                        user_agent=settings.http_user_agent,
-                        viewport={"width": 1440, "height": 2400},
-                        locale="en-US",
-                        # Match the zone _parse_fj_time assumes, so the
-                        # rendered wall-clock and the parsed stamp agree.
-                        timezone_id=settings.display_timezone,
-                    )
-                    try:
-                        html = await self._render_and_scroll(ctx)
-                    finally:
-                        await ctx.close()
+        # Shared render slot. The calendar provider renders the same site, and
+        # two concurrent renders measured at ~1.0 GB RSS; the news feed has
+        # priority, so the calendar defers rather than competing for memory.
+        async with chromium_slot(
+                wait_seconds=settings.chromium_lock_wait_seconds) as slot:
+            if not slot:
+                log.warning("Financial Juice skipped this cycle: chromium "
+                            "busy with another render; deferring to the next "
+                            "news poll.")
+                return []
+            async with async_playwright() as pw:
+                return await self._collect(pw)
 
-                    articles = _extract(html, self.name, self.quality)
-                    log.info(
-                        "Financial Juice: extracted %d headlines (try %d)",
-                        len(articles), attempt + 1)
-                    if len(articles) >= self.MIN_HEADLINES:
-                        break
-                    if attempt == 0:
-                        log.warning(
-                            "Financial Juice: only %d headlines (< %d); "
-                            "reloading once in case the SPA loaded slowly",
-                            len(articles), self.MIN_HEADLINES)
+    async def _collect(self, pw):
+        """
+        Do the actual render. The caller already holds the shared Chromium
+        slot and has opened the Playwright context, so this method only drives
+        the page.
+        """
+        browser = await pw.chromium.launch(
+            headless=True,
+            args=["--no-sandbox",
+                  "--disable-blink-features=AutomationControlled"],
+        )
+        try:
+            # A thin read means the SPA had not hydrated. Reload once
+            # rather than returning a short list: a headline missed now is
+            # invisible forever, so retrying beats a silent gap.
+            articles = []
+            for attempt in range(2):
+                ctx = await browser.new_context(
+                    user_agent=settings.http_user_agent,
+                    viewport={"width": 1440, "height": 2400},
+                    locale="en-US",
+                    # Match the zone _parse_fj_time assumes, so the
+                    # rendered wall-clock and the parsed stamp agree.
+                    timezone_id=settings.display_timezone,
+                )
+                try:
+                    html = await self._render_and_scroll(ctx)
+                finally:
+                    await ctx.close()
 
-                # Second pass: the feed only carries a teaser (sometimes an
-                # empty one), so open the handful of session reports and
-                # store their full Sentiment/Docket/Speakers text.
-                if articles:
-                    await self._enrich_session_reports(browser, articles)
-            finally:
-                await browser.close()
+                articles = _extract(html, self.name, self.quality)
+                log.info(
+                    "Financial Juice: extracted %d headlines (try %d)",
+                    len(articles), attempt + 1)
+                if len(articles) >= self.MIN_HEADLINES:
+                    break
+                if attempt == 0:
+                    log.warning(
+                        "Financial Juice: only %d headlines (< %d); "
+                        "reloading once in case the SPA loaded slowly",
+                        len(articles), self.MIN_HEADLINES)
+
+            # Second pass: the feed only carries a teaser (sometimes an
+            # empty one), so open the handful of session reports and
+            # store their full Sentiment/Docket/Speakers text.
+            if articles:
+                await self._enrich_session_reports(browser, articles)
+        finally:
+            await browser.close()
 
         return articles
 
