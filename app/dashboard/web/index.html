@@ -64,8 +64,8 @@
 
    These override the older centred-diverging .bar rules below, which assumed
    <div class="b">/<div class="s"> children positioned from the midpoint. The
-   markup is now two plain spans sized to the split, and NO_BIAS greys both
-   sides so a withheld verdict reads as withheld. */
+   markup is now two plain spans sized to the split, and a NEUTRAL card (an
+   exact 50/50) greys both sides so a genuinely even split reads as even. */
 .mcard .bar{height:18px;border-radius:9px;display:flex;overflow:hidden;
             background:var(--neu);position:static}
 .mcard .bar::after{display:none}
@@ -102,14 +102,30 @@
                   font-variant-numeric:tabular-nums}
 .mcard .bpct .side.bull .fig{color:var(--bull)}
 .mcard .bpct .side.bear .fig{color:var(--bear)}
+/* Bias-flip tracking.
+   The DOMINANT side (the one over 50%) grows via a larger flex-grow, because
+   both boxes already share the row with flex:1 1 0 - so bumping one grow factor
+   is what makes it wider, and it stays fluid because the basis is still 0. The
+   transition is what makes a flip animate rather than snap.
+
+   Only SIZE and the extra line are affected. The colours above stay keyed to
+   the side and are untouched, so a flip re-weights the boxes without
+   restyling them, and the pair still fits inside the card at any width. */
+.mcard .bpct .side{transition:flex-grow .35s ease}
+.mcard .bpct .side.lead{flex-grow:1.45}
+/* Flip stamp sits under the percentage in the dominant box only. Dimmed and
+   small so it reads as a timestamp, not a second verdict. */
+.mcard .bpct .flipped{font-size:9.5px;letter-spacing:.2px;color:var(--dim);
+                      margin-top:1px;white-space:nowrap}
 /* No greyed variant. The boxes are permanently green/red, including on a
    NEUTRAL card, so all three asset cards read identically. Bitcoin in
    particular sits on the NO_BIAS boundary and flickered between coloured and
    grey as its confidence crossed the floor, which read as a broken card.
 
    The withheld call is still stated plainly where it belongs: the verdict chip
-   above stays grey and says NEUTRAL, and the split bar greys too. The boxes
-   answer "what is the split", never "which way does the engine lean". */
+   above stays grey and says NEUTRAL on an even split, and the split bar greys
+   too. The boxes answer "what is the split", and the chip above names whichever
+   side of that split holds more than half. */
 
 /* The verdict chip is the primary read: label + one percentage. */
 .mcard .verdict{font-size:15px;font-weight:700;letter-spacing:1.2px;
@@ -339,21 +355,42 @@ function w(v){return Math.max(0,Math.min(100,+v||0));}
    It is computed server-side by app/analysis/display.py from score + bias, and
    this function only chooses widths and colours from it.
 
-   The critical detail: the label is taken from `b.bias`, NEVER from the sign of
-   the score or the size of the percentage. The engine deliberately returns
-   NO_BIAS when its evidence is thin, and the score behind such a call is often
-   a small non-zero number - so a sign-driven label would paint a withheld
-   verdict green or red. Here NO_BIAS always renders grey NEUTRAL 50%. */
+   The label names the side holding MORE THAN HALF the split. NEUTRAL is not a
+   fallback for a withheld verdict - it appears only on a genuinely even 50/50,
+   so the chip can never sit above a visibly lopsided bar saying NEUTRAL. A side
+   the engine named is still never downgraded. */
+/* Python's round() breaks ties to the nearest EVEN number while Math.round
+   always rounds up, so a plain Math.round here would drift one point away from
+   the server's split on odd scores (score 1 -> server 50, JS 51). The fallback
+   has to reproduce the server's arithmetic exactly, so tie-breaking is spelled
+   out rather than delegated to Math.round. */
+function rnd(x){
+  var f=Math.floor(x), diff=x-f;
+  if(diff>0.5) return f+1;
+  if(diff<0.5) return f;
+  return (f%2===0)?f:f+1;
+}
 function disp(b){
   b=b||{};
   if(b.display && typeof b.display.pct==='number') return b.display;
   /* Fallback for a payload from a server that predates the display block.
-     Same arithmetic, and the label still comes from bias, not from the sign. */
+     Same rule as display.py: a named side wins, otherwise the side over 50%
+     is named, and only an exact 50/50 (or no usable bias) stays NEUTRAL. */
   var s=Math.max(-100,Math.min(100,+b.score||0));
-  var bull=w(50+s/2);
-  var bias=(b.bias||'NO_BIAS');
-  return {label:bias==='BULLISH'?'BULLISH':bias==='BEARISH'?'BEARISH':'NEUTRAL',
-          pct:bias==='BULLISH'?bull:bias==='BEARISH'?100-bull:50,
+  var bull=w(rnd(50+s/2));
+  var bias=(b.bias||'');
+  var label;
+  if(bias==='BULLISH'||bias==='BEARISH'){
+    label=bias;
+  }else if(bull>50){
+    label='BULLISH';
+  }else if(100-bull>50){
+    label='BEARISH';
+  }else{
+    label='NEUTRAL';
+  }
+  return {label:label,
+          pct:label==='BULLISH'?bull:label==='BEARISH'?100-bull:50,
           bull_pct:bull, bear_pct:100-bull};
 }
 function verdictClass(label){
@@ -370,6 +407,101 @@ function mbar(b){
     +'<span class="bu" style="width:'+w(d.bull_pct)+'%"></span>'
     +'<span class="be" style="width:'+w(d.bear_pct)+'%"></span></div>';
 }
+/* ---- bias flip tracking --------------------------------------------------
+   Records WHEN each asset last changed sides, so the card can say how long the
+   current lean has been standing ("Flipped 10:27 AM IST").
+
+   This is deliberately CLIENT-side state in localStorage rather than server
+   state. The backend keeps sentiment snapshots, not a "previous bias" concept,
+   and adding one would mean new columns plus a migration for a purely cosmetic
+   timestamp. localStorage also gives the required survive-a-refresh behaviour
+   for free, and it is per-browser which matches "what this user was watching".
+
+   The rules that matter:
+     * An exact 50/50 has NO dominant side, so it is ignored entirely - the
+       stored bias is kept and no flip is recorded. Otherwise a tie would wipe
+       the timestamp off an asset that has been leaning one way all morning.
+     * The FIRST time an asset is seen only records which side it is on. There
+       is nothing to have flipped FROM, so no timestamp is written - otherwise
+       every fresh page load would claim a flip.
+     * A repeated poll showing the same side never rewrites the stored time,
+       so the 180s refresh cannot reset the clock.
+
+   Timestamps are stored as ISO/UTC and converted to IST only at render time,
+   so a stored value is never ambiguous about its own timezone.
+
+   On a FIRST load there is nothing to have flipped from, so the server's
+   `bias_since_utc` - derived from snapshot history - is used as the starting
+   time instead of leaving the box blank. Without it a tab opened mid-session
+   shows no time at all for an asset that has plainly been leaning one way for
+   hours, which reads as a missing feature rather than an absence of data. */
+var FLIP_KEY='biasFlipState';
+var FLIP_STATE=loadFlipState();
+function loadFlipState(){
+  try{
+    var raw=localStorage.getItem(FLIP_KEY);
+    if(!raw) return {};
+    var o=JSON.parse(raw);
+    return (o&&typeof o==='object')?o:{};
+  }catch(e){
+    /* Corrupt JSON, or storage blocked entirely (private mode). Either way the
+       dashboard still works - it simply shows no flip time. */
+    return {};
+  }
+}
+function saveFlipState(){
+  try{ localStorage.setItem(FLIP_KEY,JSON.stringify(FLIP_STATE)); }catch(e){}
+}
+/* Which side currently owns the card, or '' when the split is exactly even. */
+function dominantSide(d){
+  if(d.bull_pct>50) return 'BULLISH';
+  if(d.bear_pct>50) return 'BEARISH';
+  return '';
+}
+/* Fold one asset's current split into the stored state.
+   `seed` is the server's "this side started at ..." from snapshot history.
+   Returns {side, at} where side is the dominant side to highlight ('' on a
+   tie, so neither box grows) and at is an ISO stamp or null. */
+function trackFlip(asset,side,seed){
+  if(!asset) return {side:'',at:null};
+  var prev=FLIP_STATE[asset]||{};
+  /* A tie changes nothing: keep the previous bias AND its timestamp. */
+  if(!side) return {side:'',at:prev.at||null};
+  if(!prev.bias){
+    /* First sighting. There is nothing to have flipped FROM, so a real flip
+       time is never invented here - but the server can tell us how long the
+       current side has held, and that is far more useful than a blank. */
+    FLIP_STATE[asset]={bias:side,at:seed||null};
+    saveFlipState();
+    return {side:side,at:FLIP_STATE[asset].at};
+  }
+  if(prev.bias!==side){
+    /* A real change: stamp it now and keep only the newest. The opposite box
+       reads prev.at from this same record, so it automatically loses the time. */
+    FLIP_STATE[asset]={bias:side,at:new Date().toISOString()};
+    saveFlipState();
+    return {side:side,at:FLIP_STATE[asset].at};
+  }
+  /* Same side as last time - the 180s poll lands here. The stored time is left
+     alone, and a record still holding null is topped up from the server so a
+     tab opened before this existed does not stay permanently blank. */
+  if(!prev.at && seed){
+    prev.at=seed;
+    FLIP_STATE[asset]=prev;
+    saveFlipState();
+  }
+  return {side:side,at:prev.at||null};
+}
+/* ISO/UTC -> "10:27 AM IST". Fixed to Asia/Kolkata regardless of the browser's
+   own timezone, which is the whole point of pinning timeZone here. */
+function flipTimeLabel(iso){
+  if(!iso) return '';
+  try{
+    var t=new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Kolkata',
+      hour:'2-digit',minute:'2-digit',hour12:true}).format(new Date(iso));
+    return 'Flipped '+t.replace(/\s+/g,' ').trim()+' IST';
+  }catch(e){ return ''; }
+}
 /* BOTH sides as boxed figures, printed directly UNDER the bar line.
    One green box for the bullish percentage, one red box for the bearish one -
    the "old dashboard" split read, at headline size.
@@ -379,15 +511,26 @@ function mbar(b){
    card. Greying them for NO_BIAS was tried and reverted - it made the boxes
    flicker as a borderline asset crossed the floor, and read as a broken card.
 
-   The withheld call is still visible: the verdict chip above and the split bar
-   both grey and say NEUTRAL. These boxes only report the split. */
-function msplit(b){
+   The withheld call is still visible: the verdict chip above greys and says
+   NEUTRAL. NEUTRAL now means one thing only - a 50/50 split - because a side
+   over 50% is named at the top too. These boxes only report the split. */
+function msplit(b,asset){
   var d=disp(b);
+  /* Fold this asset's current split into the flip state, then let the DOMINANT
+     side carry the timestamp and the extra width. On a tie neither box is
+     marked, which is the honest rendering: there is no side to lean on.
+     b.bias_since_utc seeds the clock on a first load / repairs a null one. */
+  var f=trackFlip(asset||(b&&b.asset),dominantSide(d),b&&b.bias_since_utc);
+  var bullLead=(f.side==='BULLISH'), bearLead=(f.side==='BEARISH');
+  var bullAt=bullLead?flipTimeLabel(f.at):'';
+  var bearAt=bearLead?flipTimeLabel(f.at):'';
   return '<div class="bpct">'
-    +'<div class="side bull"><span class="cap">BULLISH</span>'
-    +'<span class="fig">'+Math.round(d.bull_pct)+'%</span></div>'
-    +'<div class="side bear"><span class="cap">BEARISH</span>'
-    +'<span class="fig">'+Math.round(d.bear_pct)+'%</span></div></div>';
+    +'<div class="side bull'+(bullLead?' lead':'')+'"><span class="cap">BULLISH</span>'
+    +'<span class="fig">'+Math.round(d.bull_pct)+'%</span>'
+    +(bullAt?('<span class="flipped">'+esc(bullAt)+'</span>'):'')+'</div>'
+    +'<div class="side bear'+(bearLead?' lead':'')+'"><span class="cap">BEARISH</span>'
+    +'<span class="fig">'+Math.round(d.bear_pct)+'%</span>'
+    +(bearAt?('<span class="flipped">'+esc(bearAt)+'</span>'):'')+'</div></div>';
 }
 function sessionChain(){
   if(!DATA) return '\u2014';
@@ -425,7 +568,9 @@ function prepCard(a){
     +'</div>'
     +'<div class="msub">expected / forward-looking setup</div>'
     +mbar(b)
-    +msplit(b)
+    /* Second arg keys the flip tracking to this asset, so every card keeps its
+       own independent flip time. */
+    +msplit(b,a.symbol)
     +'<div class="mdrv">'
     +mnote('bull','BULLISH DRIVERS',b.bull_drivers,3)
     +mnote('bear','BEARISH DRIVERS',b.bear_drivers,3)+'</div>'

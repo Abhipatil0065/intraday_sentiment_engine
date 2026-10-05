@@ -12,22 +12,29 @@ actually wants: a direction and a percentage.
 WHAT THIS IS NOT
 ----------------
 It changes NOTHING about how a verdict is reached. It does not read
-confidence, it does not apply a threshold, and it cannot turn NO_BIAS into a
-direction. Scoring, the NO_BIAS gate, the transmission map and the decision log
-are all untouched; this is a pure projection applied at render time.
+confidence, it does not apply a threshold, and it does not feed back into
+scoring: the engine's own ``bias`` is still stored, logged and reported
+unchanged. Scoring, the NO_BIAS gate, the transmission map and the decision log
+are all untouched; this is a pure projection applied at render time. What it may
+do is NAME a side the engine's own split already points at, so the label and the
+bar beneath it tell one story rather than two.
 
 THE ONE RULE THAT MATTERS
 -------------------------
-``label`` is derived ONLY from the engine's ``bias`` - never from the sign of
-the percentage. That is why the mapping is written as an explicit lookup on
-``bias`` rather than as ``label = 'BULLISH' if pct > 50 else 'BEARISH'``.
+The top label names the side that owns MORE THAN HALF the split, and NEUTRAL is
+reserved for a genuinely even 50/50. That is a deliberate change from the earlier
+rule, which derived the label purely from the engine's ``bias`` and so printed a
+grey NEUTRAL 50% over a visibly lopsided bar - a withheld call the reader could
+see the evidence for and could not act on. The split is already the engine's own
+number (``bull_pct = 50 + score/2``), so following it does not invent a signal: it
+stops the display from contradicting the bar printed directly beneath it.
 
-The reason is a specific and very plausible bug: the engine deliberately
-publishes NO_BIAS for weak evidence, and the score behind it is often a small
-non-zero number. A display rule that keys off the sign would show "BULLISH 51%"
-for an asset the engine explicitly declined to call. The display would then
-contradict the engine and the reader would have no way to tell which was wrong.
-Here, NO_BIAS renders as a flat grey NEUTRAL 50% no matter what the score says.
+Two guards survive that relaxation, because a bare sign still is not a verdict:
+
+* A side the engine NAMED is never downgraded. BULLISH/BEARISH keep their label
+  even at an even split, so the display can never contradict an explicit call.
+* A missing or unrecognised ``bias`` fails safe to NEUTRAL instead of being
+  inferred from the raw number, so a malformed payload is never guessed at.
 """
 
 from __future__ import annotations
@@ -45,17 +52,40 @@ _LABEL_FOR_BIAS = {
 }
 
 
-def _bias_name(bias) -> str:
-    """Normalise Bias enum / str / None to the engine's own vocabulary."""
+def _bias_name(bias) -> str | None:
+    """
+    Normalise Bias enum / str to the engine's own vocabulary.
+
+    Returns ``None`` for anything unrecognised, which is deliberately NOT the
+    same answer as a genuine ``NO_BIAS``. A real NO_BIAS is a decision the
+    engine made and is reported honestly; a missing or malformed value is an
+    absent decision, and resolving it from the score would be guessing. The
+    caller renders ``None`` as NEUTRAL and leaves it there.
+    """
     if bias is None:
-        return NO_BIAS
+        return None
     value = getattr(bias, "value", bias)
     text = str(value).strip().upper()
-    return text if text in _LABEL_FOR_BIAS else NO_BIAS
+    return text if text in _LABEL_FOR_BIAS else None
 
 
 def _clamp_pct(value: int) -> int:
     return max(0, min(100, value))
+
+
+def _leading_side(bull_pct: int) -> str:
+    """
+    The side holding more than half the split, or NO_BIAS on an exact 50/50.
+
+    ``bear_pct`` is always ``100 - bull_pct``, so a bull figure above 50 makes a
+    bear figure above 50 impossible and vice versa - the two cases cannot both
+    fire, and an even split falls through to NO_BIAS.
+    """
+    if bull_pct > 50:
+        return BULLISH
+    if 100 - bull_pct > 50:
+        return BEARISH
+    return NO_BIAS
 
 
 def to_display(score: float, bias) -> dict:
@@ -65,17 +95,17 @@ def to_display(score: float, bias) -> dict:
     ``bull_pct = round(50 + score / 2)`` and ``bear_pct = 100 - bull_pct``, so
     the two always sum to exactly 100 and neither can leave 0..100.
 
-    ``pct`` is the headline number: the side the engine named, or a flat 50 for
-    NO_BIAS. Because ``bull_pct`` is derived from the score and ``pct`` is
-    derived from ``bias``, the two can legitimately disagree in strength - and
-    that is deliberate. A NO_BIAS block still shows its real bull/bear split in
-    the thin bar, so the reader can see how close it came to calling a side,
-    while the label stays honest.
+    ``pct`` is the headline number: the percentage of the side that is actually
+    named, so the chip and the bar beneath it can never tell the reader different
+    stories. A side holding more than half the split is named at the top even
+    when the engine's bias withheld a verdict - the reader is shown the same
+    lean the bar already draws. NEUTRAL survives only where there is genuinely
+    no side to name, i.e. an exact 50/50 split (or no usable bias at all).
 
     Args:
         score: the engine's signed score, nominally -100..+100.
-        bias: Bias enum or string; anything unrecognised is treated as NO_BIAS,
-            which is the safe direction to fail in.
+        bias: Bias enum or string; anything unrecognised is treated as a missing
+            verdict and renders NEUTRAL, which is the safe direction to fail in.
 
     Returns:
         ``{"label", "pct", "bull_pct", "bear_pct"}``.
@@ -88,7 +118,6 @@ def to_display(score: float, bias) -> dict:
         numeric = 0.0  # NaN / inf must not propagate into the UI
 
     name = _bias_name(bias)
-    label = _LABEL_FOR_BIAS[name]
 
     # A score outside the nominal range would push the split out of 0..100 and
     # break the 100-total invariant, so it is clamped before the arithmetic.
@@ -96,12 +125,24 @@ def to_display(score: float, bias) -> dict:
     bear_pct = 100 - bull_pct
 
     if name == BULLISH:
-        pct = bull_pct
+        # An explicit call is never downgraded, even at an even split.
+        label, pct = BULLISH, bull_pct
     elif name == BEARISH:
-        pct = bear_pct
+        label, pct = BEARISH, bear_pct
+    elif name == NO_BIAS:
+        # A withheld call still has to be readable: whichever side holds more
+        # than half the split is what the bar shows, so that is what the chip
+        # names. Only an exact 50/50 has no side to name and stays NEUTRAL.
+        lead = _leading_side(bull_pct)
+        if lead == BULLISH:
+            label, pct = BULLISH, bull_pct
+        elif lead == BEARISH:
+            label, pct = BEARISH, bear_pct
+        else:
+            label, pct = _LABEL_FOR_BIAS[NO_BIAS], 50
     else:
-        # NO_BIAS always renders neutral, even at a positive or negative score.
-        pct = 50
+        # No usable bias at all: fail safe to NEUTRAL rather than inventing one.
+        label, pct = _LABEL_FOR_BIAS[NO_BIAS], 50
 
     return {
         "label": label,

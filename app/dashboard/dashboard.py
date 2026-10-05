@@ -39,8 +39,8 @@ def bar_figure(b: dict) -> go.Figure:
 
     Widths come from the same `display` block the headline percentage uses, so
     the bar and the number are two views of one value and cannot disagree. The
-    label still comes from the engine's `bias` - never from the sign of the
-    split - so a NO_BIAS block renders as an even grey bar.
+    label names whichever side holds more than half the split, so an even split
+    is the only case that renders as an even grey bar.
     """
     d = display.to_display(b.get("score", 0.0), b.get("bias", "NO_BIAS"))
     colour = {"BULLISH": "#2ea043", "BEARISH": "#f85149"}.get(d["label"], "#6e7681")
@@ -64,8 +64,8 @@ def render_block(b: dict) -> None:
         st.plotly_chart(bar_figure(b), use_container_width=True,
                         config={"displayModeBar": False})
     with c2:
-        # Label comes from the engine's bias, never from the percentage's sign,
-        # so the display cannot contradict a NO_BIAS verdict.
+        # Label names the side holding more than half the split, so the chip
+        # cannot contradict the bar; NEUTRAL survives only on a 50/50.
         d = display.to_display(b.get("score", 0.0), b.get("bias", "NO_BIAS"))
         st.markdown(f"**Verdict:** `{d['label']} {d['pct']}%`")
         # Both sides as boxed figures under the bar - the old-dashboard read:

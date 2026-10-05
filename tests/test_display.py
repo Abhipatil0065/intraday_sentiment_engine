@@ -6,8 +6,9 @@ score and confidence. These tests pin the three properties that make that
 honest:
 
   1. The split always totals 100 (a bar that doesn't add up is a bug).
-  2. NO_BIAS never renders as BULLISH or BEARISH, whatever the score.
-  3. A named side never shows a percentage below 50.
+  2. The chip names the side holding more than half the split, and NEUTRAL is
+     reserved for a genuinely even 50/50.
+  3. A named side never shows a percentage below 50, and is never downgraded.
 
 Plus a guard that the API and the HTML still expose score/confidence even though
 the UI no longer shows them - the decision log and tools/hitrate_report.py read
@@ -52,33 +53,74 @@ def test_split_follows_the_score_direction():
     assert to_display(-80, "BEARISH")["bear_pct"] > \
         to_display(-80, "BEARISH")["bull_pct"]
 # --------------------------------------------------------------------------
-# 2. NO_BIAS is never promoted to a side
+# 2. The chip names the side holding more than half the split
 # --------------------------------------------------------------------------
-@pytest.mark.parametrize("score", [-40, -1, 0, 1, 3, 40])
-def test_no_bias_always_renders_neutral(score):
-    """Required case: NO_BIAS renders NEUTRAL, including at score > 0."""
-    d = to_display(score, "NO_BIAS")
-    assert d["label"] == "NEUTRAL"
-    assert d["label"] not in ("BULLISH", "BEARISH")
-    assert d["pct"] == 50
-
-
-def test_no_bias_with_a_positive_score_still_does_not_bull():
+@pytest.mark.parametrize("score, expected, expected_pct", [
+    (40, "BULLISH", 70),
+    (3, "BULLISH", 52),
+    (1, "NEUTRAL", 50),   # rounds to an even 50/50 - no side to name
+    (0, "NEUTRAL", 50),
+    (-1, "NEUTRAL", 50),
+    (-3, "BEARISH", 52),
+    (-40, "BEARISH", 70),
+])
+def test_label_names_the_side_over_fifty_percent(score, expected, expected_pct):
     """
-    The specific bug this guards: the engine withholds a verdict for thin
-    evidence, and the score behind it is often slightly positive. A display
-    rule keyed off the sign would paint this green.
+    Required case: the top of the card must never read NEUTRAL while one side
+    owns more than half the split.
+
+    That is the bug this change fixes. A 52/48 bar was being drawn directly
+    beneath a grey NEUTRAL chip, so the card withheld a side the reader could
+    plainly see - and NEUTRAL then meant "a call exists but is too weak to
+    print", which is not a direction anyone can trade off. NEUTRAL now means
+    exactly one thing: an even 50/50 split.
+    """
+    d = to_display(score, "NO_BIAS")
+    assert d["label"] == expected, (
+        f"score={score} split {d['bull_pct']}/{d['bear_pct']} labelled "
+        f"{d['label']}, expected {expected}")
+    assert d["pct"] == expected_pct
+
+    # The chip can never contradict the bar printed beneath it.
+    if expected == "BULLISH":
+        assert d["pct"] == d["bull_pct"] > 50
+    elif expected == "BEARISH":
+        assert d["pct"] == d["bear_pct"] > 50
+    else:
+        assert (d["bull_pct"], d["bear_pct"]) == (50, 50)
+
+
+def test_thin_lean_is_named_rather_than_withheld():
+    """
+    The borderline case that matters in practice: score=3 is exactly where a
+    near-floor asset such as bitcoin sits. The bar reads 52/48, so the chip
+    names BULLISH 52% - the reader is given the same lean the bar already shows
+    instead of a withheld call they cannot act on.
     """
     d = to_display(3, "NO_BIAS")
-    assert d["label"] == "NEUTRAL"
-    assert d["pct"] == 50
-    # The underlying split may still lean bullish - that is the engine's
-    # number and is shown honestly in the bar - but the label does not lie.
-    assert d["bull_pct"] == 52
+    assert (d["label"], d["pct"]) == ("BULLISH", 52)
+    assert (d["bull_pct"], d["bear_pct"]) == (52, 48)
+
+
+def test_an_explicitly_named_side_is_never_downgraded():
+    """
+    Following the split must not weaken an explicit engine call. BULLISH/BEARISH
+    keep their label even at an even split, so the display can never contradict
+    a verdict the engine did make.
+    """
+    assert to_display(0, "BULLISH")["label"] == "BULLISH"
+    assert to_display(0, "BEARISH")["label"] == "BEARISH"
 
 
 def test_unrecognised_bias_fails_safe_to_neutral():
-    """Anything unknown must render NEUTRAL, never a guessed side."""
+    """
+    An absent or malformed verdict must NOT be resolved from the score.
+
+    This is the one place the "follow the split" rule is deliberately not
+    applied. A real NO_BIAS is a decision the engine made and is reported
+    honestly; garbage in the payload is no decision at all, and inferring a side
+    from a raw number off it would be inventing a signal out of a bug.
+    """
     for value in (None, "", "MAYBE", "bullish-ish", 42, object()):
         assert to_display(10, value)["label"] == "NEUTRAL"
 
@@ -89,7 +131,8 @@ def test_bias_accepts_enum_and_string():
 
     assert to_display(10, Bias.BULLISH)["label"] == "BULLISH"
     assert to_display(10, "BULLISH")["label"] == "BULLISH"
-    assert to_display(10, Bias.NO_BIAS)["label"] == "NEUTRAL"
+    # The enum and its string form must resolve identically through the split.
+    assert to_display(10, Bias.NO_BIAS) == to_display(10, "NO_BIAS")
     assert to_display(80, "BULLISH")["bull_pct"] > \
         to_display(80, "BULLISH")["bear_pct"]
     assert to_display(0, "NO_BIAS")["bull_pct"] == 50
@@ -183,6 +226,162 @@ def test_html_renders_the_verdict_from_the_display_block():
     assert "d.bull_pct" in html and "d.bear_pct" in html
 
 
+def test_js_fallback_mirrors_the_python_rule():
+    """
+    disp()'s fallback path - used when a payload predates the display block -
+    must apply the same rule, or the same card renders differently depending on
+    which server answered it. NEUTRAL may only be produced by the leftover case
+    of an even 50/50, never by a withheld verdict.
+    """
+    html = _html()
+    disp_js = html.split("function disp(", 1)[1].split("function verdictClass", 1)[0]
+    # A named side still wins outright.
+    assert "bias==='BULLISH'" in disp_js and "bias==='BEARISH'" in disp_js
+    # Otherwise the side past 50% is what gets named, both ways round.
+    assert "bull>50" in disp_js and "100-bull>50" in disp_js
+    # The label branches on the split, so a plain "NO_BIAS -> NEUTRAL" shortcut
+    # (the old rule) must not reappear in any form.
+    assert "NO_BIAS" not in disp_js
+
+
+def test_js_fallback_matches_python_split_arithmetic():
+    """
+    The fallback recomputes the split, and JavaScript rounds half away from zero
+    where Python rounds half to even. Using Math.round directly would put the
+    two one point apart on odd scores (server 50, JS 51), so the tie-break is
+    spelled out in rnd() instead.
+    """
+    html = _html()
+    rnd_js = html.split("function rnd(", 1)[1].split("function disp(", 1)[0]
+    assert "diff>0.5" in rnd_js and "diff<0.5" in rnd_js, (
+        "rnd() must branch on the fractional part, not delegate to Math.round")
+    assert "Math.round" not in rnd_js, (
+        "Math.round ties upward and would drift from the server's split")
+    disp_js = html.split("function disp(", 1)[1].split("function verdictClass", 1)[0]
+    assert "rnd(50+s/2)" in disp_js, (
+        "the fallback must split the score with the shared rnd() helper")
+
+
+def test_bias_flip_tracking_is_wired_up():
+    """
+    Each card must be able to say when its bias last changed sides.
+
+    The state is client-side (localStorage) rather than server-side: the backend
+    has no "previous bias" concept, and adding one would mean new columns plus a
+    migration for a cosmetic timestamp. localStorage also gives
+    survive-a-refresh for free.
+    """
+    html = _html()
+    assert "'biasFlipState'" in html, "the storage key must be the agreed name"
+    assert "function loadFlipState()" in html
+    assert "function saveFlipState()" in html
+    assert "function trackFlip(" in html
+    # Guarded on both sides: corrupt JSON must not break the dashboard.
+    load = html.split("function loadFlipState()", 1)[1].split("function saveFlipState", 1)[0]
+    assert "try{" in load and "catch" in load
+
+
+def test_flip_time_is_always_rendered_in_ist():
+    """
+    The stamp must be IST regardless of where the browser or server is, and in
+    12-hour form with an AM/PM marker.
+    """
+    html = _html()
+    fn = html.split("function flipTimeLabel(", 1)[1].split("function msplit(", 1)[0]
+    assert "Asia/Kolkata" in fn, "the timezone must be pinned, not local"
+    assert "hour12:true" in fn
+    assert "hour:'2-digit'" in fn and "minute:'2-digit'" in fn
+    assert "IST" in fn
+
+
+def test_a_tie_never_records_a_flip():
+    """
+    An exact 50/50 has no dominant side, so it must leave the stored bias and
+    its timestamp untouched - otherwise a tie would wipe the flip time off an
+    asset that has been leaning one way all morning.
+    """
+    html = _html()
+    fn = html.split("function trackFlip(", 1)[1].split("function flipTimeLabel", 1)[0]
+    # The tie branch returns the previous timestamp rather than clearing it.
+    tie = fn.split("if(!side)", 1)[1].split("}", 1)[0]
+    assert "prev.at" in tie, "a tie must keep the previous flip time"
+
+
+def test_first_sighting_uses_the_server_history_not_a_blank():
+    """
+    There is nothing to have flipped FROM on first load, so a real flip time must
+    never be invented - but the box must not be left blank either. The server's
+    `bias_since_utc` (derived from snapshot history) seeds the clock, and only
+    that: it is never replaced by `new Date()`, which would claim a flip that
+    did not happen while the reader was watching.
+    """
+    html = _html()
+    fn = html.split("function trackFlip(", 1)[1].split("function flipTimeLabel", 1)[0]
+    first = fn.split("if(!prev.bias)", 1)[1].split("if(prev.bias!==side)", 1)[0]
+    assert "seed" in first, "the first sighting must take the server's timestamp"
+    # The stamping branch is a different one - guard that first-sighting cannot
+    # reach it by reaching for the wall clock.
+    assert "new Date().toISOString()" not in first, (
+        "the first sighting must never stamp the current time as a flip")
+
+
+def test_a_null_record_is_topped_up_from_the_server():
+    """
+    A tab opened before this feature existed holds `at: null` forever otherwise,
+    because the bias never changes and the first-sighting branch never re-runs.
+    """
+    html = _html()
+    fn = html.split("function trackFlip(", 1)[1].split("function flipTimeLabel", 1)[0]
+    backfill = fn.split("Same side as last time", 1)[1]
+    assert "prev.at" in backfill and "seed" in backfill, (
+        "a null timestamp must be repaired from the server's value")
+
+
+def test_backend_publishes_when_the_current_side_began():
+    """
+    The server must derive "this side started at ..." from snapshot history so a
+    fresh browser has something truthful to show.
+    """
+    from app.main import _bias_since, _block
+    from app.database import init_db, session_scope
+
+    init_db()
+    with session_scope() as s:
+        block = _block(s, "XAUUSD", "MARKET_PREP")
+        assert "bias_since_utc" in block, (
+            "the block must carry the stance start time for the card")
+        # Either an ISO stamp or None - never a fabricated value.
+        assert block["bias_since_utc"] is None or isinstance(
+            block["bias_since_utc"], str)
+        # An even split has no dominant side, so it can have no stance date.
+        assert _bias_since(s, "XAUUSD", "MARKET_PREP", 0.0) is None
+
+
+def test_the_dominant_box_grows_and_animates():
+    """
+    The box holding the flip time is the wider one. Only the WIDTH changes - the
+    green/red colouring stays keyed to the side.
+    """
+    html = _html()
+    assert ".mcard .bpct .side.lead" in html
+    assert "flex-grow" in html
+    assert "transition:flex-grow" in html, "a flip must animate, not snap"
+    msplit = html.split("function msplit(", 1)[1].split("function sessionChain", 1)[0]
+    assert "' lead'" in msplit, "the leading box must get the lead class"
+
+
+def test_flip_markup_only_lands_in_the_dominant_box():
+    """
+    Exactly one box may carry the stamp, and it must be the dominant side: the
+    opposite box loses the time the moment a new flip is recorded.
+    """
+    msplit = _html().split("function msplit(", 1)[1].split("function sessionChain", 1)[0]
+    assert "bullAt?" in msplit and "bearAt?" in msplit
+    # Each side's stamp is gated on its own lead flag, never on the other's.
+    assert "bullLead?flipTimeLabel" in msplit
+    assert "bearLead?flipTimeLabel" in msplit
+
+
 def test_html_shows_both_side_percentages_under_the_bar():
     """
     The card must print BOTH the bullish and the bearish figure beneath the
@@ -193,10 +392,11 @@ def test_html_shows_both_side_percentages_under_the_bar():
     assert "BULLISH" in html and "BEARISH" in html
     # Both figures come from the display block, so they match the bar exactly.
     assert "d.bull_pct" in html and "d.bear_pct" in html
-    # prepCard must actually call it, directly after the bar.
+    # prepCard must actually call it, directly after the bar. msplit now also
+    # takes the asset symbol so each card keys its own flip time.
     card = html.split("function prepCard(", 1)[1].split("function renderPrepStrip", 1)[0]
-    assert "mbar(b)" in card and "msplit(b)" in card
-    assert card.index("mbar(b)") < card.index("msplit(b)"), (
+    assert "mbar(b)" in card and "msplit(b," in card
+    assert card.index("mbar(b)") < card.index("msplit(b,"), (
         "the two-sided numbers must sit BELOW the bar line")
 
 
@@ -294,8 +494,10 @@ def test_each_side_is_its_own_coloured_box():
     side" would recolour it green on a bearish card and lose the meaning.
     """
     html = _html()
-    assert 'class="side bull"' in html
-    assert 'class="side bear"' in html
+    # The markup now appends a conditional ' lead' class for the dominant
+    # side, so match the prefix rather than a closed class attribute.
+    assert 'class="side bull' in html
+    assert 'class="side bear' in html
     # Distinct styling rules for each box, on the bull/bear pair of colours.
     assert ".mcard .bpct .side.bull" in html
     assert ".mcard .bpct .side.bear" in html
@@ -349,16 +551,21 @@ def test_box_figures_are_larger_than_caption_text():
         "the caption must be smaller than the figure it labels")
 
 
-def test_two_sided_numbers_never_contradict_a_no_bias_verdict():
+def test_the_two_sided_numbers_agree_with_the_chip():
     """
-    A NEUTRAL card still prints both figures (they describe the engine's split)
-    but must not be colour-coded as a direction, and the label stays NEUTRAL.
+    The card prints BOTH figures and the chip names ONE of them. They must be
+    two views of the same split: the chip's figure is always the side it names,
+    so a reader who compares the green box against the top line sees a match.
     """
-    d = to_display(3, "NO_BIAS")
-    assert d["label"] == "NEUTRAL"
-    # The numbers are real and still total 100 - just not directional.
-    assert d["bull_pct"] + d["bear_pct"] == 100
-    assert (d["bull_pct"], d["bear_pct"]) == (52, 48)
+    for score in (-40, -3, 3, 40):
+        d = to_display(score, "NO_BIAS")
+        assert d["bull_pct"] + d["bear_pct"] == 100
+        if d["label"] == "BULLISH":
+            assert d["pct"] == d["bull_pct"]
+        elif d["label"] == "BEARISH":
+            assert d["pct"] == d["bear_pct"]
+        else:
+            assert d["pct"] == 50
 
 
 def test_html_keeps_the_explaining_fields():

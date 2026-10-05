@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import asynccontextmanager
+from datetime import timezone
 from pathlib import Path
 from typing import Optional
 
@@ -120,6 +121,58 @@ def _latest_snapshot(session, asset: str, scope: str):
     )
 
 
+def _bias_since(session, asset: str, scope: str, score: float) -> Optional[str]:
+    """
+    When the current dominant side began, as an ISO/UTC string (or None).
+
+    The dashboard's flip stamp is client-side, so a browser that opens the page
+    mid-session has never seen a flip happen and shows no time at all - even for
+    an asset that has clearly been leaning one way for hours. This walks the
+    append-only snapshot history backwards until it reaches the opposite side and
+    returns the start of the current run, which is exactly what the user wants to
+    read: "this stance has held since ...".
+
+    Zero scores are skipped rather than treated as a change, matching the display
+    contract where an even 50/50 has no dominant side to flip.
+
+    Bounded by _BIAS_LOOKBACK: an asset that has held one side for longer than
+    that many snapshots reports the oldest one it has, which is the earliest
+    moment the engine can actually prove. It never invents a time.
+    """
+    from app.models.db_models import SentimentSnapshot
+
+    if not score:                      # even split -> no dominant side
+        return None
+    side = 1 if score > 0 else -1
+
+    rows = session.execute(
+        select(SentimentSnapshot.computed_at, SentimentSnapshot.score)
+        .where(SentimentSnapshot.asset == asset)
+        .where(SentimentSnapshot.scope == scope)
+        .order_by(SentimentSnapshot.computed_at.desc())
+        .limit(_BIAS_LOOKBACK)
+    ).all()
+
+    started = None
+    for computed_at, s in rows:
+        if s and (1 if s > 0 else -1) == side:
+            started = computed_at      # keep walking back over the same side
+        else:
+            break                      # reached the opposite side - stop
+    if started is None:
+        return None
+    # SQLite hands back naive datetimes; these were written as UTC.
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    return started.isoformat()
+
+
+# How far back the "current side started" search looks. 500 snapshots is far
+# more than a trading day at a 180s poll, so this only ever bites on a feed that
+# has held one side for days.
+_BIAS_LOOKBACK = 500
+
+
 def _block(session, asset: str, scope: str) -> dict:
     """
     One sentiment block, or an explicit empty state (never invented data).
@@ -136,6 +189,8 @@ def _block(session, asset: str, scope: str) -> dict:
             "asset": asset, "scope": scope,
             "score": 0.0, "confidence": 0.0, "bias": "NO_BIAS",
             "display": to_display(0.0, "NO_BIAS"),
+            # No snapshots at all, so there is no stance to date.
+            "bias_since_utc": None,
             "mode": "heuristic", "delta_60m": 0.0,
             "event_risk": False, "event_risk_note": "",
             "drivers": [], "bull_drivers": [], "bear_drivers": [], "conflict": None,
@@ -154,6 +209,10 @@ def _block(session, asset: str, scope: str) -> dict:
         "confidence": snap.confidence,
         "bias": snap.bias,
         "display": to_display(snap.score, snap.bias),
+        # When this dominant side began, from snapshot history. The card uses it
+        # to show "since ..." on a fresh page load, before the browser has
+        # witnessed a flip of its own.
+        "bias_since_utc": _bias_since(session, asset, scope, snap.score),
         "mode": snap.mode or "heuristic",
         "delta_60m": snap.delta_60m,
         "event_risk": bool(snap.event_risk),
