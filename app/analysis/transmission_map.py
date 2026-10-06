@@ -36,7 +36,6 @@ from pathlib import Path
 from typing import Optional
 
 from app.analysis.text_match import contains_phrase, contains_plural
-from app.config import settings
 from app.models.enums import Asset, Direction, NewsCategory
 
 # How much raw cue weight counts as a "full" magnitude. Set above the weight of
@@ -543,19 +542,25 @@ def resolve(text: str, category: NewsCategory,
     When several mechanisms are present they are SUMMED per asset, which is how
     "hawkish Fed amid recession fears" lands between the two readings instead
     of being resolved by whichever keyword happened to appear first.
+
+    Task 6: each asset has ranked drivers. The driver rank weight (from
+    DRIVER_RANKINGS in config) scales the contribution - top driver = 1.0,
+    second = 0.9, etc. Applied ONCE in the weight path.
     """
     from app.analysis import text_quality as tq
     from app.analysis.event_polarity import direct_asset_moves
     from app.analysis.text_quality import neutralise_on_negation
+    from app.config import DRIVER_RANKINGS
 
     event_types = detect_event_types(text, category)
 
-    priced_in_flag = tq.is_price_action(text)
+    # NEWS-ONLY bias (Task 2): the price-action flag no longer damps the
+    # scale. Field `priced_in` stays on the schema but is a constant False
+    # and never enters any weight/score math.
+    priced_in_flag = False
     if cue_magnitude is None:
         cue_magnitude = measure_cue_magnitude(text)
     scale = max(0.0, min(1.5, float(cue_magnitude)))
-    if priced_in_flag:
-        scale *= float(settings.price_action_weight)
 
     # A headline naming the asset's OWN price ("gold rose") is a direct
     # statement about that asset. It is resolved FIRST and carried through the
@@ -571,8 +576,8 @@ def resolve(text: str, category: NewsCategory,
             direction = (Direction.NEUTRAL if sign == 0
                          else Direction.BULLISH if sign > 0
                          else Direction.BEARISH)
-            # Same priced-in rule as the mechanism path below.
-            base = 0.0 if priced_in_flag else 1.0
+            # NEWS-ONLY bias (Task 2): no price-action damping; constant flag.
+            base = 1.0
             out[asset] = ResolvedImpact(
                 asset, direction, sign, base if sign else 0.0, None, scale,
                 priced_in_flag)
@@ -597,7 +602,9 @@ def resolve(text: str, category: NewsCategory,
                     continue  # a flow with no direction is not a signal
             # Earlier (more specific) mechanisms weigh more.
             specificity = 1.0 / (1.0 + 0.5 * index)
-            contribution = sign * entry.magnitude * scale * specificity
+            # Task 6: apply per-asset driver rank weight (top driver = 1.0).
+            driver_rank = DRIVER_RANKINGS.get(asset.name, {}).get(event_type.value, 0.3)
+            contribution = sign * entry.magnitude * scale * specificity * driver_rank
             signed += contribution
             if entry.magnitude > best_weight:
                 best_weight = entry.magnitude
@@ -623,11 +630,8 @@ def resolve(text: str, category: NewsCategory,
     for name, asset_sign in direct.items():
         asset = Asset(name)
         direction = Direction.BULLISH if asset_sign > 0 else Direction.BEARISH
-        # A headline that is PURE price action ("Gold plunges 2%") reports what
-        # already happened, so it must stay damped - the same rule every other
-        # mechanism follows. Without this, a direct-asset sentence would be the
-        # only path that ignored priced-in status.
-        floor = 0.0 if priced_in_flag else 1.0
+        # NEWS-ONLY bias (Task 2): no price-action damping; constant flag.
+        floor = 1.0
         out[asset] = ResolvedImpact(
             asset, direction, asset_sign, max(floor, out[asset].magnitude),
             out[asset].dominant, scale, priced_in_flag)

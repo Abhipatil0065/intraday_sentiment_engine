@@ -18,6 +18,7 @@ from app.analysis.heuristics import (
 )
 from app.analysis.text_match import (
     contains_cue,
+    contains_phrase,
     cue_hits,
     keyword_position,
 )
@@ -213,6 +214,8 @@ def detect_direction(text: str) -> Direction:
         return Direction.NEUTRAL
 
     # Certainty + priced-in scale the magnitude, never the sign.
+    # NEWS-ONLY bias (Task 2): directional_multiplier() is a constant 1.0,
+    # so the price-action path contributes no weight here.
     quality = (tq.certainty_multiplier(text)
                * tq.priced_in_multiplier(text)
                * tq.directional_multiplier(text))
@@ -286,8 +289,32 @@ def detect_report_kind(text: str) -> ReportKind:
     return ReportKind.GENERAL
 
 
+# Capitalised "May" followed by a number or a data-release name is the MONTH,
+# not the rumor modal (Task 4b): "May CPI rises to 3.4%" is not a rumor.
+# Case-insensitive match for "may" but only "May" (capitalized) is treated as month.
+_MAY_MONTH_RE = re.compile(
+    r"(?<!\w)May(?=\s+(?:\d|CPI\b|NFP\b|PMI\b|PCE\b|PPI\b|FOMC\b))")
+
+
+def _may_is_rumor(text: str) -> bool:
+    """True only for the modal 'may'; the month 'May' is skipped."""
+    for m in re.finditer(r"(?<!\w)may(?!\w)", text or "", flags=re.IGNORECASE):
+        matched = m.group(0)
+        # Only "May" (capitalized) followed by month indicators is a month, not a rumor
+        if matched == "May" and _MAY_MONTH_RE.match(text, m.start()):
+            continue
+        return True
+    return False
+
+
 def detect_verification(text: str) -> Verification:
-    if any(contains_cue(text.lower(), c) for c in RUMOR_CUES):
+    """Whole-word rumor cues only (Task 4b); 'may' is handled by _may_is_rumor."""
+    if not text:
+        return Verification.CONFIRMED
+    lowered = text.lower()
+    if any(contains_phrase(lowered, c) for c in RUMOR_CUES if c != "may"):
+        return Verification.UNVERIFIED
+    if _may_is_rumor(text):
         return Verification.UNVERIFIED
     return Verification.CONFIRMED
 

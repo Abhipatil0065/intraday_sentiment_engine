@@ -28,6 +28,7 @@ from app.models.enums import (
     EconomicImportance,
     ImpactStrength,
     NewsCategory,
+    ReportKind,
 )
 NOW = datetime(2026, 10, 5, 14, 0, tzinfo=timezone.utc)
 
@@ -37,18 +38,20 @@ def _weight_of(signal, asset=Asset.GOLD) -> float:
 
 
 # --------------------------------------------------------------------------
-# (a) A Crypto Regulation signal decays SLOWER than an Other signal
+# (a) Event tier decay: TIER_1 decays SLOWER than TIER_3
 # --------------------------------------------------------------------------
-def test_crypto_regulation_category_has_a_longer_half_life_than_other():
-    """The headline case for the fix: 72h vs the 6h default."""
-    from app.config import settings
+def test_tier1_decays_slower_than_tier3():
+    """Task 5a: TIER_1 ~6h half-life vs TIER_3 ~1h half-life."""
+    from app.config import TIER_HALF_LIVES
 
-    assert settings.half_lives["crypto regulation"] > settings.half_lives["other"]
+    assert TIER_HALF_LIVES["TIER_1"] > TIER_HALF_LIVES["TIER_3"]
 
     old = NOW - timedelta(hours=10)
-    crypto = decay_weight(old, NewsCategory.CRYPTO_REGULATION, NOW)
-    other = decay_weight(old, NewsCategory.OTHER, NOW)
-    assert crypto > other
+    # Need to import decay_weight and pass tier keys
+    from app.analysis.sentiment_engine import decay_weight
+    tier1 = decay_weight(old, "TIER_1", NOW)
+    tier3 = decay_weight(old, "TIER_3", NOW)
+    assert tier1 > tier3
 
 
 def test_category_survives_the_factory():
@@ -62,18 +65,24 @@ def test_category_survives_the_factory():
     assert s.category is NewsCategory.CRYPTO_REGULATION
 
 
-def test_old_crypto_ruling_outweighs_an_old_other_headline():
-    """End-to-end: same age and everything else, long-lived category wins."""
+def test_old_tier1_outweighs_an_old_tier3_headline():
+    """End-to-end: same age and everything else, long-lived tier wins."""
+    from app.analysis.sentiment_engine import decay_weight
     common = dict(
         asset=Asset.BITCOIN, direction=Direction.BEARISH,
         strength=ImpactStrength.HIGH, relevance=0.88, persistence=0.95,
         source_quality="TIER_2_MAJOR", published_at=NOW - timedelta(hours=10),
         event_key="evt-x", title="Crypto regulator finalises custody rules",
     )
-    crypto = build_signal(category=NewsCategory.CRYPTO_REGULATION, **common)
-    other = build_signal(category=NewsCategory.OTHER, **common)
+    # TIER_1 signal (ETF flow data)
+    tier1 = build_signal(category=NewsCategory.BITCOIN_ETF_FLOWS, **common)
+    # TIER_3 signal (analyst opinion)
+    tier3 = build_signal(category=NewsCategory.CRYPTO_REGULATION, **common)
+    # Manually set importance to MEDIUM to avoid TIER_2, and make sure not ACTUAL
+    tier3.importance = EconomicImportance.MEDIUM
+    tier3.report_kind = ReportKind.GENERAL
 
-    assert _weight_of(crypto, Asset.BITCOIN) > _weight_of(other, Asset.BITCOIN)
+    assert _weight_of(tier1, Asset.BITCOIN) > _weight_of(tier3, Asset.BITCOIN)
 # --------------------------------------------------------------------------
 # (b) 3 independent sources outweigh 1 source
 # --------------------------------------------------------------------------
@@ -93,8 +102,10 @@ def test_three_independent_sources_outweigh_one():
 
 
 def test_corroboration_boost_is_capped():
-    """20 outlets must not out-vote 3."""
-    assert resolve_corroboration(3) == pytest.approx(1.20)
+    """20 outlets must not out-vote 3. Diminishing returns: 1/log2(n+1)."""
+    # 3 sources: per=0.10 * (1/log2(3) + 1/log2(4)) = 0.10 * (0.6309 + 0.5) = 0.113
+    assert resolve_corroboration(3) == pytest.approx(1.113, abs=1e-3)
+    # 20 sources hits the cap (0.30)
     assert resolve_corroboration(20) == pytest.approx(1.30)
 
 

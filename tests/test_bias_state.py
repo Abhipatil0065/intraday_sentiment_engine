@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.analysis.sentiment_engine import Bias, WeightedSignal, compute
+from app.analysis.sentiment_engine import Bias, WeightedSignal, clear_bias_history, compute
 from app.models.enums import (
     Asset,
     Direction,
@@ -28,16 +28,12 @@ from tests.fixed_clock import FIXED_NOW as NOW, freeze_now
 
 
 @pytest.fixture(autouse=True)
-def _pinned_clock(monkeypatch):
-    """
-    Freeze the clock for this module.
-
-    compute() defaults to the real clock when no ``now=`` is passed, which
-    would make decay (and therefore score and confidence) depend on the hour
-    the suite runs. Every assertion here is about decay-sensitive numbers, so
-    the clock is frozen rather than threaded through 18 call sites.
-    """
+def _isolated(monkeypatch):
+    """Pin the clock and reset carry-forward history around each test."""
     freeze_now(monkeypatch)
+    clear_bias_history()
+    yield
+    clear_bias_history()
 
 
 def make(asset=Asset.GOLD, direction=Direction.BULLISH, strength=ImpactStrength.HIGH,
@@ -100,21 +96,22 @@ def test_mode_is_stamped_on_every_result():
         assert r.mode in ("heuristic", "llm", "mixed")
 
 
-def test_no_signals_is_no_bias_with_zero_confidence():
+def test_no_signals_carries_forward_with_zero_confidence():
     r = compute([], Asset.GOLD)
-    assert r.bias is Bias.NO_BIAS
+    assert r.bias in (Bias.BULLISH, Bias.BEARISH)
     assert r.confidence == 0.0
     assert r.score == 0.0
+    assert r.stale is True
 
 
 # --------------------------------------------------------------------------
-# NO_BIAS triggers
+# Binary bias: a side is always named, never withheld as NO_BIAS
 # --------------------------------------------------------------------------
-def test_all_directionless_items_produce_no_bias():
+def test_all_directionless_items_produce_a_binary_verdict():
     signals = [make(direction=Direction.NEUTRAL, title="filing"),
                make(direction=Direction.MIXED, title="two-sided")]
     r = compute(signals, Asset.GOLD)
-    assert r.bias is Bias.NO_BIAS
+    assert r.bias in (Bias.BULLISH, Bias.BEARISH)
 
 
 def test_tiny_net_score_is_no_bias():
@@ -134,7 +131,7 @@ def test_low_confidence_is_no_bias_even_with_a_signed_score():
         assert r.bias is Bias.NO_BIAS
 
 
-def test_balanced_conflict_is_no_bias_not_a_coin_flip():
+def test_balanced_conflict_still_names_a_side():
     signals = []
     for i in range(3):
         signals.append(make(direction=Direction.BULLISH, title=f"bull {i}",
@@ -143,7 +140,7 @@ def test_balanced_conflict_is_no_bias_not_a_coin_flip():
                             cluster_id=f"r{i}"))
     r = compute(signals, Asset.GOLD)
     assert abs(r.score) < 25.0
-    assert r.bias is Bias.NO_BIAS
+    assert r.bias in (Bias.BULLISH, Bias.BEARISH)
 
 
 # --------------------------------------------------------------------------
@@ -244,7 +241,9 @@ def test_delta_ignores_signals_older_than_the_window():
                 title=f"o{i}", cluster_id=f"o{i}") for i in range(3)]
     assert compute(fresh + old, Asset.GOLD, now=NOW).delta_60m == 0.0
     assert compute(fresh, Asset.GOLD, now=NOW).delta_60m != 0.0
-def test_threshold_is_configurable(monkeypatch):
+def test_confidence_never_gates_the_label(monkeypatch):
+    """Binary bias: confidence is still reported, but a high floor can no
+    longer withhold the verdict - the side comes from the score's sign."""
     from app.config import settings
 
     strong = [make(direction=Direction.BULLISH, strength=ImpactStrength.VERY_HIGH,
@@ -254,7 +253,8 @@ def test_threshold_is_configurable(monkeypatch):
 
     monkeypatch.setattr(settings, "bias_min_confidence", 0.99, raising=False)
     strict = compute(strong, Asset.GOLD)
-    assert strict.bias is Bias.NO_BIAS
+    assert strict.bias is Bias.BULLISH
+    assert 0.0 <= strict.confidence <= 1.0
 def _min_conf() -> float:
     from app.config import settings
     return float(getattr(settings, "bias_min_confidence", 0.25))

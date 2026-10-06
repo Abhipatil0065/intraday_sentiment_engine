@@ -90,7 +90,8 @@ def test_price_action_mentions_no_percentage_is_not_flagged():
 
 
 def test_price_action_gets_near_zero_directional_weight():
-    assert tq.directional_multiplier("Gold plunges 2% in early trade") < 0.15
+    # NEWS-ONLY bias (Task 2): price action no longer damps the weight.
+    assert tq.directional_multiplier("Gold plunges 2% in early trade") == 1.0
 
 
 def test_causal_news_keeps_full_directional_weight():
@@ -98,9 +99,12 @@ def test_causal_news_keeps_full_directional_weight():
 
 
 def test_priced_in_price_action_compounds_to_near_zero():
+    # NEWS-ONLY bias (Task 2): price action is constant 1.0; only the
+    # expectation language ("as expected") still damps the weight.
     m = (tq.directional_multiplier("Gold surges 3% as expected")
          * tq.priced_in_multiplier("as expected"))
-    assert m < 0.25
+    assert m == tq.priced_in_multiplier("as expected")
+    assert m < 1.0
 
 
 # --------------------------------------------------------------------------

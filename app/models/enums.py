@@ -75,6 +75,10 @@ class ReportKind(str, Enum):
     PREP = "MARKET_PREP"     # expected / forward-looking setup
     WRAP = "MARKET_WRAP"     # what actually happened in the session
     GENERAL = "GENERAL"      # ordinary news, belongs in Section B only
+    # Task 3: the article reports an ACTUAL scheduled-data print (its
+    # direction comes from the surprise vs forecast/previous, not from
+    # wording). Stored as a value only - the field name/shape is unchanged.
+    ACTUAL = "ACTUAL_DATA"
 
 
 class SessionName(str, Enum):

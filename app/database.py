@@ -79,8 +79,8 @@ def _purge_legacy_snapshots() -> None:
         "conflicting_signals", "risks", "catalysts", "conflicts",
     )
     # New columns -> added when absent, so an old DB keeps working. "bias" is
-    # listed here rather than handled separately because it may have existed in
-    # the forced-100% era as NOT NULL with the wrong default.
+    # a CURRENT column: it is added only when genuinely missing and never
+    # dropped or rewritten once present (see the note at the add loop below).
     add_columns = {
         "score": "FLOAT DEFAULT 0.0",
         "bias": "VARCHAR(16) DEFAULT 'NO_BIAS'",
@@ -127,36 +127,20 @@ def _purge_legacy_snapshots() -> None:
                     dropped.append(column)
                     present.discard(column)
 
-            # "bias" existed in the forced-100% era as NOT NULL with different
-            # semantics (BULLISH/BEARISH only). Its value must survive the
-            # reshape, so read it out before dropping and write it back after.
-            preserved_bias = None
-            if "bias" in columns and "score" in columns:
-                try:
-                    row = conn.execute(text(
-                        "SELECT bias FROM sentiment_snapshot LIMIT 1")).first()
-                    if row and row[0]:
-                        preserved_bias = str(row[0])
-                except Exception:  # noqa: BLE001 - best effort
-                    preserved_bias = None
+            # BINARY BIAS (bug fix): "bias" is a CURRENT column - it is never
+            # dropped-and-re-added and its rows are never rewritten here.
 
-            if "bias" in present:
-                conn.execute(
-                    text("ALTER TABLE sentiment_snapshot DROP COLUMN bias"))
-                dropped.append("bias")
-                present.discard("bias")
-
-            # Only add what is genuinely missing AFTER the drops above, so a
-            # column that was dropped as legacy is correctly re-added below.
+            # Only add what is genuinely missing after the legacy drops above.
+            # (Earlier this spot also dropped and re-added "bias" on every run
+            # and then UPDATEd every row from one arbitrary sample - that
+            # clobbered correct verdicts to a stale value, which is what made
+            # verify_live_cards.py print bias=BULLISH over negative scores.
+            # Reshapes delete rows first in the legacy branch, so nothing here
+            # is ever preserved or rewritten.)
             for column, ddl in add_columns.items():
                 if column not in present:
                     conn.execute(text(
                         f"ALTER TABLE sentiment_snapshot ADD COLUMN {column} {ddl}"))
-
-            if preserved_bias and not legacy:
-                conn.execute(text(
-                    "UPDATE sentiment_snapshot SET bias = :b").bindparams(
-                        b=preserved_bias))
 
             if dropped:
                 log.info("Dropped legacy sentiment_snapshot columns: %s",

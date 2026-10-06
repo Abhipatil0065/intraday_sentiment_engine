@@ -126,4 +126,4 @@ WRAP_CUES = ["market wrap", "session wrap", "recap", "what moved", "closing bell
              "session recap", "market close", "end of session", "roundup",
              "close:", "wrap:", "review of the session", "what changed"]
 RUMOR_CUES = ["report:", "rumor", "rumour", "sources say", "people familiar",
-              "unconfirmed", "allegedly", "leak", "not yet confirmed"]
+              "unconfirmed", "allegedly", "leak", "not yet confirmed", "may"]

@@ -75,14 +75,18 @@ def corroboration_multiplier(independent_sources: int) -> float:
     """
     Weight multiplier for a cluster, from its number of independent sources.
 
-    1 source -> 1.0 (no boost). 2 -> 1.10. Capped at 1.30 by default. A cluster
-    covered by twenty outlets is still ONE event, not twenty.
+    Uses diminishing returns: boost = per_source * sum(1/log2(i+1)) for i=2..n,
+    capped at corroboration_max_boost. 1 source -> 1.0 (no boost).
+    Ten duplicates do not add up to ten times the weight.
     """
     if independent_sources <= 1:
         return 1.0
+    import math
     per = float(settings.corroboration_per_source)
     cap = float(settings.corroboration_max_boost)
-    boost = min(cap, per * (independent_sources - 1))
+    # Diminishing returns: 1/log2(n+1) scaling for sources 2, 3, 4...
+    boost = sum(per / math.log2(i + 1) for i in range(2, independent_sources + 1))
+    boost = min(cap, boost)
     return round(1.0 + boost, 4)
 
 

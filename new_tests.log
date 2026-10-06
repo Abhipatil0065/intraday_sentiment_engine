@@ -1,0 +1,11 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-8.3.4, pluggy-1.6.0
+rootdir: C:\Users\HP\.vscode\intraday_sentiment_engine
+configfile: pytest.ini
+plugins: anyio-4.15.1, asyncio-0.25.0
+asyncio: mode=Mode.AUTO, asyncio_default_fixture_loop_scope=function
+collected 4 items
+
+tests\test_tier_multipliers.py ....                                      [100%]
+
+============================== 4 passed in 0.98s ==============================

@@ -222,14 +222,12 @@ def is_price_action(text: str) -> bool:
 
 def directional_multiplier(text: str) -> float:
     """
-    Near-zero for PRICE_ACTION headlines, 1.0 otherwise.
+    NEWS-ONLY bias (Task 2): always 1.0.
 
-    A story saying "gold plunges 2%" is evidence the move ALREADY happened;
-    letting it add directional weight would let the engine read its own echo
-    back as fresh conviction.
+    Price-action headlines used to be damped near zero here; that price
+    path is removed from the bias so news alone decides the weight.
+    Kept as a named function so callers and schema stay unchanged.
     """
-    if is_price_action(text):
-        return float(settings.price_action_weight)
     return 1.0
 
 

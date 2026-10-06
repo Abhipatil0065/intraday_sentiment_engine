@@ -92,15 +92,16 @@ class SentimentBlock(BaseModel):
     """
     One asset's directional read for a scope.
 
-    Item 2 replaced the forced 100% bull/bear split with a signed score, a
-    confidence, and a three-state bias that is allowed to be NO_BIAS.
+    BINARY BIAS: ``bias`` is strictly BULLISH or BEARISH (the sign of the
+    net news score); ``stale`` marks a carried-forward verdict (no signals
+    in the window).
     """
 
     asset: Asset
     scope: str = "CURRENT"
     score: float = 0.0            # -100 .. +100
     confidence: float = 0.0       # 0 .. 1
-    bias: str = "NO_BIAS"         # BULLISH | BEARISH | NO_BIAS
+    bias: str = "BULLISH"         # BULLISH | BEARISH (binary, never NO_BIAS)
     mode: str = "heuristic"       # LLM/heuristic stamp on every result
     drivers: list[DriverOut] = Field(default_factory=list)
     conflict: Optional[DriverOut] = None
@@ -109,6 +110,7 @@ class SentimentBlock(BaseModel):
     event_risk_note: str = ""
     contributing_articles: int = 0
     contributing_clusters: int = 0
+    stale: bool = False           # bias carried forward (no signals in window)
     note: str = ""
     price_note: str = ""
     last_updated: str = ""
@@ -137,8 +139,10 @@ class EquityCard(BaseModel):
     """One session-aware global equity card (NOW-only, never persisted).
 
     ``region`` is ASIA / EUROPE / US so the frontend can key flip state by
-    region even when the title string changes; ``no_data`` marks the neutral
-    50/50 fallback when no regional EQUITIES signals matched.
+    region even when the title string changes; ``no_data`` marks the empty
+    50/50 fallback when no regional EQUITIES signals matched. BINARY BIAS:
+    ``bias`` is strictly BULLISH or BEARISH - on an empty region it carries
+    the region's last published bias forward, with ``stale`` set.
     """
 
     region: str = "US"
@@ -146,11 +150,12 @@ class EquityCard(BaseModel):
     symbol: str = "SPX / NDX"
     score: float = 0.0            # -100 .. +100
     confidence: float = 0.0       # 0 .. 1
-    bias: str = "NO_BIAS"         # BULLISH | BEARISH | NO_BIAS
+    bias: str = "BULLISH"         # BULLISH | BEARISH (binary, never NO_BIAS)
     mode: str = "heuristic"
     drivers: list[DriverOut] = Field(default_factory=list)
     contributing_articles: int = 0
     no_data: bool = True
+    stale: bool = False           # bias carried forward (region had no news)
     note: str = ""
     last_updated: str = ""
 

@@ -144,6 +144,8 @@ EQUITY_SESSION_MAP: dict[SessionName, dict[str, object]] = {
             "s&p", "s&p 500", "spx", "nasdaq", "ndx", "dow jones", "dow",
             "nyse", "wall street", "us stocks", "fed", "federal reserve",
             "fomc", "treasury", "russell 2000",
+            "earnings", "apple", "microsoft", "amazon", "nvidia", "google",
+            "meta", "tesla", "profit", "revenue", "eps", "guidance",
         ],
     },
 }

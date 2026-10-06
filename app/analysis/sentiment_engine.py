@@ -14,11 +14,19 @@ THE NEW CONTRACT
 ----------------
     score      -100 .. +100   signed, continuous, honest about magnitude
     confidence   0 .. 1       how much the evidence actually supports it
-    bias        BULLISH | BEARISH | NO_BIAS
+    bias        BULLISH | BEARISH         (binary - never NO_BIAS / NEUTRAL)
 
-NO_BIAS is a first-class answer, returned whenever confidence OR abs(score)
-falls under a configurable floor. The engine is allowed to say "I do not know",
-which is the most important thing a day-trading sentiment tool can do.
+BINARY BIAS CONTRACT
+---------------------
+The label is the SIGN of the net news score: positive -> BULLISH, negative ->
+BEARISH. A score inside +/- EPS (one named constant) has no sign worth
+trusting, so the side of the highest-weight, newest directional signal breaks
+the tie. When an asset has NO signals in the window the last published bias is
+carried forward with ``stale=True`` (history is kept per asset, and per region
+for the equity card); with no history at all the newest article's direction is
+used, and failing that the documented ``DEFAULT_BIAS`` constant. Confidence is
+still computed and reported, but it no longer gates the label: the engine
+always names a side, because a day trader cannot act on "I do not know".
 
 FINAL WEIGHT FORMULA (item 6 - one magnitude, one event weight)
 -------------------------------------------------------------
@@ -60,25 +68,25 @@ from app.models.enums import (
     ImpactStrength,
     NewsCategory,
     ReportKind,
+    Verification,
 )
 
 log = get_logger(__name__)
 
 
 class Bias(str, Enum):
-    """The three answers the engine may give. NO_BIAS is a real answer."""
+    """BULLISH/BEARISH are the only verdicts compute() returns (binary bias).
+
+    NO_BIAS is kept strictly for wire- and storage-compatibility (display
+    fail-safe mapping, legacy rows, schema defaults) - compute() never
+    returns it any more.
+    """
 
     BULLISH = "BULLISH"
     BEARISH = "BEARISH"
     NO_BIAS = "NO_BIAS"
 
 
-IMPORTANCE_MULT = {
-    EconomicImportance.VERY_HIGH: 1.00,
-    EconomicImportance.HIGH: 0.70,
-    EconomicImportance.MEDIUM: 0.42,
-    EconomicImportance.LOW: 0.18,
-}
 STRENGTH_MULT = {
     ImpactStrength.VERY_HIGH: 1.00,
     ImpactStrength.HIGH: 0.72,
@@ -86,11 +94,155 @@ STRENGTH_MULT = {
     ImpactStrength.LOW: 0.20,
 }
 QUALITY_MULT = {
-    "TIER_1_OFFICIAL": 1.15,
-    "TIER_2_MAJOR": 1.00,
-    "TIER_3_CRYPTO": 0.92,
-    "TIER_4_OTHER": 0.82,
+    "TIER_1_OFFICIAL": 1.00,
+    "TIER_2_MAJOR": 0.97,
+    "TIER_3_CRYPTO": 0.94,
+    "TIER_4_OTHER": 0.90,
 }
+
+# ---------------------------------------------------------------------------
+# BINARY BIAS (label = sign of the net news score)
+# ---------------------------------------------------------------------------
+# The ONE named constant for "no trustworthy sign". Inside +/- EPS the tie is
+# broken by the side of the highest-weight, newest directional signal instead
+# of withholding a verdict. Mirrors the old settings.bias_min_abs_score floor
+# (12.0), so borderline calls flip exactly where the NO_BIAS gate used to
+# withhold them - the value is owned here, not re-read per call.
+EPS = 12.0
+
+# Used only when there are no signals, no history AND no newest article:
+# a documented constant, never a silent coin flip. Strictly directional.
+DEFAULT_BIAS = Bias.BULLISH
+
+# The ONE lean a tie-break verdict is allowed to show: +/- TIEBREAK_LEAN maps
+# to a 51/49 split (bull_pct = round(50 + score / 2)), so a call the engine
+# could only reach by breaking a tie reads as a weak call, not a strong one.
+TIEBREAK_LEAN = 2.0
+
+# A tie-break is the weakest call the engine can make, so its confidence is
+# capped low: the payload keeps saying "weak" next to the label.
+TIEBREAK_MAX_CONFIDENCE = 0.30
+
+
+def payload_score(raw_score: float, bias) -> float:
+    """
+    The score a payload may show for ``bias``.
+
+    Normally that is the raw net score, unchanged. The exception is the
+    tie-break case (|raw_score| < EPS) where the label was taken from the
+    heaviest, newest signal and therefore DISAGREES with the raw sign:
+    publishing that raw score would draw a bar leaning one way under a badge
+    naming the other (score +2.8 / BEARISH / bullish_pct 51). The score is
+    then replaced by a small lean of the label's sign, which renders about
+    51/49 toward the label. A score whose sign already agrees is left alone
+    however small it is, and a score at or beyond EPS is never touched. The
+    raw value survives on ``raw_score`` for logging only, never in the payload.
+    """
+    name = getattr(bias, "value", bias)
+    if abs(raw_score) >= EPS:
+        return float(raw_score)
+    if name == "BULLISH" and raw_score < 0:
+        return TIEBREAK_LEAN
+    if name == "BEARISH" and raw_score > 0:
+        return -TIEBREAK_LEAN
+    return float(raw_score)
+
+# Task 8: stability (no whipsaw) constants.
+from app.config import FLIP_MARGIN, FLIP_HOLD_MINUTES
+
+# Last published bias per state key: the asset symbol ("GOLD" ...) or
+# "EQUITY:<region>" for the session-aware equity card, so a signal-free poll
+# can carry the previous verdict forward instead of inventing one.
+_LAST_BIAS: dict[str, Bias] = {}
+
+# Last flip timestamp per state key (for FLIP_HOLD_MINUTES enforcement).
+_LAST_FLIP_TIME: dict[str, datetime] = {}
+
+
+def remember_bias(key: str, bias: Bias) -> None:
+    """Record a published bias under ``key`` for later carry-forward."""
+    _LAST_BIAS[key] = bias
+
+
+def recall_bias(key: str) -> Optional[Bias]:
+    """The last bias published under ``key``; None when there is no history."""
+    return _LAST_BIAS.get(key)
+
+
+def _recall_flip_time(key: str) -> Optional[datetime]:
+    """The last time a bias flip occurred for this key."""
+    return _LAST_FLIP_TIME.get(key)
+
+
+def _record_flip_time(key: str, now: datetime) -> None:
+    """Record a bias flip time for this key."""
+    _LAST_FLIP_TIME[key] = now
+
+
+def clear_bias_history() -> None:
+    """Drop all carry-forward history (test isolation / cold restarts)."""
+    _LAST_BIAS.clear()
+    _LAST_FLIP_TIME.clear()
+
+
+def _has_fresh_tier1_opposite(relevant: Sequence[WeightedSignal],
+                               current_bias: Bias,
+                               now: Optional[datetime]) -> bool:
+    """
+    Check if there's a fresh Tier 1 signal pointing opposite to current bias.
+    
+    A "fresh" Tier 1 signal is one published within the last hour.
+    """
+    if now is None:
+        return False
+    cutoff = now - timedelta(hours=1)
+    for s in relevant:
+        if s.published_at is None or s.published_at < cutoff:
+            continue
+        if event_tier(s) != "TIER_1":
+            continue
+        # Check if this signal points opposite to current bias
+        signal_bias = _directional_bias(s.direction)
+        if signal_bias is not None and signal_bias != current_bias:
+            return True
+    return False
+
+
+def _should_flip(bull: float, bear: float, current_bias: Bias,
+                 relevant: Sequence[WeightedSignal],
+                 now: Optional[datetime],
+                 key: str) -> tuple[bool, Bias]:
+    """
+    Determine if bias should flip based on stability rules.
+    
+    Returns (should_flip, new_bias).
+    """
+    # No current bias (first run) - just use the computed bias
+    if current_bias is None:
+        return True, Bias.BULLISH if bull > bear else Bias.BEARISH
+    
+    # Compute the net weight on each side
+    current_side_weight = bull if current_bias is Bias.BULLISH else bear
+    opposite_side_weight = bear if current_bias is Bias.BULLISH else bull
+    
+    # Check for fresh Tier 1 opposite signal (forces flip regardless of margin/hold)
+    if _has_fresh_tier1_opposite(relevant, current_bias, now):
+        return True, Bias.BEARISH if current_bias is Bias.BULLISH else Bias.BULLISH
+    
+    # Check hold time (skip for Tier 1 - already handled above)
+    last_flip = _recall_flip_time(key)
+    if last_flip is not None and now is not None:
+        hold_elapsed = (now - last_flip).total_seconds() / 60.0
+        if hold_elapsed < FLIP_HOLD_MINUTES:
+            return False, current_bias
+    
+    # Check margin: opposite side must exceed current side by FLIP_MARGIN
+    # The score is -100..+100, so we check if the opposite side's net weight
+    # exceeds the current side's by the margin threshold.
+    if opposite_side_weight > current_side_weight + FLIP_MARGIN:
+        return True, Bias.BEARISH if current_bias is Bias.BULLISH else Bias.BULLISH
+    
+    return False, current_bias
 
 
 @dataclass
@@ -116,6 +268,10 @@ class WeightedSignal:
     transmission: str = ""
     report_kind: ReportKind = ReportKind.GENERAL
     mode: str = "heuristic"
+    # Task 3: surprise-size multiplier for ACTUAL scheduled-data reports
+    # (release_surprise.surprise_weight). Constant 1.0 for every other
+    # signal, so no existing behaviour changes.
+    surprise_weight: float = 1.0
 
     # filled by compute()
     recency: float = 0.0
@@ -136,12 +292,15 @@ class Driver:
 
 @dataclass
 class SentimentResult:
-    """One asset's verdict. Never forces a direction."""
+    """One asset's verdict. Always directional (BULLISH or BEARISH)."""
 
     asset: Asset
     score: float = 0.0
+    # The pre-clamp net score, for logging/audit only: `score` is what the
+    # payload shows, so a tie-break can never contradict its own badge.
+    raw_score: float = 0.0
     confidence: float = 0.0
-    bias: Bias = Bias.NO_BIAS
+    bias: Bias = Bias.BULLISH
     mode: str = "heuristic"
     drivers: list[Driver] = field(default_factory=list)
     conflict: Optional[Driver] = None
@@ -156,25 +315,24 @@ class SentimentResult:
     event_risk_note: str = ""
     contributing_articles: int = 0
     contributing_clusters: int = 0
+    # True when there were no signals and the bias was carried forward from
+    # history (or from the newest article / DEFAULT_BIAS when there is none).
+    stale: bool = False
     note: str = ""
 
 
-def decay_weight(published_at: Optional[datetime], category: NewsCategory,
+def decay_weight(published_at: Optional[datetime], tier: str,
                  now: Optional[datetime] = None) -> float:
     """
-    Exponential decay with a per-category half-life (item 7).
+    Exponential decay with a per-event-tier half-life (Task 5a).
 
-    Replaces the single fixed recency ladder. A CPI surprise matters for
-    hours; an ETF flow or a regulatory ruling stays relevant for a day or more.
-    ``weight = 0.5 ** (age_hours / half_life)`` - smooth, and a category's
-    half-life is a single config value.
+    Replaces the per-category half-life. Tier 1 ~6h, Tier 2 ~2h, Tier 3 ~1h.
+    ``weight = 0.5 ** (age_hours / half_life)``.
+    Items older than TRADING_DAY_CUTOFF_HOURS get weight 0.
     """
-    from app.config import settings
+    from app.config import TIER_HALF_LIVES, TRADING_DAY_CUTOFF_HOURS
 
-    half_lives = settings.half_lives
-    # parsed_table() lowercases its keys, so the lookup key must match that.
-    key = (category.value if category else "").strip().lower()
-    half_life = half_lives.get(key, settings.decay_default_hours)
+    half_life = TIER_HALF_LIVES.get(tier, 2.0)
     half_life = max(0.25, float(half_life))
 
     if published_at is None:
@@ -182,6 +340,8 @@ def decay_weight(published_at: Optional[datetime], category: NewsCategory,
     hours = _age_hours(published_at, now)
     if hours < 0:
         return 1.0  # within clock skew: treat as brand new
+    if hours >= TRADING_DAY_CUTOFF_HOURS:
+        return 0.0
     return max(0.0, min(1.0, 0.5 ** (hours / half_life)))
 
 
@@ -190,22 +350,79 @@ def _age_hours(published_at: datetime, now: Optional[datetime] = None) -> float:
     return T.age_hours(published_at, now=now) or 0.0
 
 
-def _signal_weight(s: WeightedSignal, now: Optional[datetime]) -> float:
-    """
-    The single final weight for one signal.
+def event_tier(s: WeightedSignal) -> str:
+    """Tier key from the EVENT (importance + category + report_kind).
 
-    Multipliers are independent by construction: relevance from the
-    (category x asset) matrix, persistence from the event type, quality from
-    the source tier, decay from the category half-life. The cue magnitude
-    enters exactly once, through STRENGTH_MULT at the end.
+    TIER_1: VERY_HIGH importance, ACTUAL_DATA for CPI/PPI/PCE/NFP/FOMC/rate
+      decisions, confirmed geopolitical shocks, ETF flow data.
+    TIER_2: central-bank speeches / secondary data / official statements.
+    TIER_3: analyst opinion / previews / commentary / forecasts.
+    Reads existing fields only; no new classifier lives here.
     """
-    decay = decay_weight(s.published_at, s.category, now)
+    if s.importance is EconomicImportance.VERY_HIGH:
+        return "TIER_1"
+    if s.report_kind is ReportKind.ACTUAL:
+        return "TIER_1"
+    if s.category in (NewsCategory.BITCOIN_ETF_FLOWS, NewsCategory.ETF_FLOWS):
+        return "TIER_1"
+    if s.category is NewsCategory.GEOPOLITICS:
+        return ("TIER_1" if s.importance is EconomicImportance.HIGH
+                else "TIER_2")
+    title = (s.title or "").lower()
+    is_opinion = any(k in title for k in (
+        "analyst", "opinion", "preview", "commentary",
+        "forecast", "comment", "outlook"))
+    if is_opinion or s.report_kind is ReportKind.PREP:
+        return "TIER_3"
+    if s.importance in (EconomicImportance.HIGH, EconomicImportance.MEDIUM):
+        return "TIER_2"
+    return "TIER_3"
+
+
+def _signal_weight(s: WeightedSignal, now: Optional[datetime]) -> float:
+    """The single final weight for one signal.
+
+    FINAL WEIGHT FORMULA (Task 4b + 5a):
+        weight = decay * relevance * persistence * source_quality
+               * session * corroboration * surprise * tier(event)
+        where tier(event) = TIER_MULTIPLIERS[event_tier(s)]
+        (possibly x RUMOR_MULTIPLIER / CONFIRMED_BOOST).
+        decay = 0.5 ** (age_hours / TIER_HALF_LIVES[tier]),
+        tier = event_tier(s) in {TIER_1, TIER_2, TIER_3},
+        age_hours >= TRADING_DAY_CUTOFF_HOURS -> weight = 0.
+    Importance feeds the tier once via event_tier() and is never
+    multiplied separately here. Source quality (QUALITY_MULT, 0.9..1.0)
+    is an independent trust factor, never the tier.
+    """
+    from app.config import settings, TIER_MULTIPLIERS, RUMOR_MULTIPLIER, CONFIRMED_BOOST, TIER_HALF_LIVES, TRADING_DAY_CUTOFF_HOURS
+    from app.analysis.release_surprise import MAX_SURPRISE_WEIGHT
+    from app.analysis.cue_rules import detect_verification
+
+    # Task 5a: decay uses event tier half-life (TIER_1~6h, TIER_2~2h, TIER_3~1h),
+    # with TRADING_DAY_CUTOFF_HOURS (16h) giving weight 0.
+    tier_key = event_tier(s)
+    decay = decay_weight(s.published_at, tier_key, now)
     rel = max(0.0, min(1.0, s.relevance))
     per = max(0.05, min(1.0, s.persistence))
-    qual = QUALITY_MULT.get((s.source_quality or "").upper(), 0.82)
+    qual = QUALITY_MULT.get((s.source_quality or "").upper(), 0.90)
+    if s.category is NewsCategory.BITCOIN_ETF_FLOWS:
+        qual = 1.0
     sess = max(0.5, min(1.5, s.session_multiplier))
     corr = max(1.0, float(s.corroboration or 1.0))
-    return decay * rel * per * qual * sess * corr
+    surprise = max(0.0, min(MAX_SURPRISE_WEIGHT, float(s.surprise_weight or 0.0)))
+
+    # Task 4b: the tier comes from the EVENT (event_tier above), never from
+    # the outlet. QUALITY_TO_TIER is gone; importance feeds the tier once.
+    tier = TIER_MULTIPLIERS.get(event_tier(s), 0.45)
+    # Task 3: verification comes from the headline. Unverified/rumor items
+    # (e.g. "may", "reportedly", "sources say") weigh less; confirmed items
+    # are slightly boosted. Named multipliers, one application each.
+    if detect_verification(s.title) is Verification.UNVERIFIED:
+        tier *= RUMOR_MULTIPLIER
+    elif detect_verification(s.title) is Verification.CONFIRMED:
+        tier *= CONFIRMED_BOOST
+
+    return decay * rel * per * qual * sess * corr * surprise * tier
 
 
 def _mode_for(signals: Sequence[WeightedSignal]) -> str:
@@ -261,10 +478,8 @@ def _aggregate(signals: Sequence[WeightedSignal],
     return {"bull": bull, "bear": bear, "directionless": directionless,
             "bull_items": bull_items, "bear_items": bear_items,
             "used": used, "clusters": len(clusters)}
-    conflict: Optional[Driver] = None
-    delta_60m: float = 0.0
-    event_risk: bool = False
-    event_risk_note: str = ""
+
+
 def _score_from(bull: float, bear: float) -> float:
     """Map the two weighted totals onto a signed -100..+100 score."""
     total = bull + bear
@@ -297,20 +512,68 @@ def _confidence_from(bull: float, bear: float, directionless: float,
     return round(max(0.0, min(0.95, confidence)), 3)
 
 
-def _decide(score: float, confidence: float) -> Bias:
-    """
-    The NO_BIAS gate - the single most important rule in this module.
+def _directional_bias(direction: Optional[Direction]) -> Optional[Bias]:
+    """BULLISH/BEARISH map to themselves; MIXED/NEUTRAL/None have no side."""
+    if direction is Direction.BULLISH:
+        return Bias.BULLISH
+    if direction is Direction.BEARISH:
+        return Bias.BEARISH
+    return None
 
-    A direction is published only when BOTH the score clears its floor AND the
-    confidence clears its floor. Either failure returns NO_BIAS.
-    """
-    from app.config import settings
 
-    if confidence < float(settings.bias_min_confidence):
-        return Bias.NO_BIAS
-    if abs(score) < float(settings.bias_min_abs_score):
-        return Bias.NO_BIAS
-    return Bias.BULLISH if score > 0 else Bias.BEARISH
+def _tie_break_bias(signals: Sequence[WeightedSignal],
+                    now: Optional[datetime] = None) -> Bias:
+    """
+    The |score| < EPS tie-break: the side of the highest-weight, NEWEST signal.
+
+    "Weight" is the signal's magnitude (final weight x strength) - how much it
+    actually moved the net score - and publication time breaks equal magnitudes
+    in favour of the fresher headline. With no directional signal at all the
+    answer is DEFAULT_BIAS; this function never returns NO_BIAS.
+    """
+    best: Optional[WeightedSignal] = None
+    best_key: Optional[tuple[float, float]] = None
+    for s in signals:
+        if _directional_bias(s.direction) is None:
+            continue
+        weight = _signal_weight(s, now)
+        magnitude = weight * STRENGTH_MULT.get(s.strength, 0.45)
+        ts = s.published_at.timestamp() if s.published_at else 0.0
+        key = (magnitude, ts)
+        if best_key is None or key > best_key:
+            best, best_key = s, key
+    if best is None:
+        return DEFAULT_BIAS
+    return _directional_bias(best.direction) or DEFAULT_BIAS
+
+
+def _carry_forward_bias(signals: Sequence[WeightedSignal],
+                        history_key: str) -> tuple[Bias, str]:
+    """
+    No signals for this asset: reuse the last published bias (stale=True).
+
+    History first - that is the verdict the trader last saw. With no history
+    at all, the newest article's direction; failing that, DEFAULT_BIAS.
+    """
+    last = recall_bias(history_key)
+    if last is not None:
+        return (last,
+                "No news in the window; carrying forward the last published "
+                "bias (stale).")
+    newest: Optional[WeightedSignal] = None
+    newest_ts = 0.0
+    for s in signals:
+        if _directional_bias(s.direction) is None:
+            continue
+        ts = s.published_at.timestamp() if s.published_at else 0.0
+        if newest is None or ts > newest_ts:
+            newest, newest_ts = s, ts
+    if newest is not None:
+        return (_directional_bias(newest.direction) or DEFAULT_BIAS,
+                "No history for this asset; direction taken from the newest "
+                "article (stale).")
+    return (DEFAULT_BIAS,
+            "No news and no history; using DEFAULT_BIAS (stale).")
 
 
 def _top_drivers(items: Sequence[tuple[float, WeightedSignal]],
@@ -368,29 +631,44 @@ def _delta_60m(signals: Sequence[WeightedSignal], asset: Asset,
         # the whole current score was made in the last hour.
         return current_score
     return round(current_score - prior_score, 1)
-    contributing_articles: int = 0
-    contributing_clusters: int = 0
-    note: str = ""
+
+
 def compute(signals: Sequence[WeightedSignal], asset: Asset,
             now: Optional[datetime] = None,
             event_risk: bool = False,
-            event_risk_note: str = "") -> SentimentResult:
+            event_risk_note: str = "",
+            history_key: Optional[str] = None) -> SentimentResult:
     """
     Aggregate every weighted signal for one asset into a verdict.
 
-    Always returns a bias, but the bias is allowed to be NO_BIAS. When
-    confidence or |score| is under its configured floor the engine says so
-    rather than naming a side it cannot support.
+    BINARY BIAS: the label is the sign of the net news score - positive
+    BULLISH, negative BEARISH - with the |score| < EPS tie broken by the
+    heaviest, newest directional signal. No signals at all carries the last
+    published bias forward (stale=True), falling back to the newest article's
+    direction and then DEFAULT_BIAS. Never returns NO_BIAS / NEUTRAL.
+
+    STABILITY (Task 8): bias only flips if (a) opposite side exceeds current
+    by FLIP_MARGIN, OR (b) a fresh Tier 1 item points the other way.
+    Minimum hold time FLIP_HOLD_MINUTES between flips (except Tier 1).
+    When bias is held, payload score sign matches label (via payload_score),
+    confidence stays low for held-but-weak calls.
+
+    ``history_key`` namespaces the carry-forward state; it defaults to the
+    asset symbol and is set to "EQUITY:<region>" by the equity card so a
+    proxy scoring run cannot pollute an asset's own history.
     """
+    key = history_key or asset.value
     relevant = [s for s in signals if s.asset is asset]
     mode = _mode_for(relevant)
 
     if not relevant:
+        bias, note = _carry_forward_bias(signals, key)
+        remember_bias(key, bias)
         return SentimentResult(
-            asset=asset, score=0.0, confidence=0.0, bias=Bias.NO_BIAS,
+            asset=asset, score=0.0, confidence=0.0, bias=bias,
             mode=mode, contributing_articles=0, contributing_clusters=0,
             event_risk=event_risk, event_risk_note=event_risk_note,
-            note="No news reached this asset inside the rolling window.",
+            stale=True, note=note,
         )
 
     agg = _aggregate(relevant, now)
@@ -399,11 +677,46 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
 
     score = _score_from(bull, bear)
     confidence = _confidence_from(bull, bear, agg["directionless"], agg["used"])
-    bias = _decide(score, confidence)
 
-    # Drivers are reported on the side the verdict names, ordered by absolute
-    # contribution so the biggest mover is first.
-    leading = bull_items if score >= 0 else bear_items
+    # BINARY BIAS: label = sign of the net news score. Inside EPS the sign is
+    # not trustworthy, so the heaviest, newest directional signal breaks the
+    # tie. Confidence is reported but never gates the label.
+    raw = score
+    if abs(raw) >= EPS:
+        computed_bias = Bias.BULLISH if raw > 0 else Bias.BEARISH
+    else:
+        computed_bias = _tie_break_bias(relevant, now)
+        # A tie-break is a weak call: cap the confidence low so the payload
+        # still reads as weak once the label is forced to name a side.
+        confidence = min(confidence, TIEBREAK_MAX_CONFIDENCE)
+
+    # STABILITY (Task 8): check if we should flip from the last published bias
+    last_bias = recall_bias(key)
+    should_flip, final_bias = _should_flip(bull, bear, last_bias, relevant, now, key)
+    
+    if not should_flip and last_bias is not None:
+        # Hold the previous bias - payload score must match the held label
+        final_bias = last_bias
+        # Use payload_score to ensure score sign matches the held bias
+        score = payload_score(raw, final_bias)
+        # Held-but-weak call: cap confidence low
+        confidence = min(confidence, TIEBREAK_MAX_CONFIDENCE)
+        note = f"Bias held (stability): {last_bias.value} maintained despite raw score {raw:.1f}."
+    else:
+        # Flip to computed bias (or first-run bias)
+        final_bias = computed_bias
+        score = payload_score(raw, final_bias)
+        if last_bias is not None and final_bias != last_bias:
+            _record_flip_time(key, now or datetime.now())
+            note = f"Bias flipped: {last_bias.value} -> {final_bias.value} (raw {raw:.1f})."
+        else:
+            note = ""
+        remember_bias(key, final_bias)
+
+    # Drivers are reported on the side the CURRENT SIGNALS point to (computed_bias),
+    # not the held bias. This ensures drivers reflect what the news is saying now.
+    # The bull_drivers/bear_drivers always show both sides for the dashboard.
+    leading = bull_items if computed_bias is Bias.BULLISH else bear_items
     drivers = _top_drivers(leading)
     conflict = _strongest_conflict(bull_items, bear_items)
     # Both sides kept separately for the dashboard, which shows a bullish box
@@ -411,19 +724,20 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
     bull_drivers = _top_drivers(bull_items)
     bear_drivers = _top_drivers(bear_items)
 
-    note = ""
-    if bias is Bias.NO_BIAS:
+    if not note and abs(raw) < EPS:
         if bull + bear <= 0:
-            note = "Nothing in the window took a directional side."
+            note = ("No directional signal in the window; DEFAULT_BIAS taken "
+                    "as the binary verdict.")
         else:
-            note = ("Evidence is too thin or too conflicted to publish a "
-                    "direction; showing drivers only.")
+            note = ("Net score inside EPS; direction taken from the heaviest, "
+                    "newest signal (binary tie-break).")
 
     return SentimentResult(
         asset=asset,
         score=score,
+        raw_score=raw,
         confidence=confidence,
-        bias=bias,
+        bias=final_bias,
         mode=mode,
         drivers=drivers,
         conflict=conflict,
@@ -434,6 +748,7 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
         event_risk_note=event_risk_note,
         contributing_articles=agg["used"],
         contributing_clusters=agg["clusters"],
+        stale=False,
         note=note,
     )
 

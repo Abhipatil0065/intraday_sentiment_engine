@@ -69,6 +69,7 @@ def build_signal(
     reason: str = "",
     transmission: str = "",
     mode: str = "heuristic",
+    surprise_weight: float = 1.0,
 ) -> "object":
     """
     Build one correctly-populated ``WeightedSignal``.
@@ -103,4 +104,7 @@ def build_signal(
         transmission=transmission,
         report_kind=report_kind,
         mode=mode,
+        # Task 3: surprise size of an ACTUAL scheduled-data print (1.0 for
+        # every other signal).
+        surprise_weight=surprise_weight,
     )

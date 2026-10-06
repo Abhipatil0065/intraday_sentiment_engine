@@ -17,6 +17,8 @@ from typing import List, Literal
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.models.enums import NewsCategory
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 QualityTier = Literal[
@@ -85,6 +87,7 @@ class Settings(BaseSettings):
     )
     llm_max_tokens: int = Field(
         default=1800, validation_alias=AliasChoices(
+
             "LLM_MAX_TOKENS", "DEEPSEEK_MAX_TOKENS")
     )
     # Some OpenAI-compatible servers reject response_format={"type":"json_object"}.
@@ -137,10 +140,15 @@ class Settings(BaseSettings):
     dedup_similarity_threshold: float = 0.72
     dedup_time_window_hours: int = 12
     # A cluster counts as ONE event. Extra INDEPENDENT sources add only a small
-    # capped boost, so five outlets covering one FOMC decision cannot cast
-    # five votes. Same-source repeats never raise the boost.
+    # capped boost with diminishing returns (1/log2(n+1)), so five outlets
+    # covering one FOMC decision cannot cast five votes. Same-source repeats
+    # never raise the boost. Total boost capped by CORROBORATION_MAX_BOOST.
     corroboration_per_source: float = 0.10
     corroboration_max_boost: float = 0.30
+    # Task 5b: when a scheduled release (ACTUAL_DATA) arrives, earlier preview
+    # or forecast headlines for the same indicator family and same day stop
+    # counting (weight 0). Match by indicator family and date, not by exact text.
+    preview_suppression_enabled: bool = True
     # Phase 1: when false, every signal keeps corroboration=1.0 exactly as it
     # did before the wiring fix, so the change can be switched off in one place.
     corroboration_enabled: bool = True
@@ -532,5 +540,182 @@ def get_settings() -> Settings:
 settings = get_settings()
 
 # Ensure the directories the app writes to exist at import time.
+# Ensure the directories the app writes to exist at import time.
 for _d in (BASE_DIR / "data", BASE_DIR / "logs"):
     os.makedirs(_d, exist_ok=True)
+
+# ---------------------------------------------------------------------------
+# Source trust tiers (Task 4).
+#
+# Tier 1 = highest-trust, confirmed/official items. Tier 3 = lowest-trust,
+# analyst opinion / forecast / rumor. The tier multiplier multiplies the
+# importance/strength/relevance/persistence factors inside
+# sentiment_engine._signal_weight exactly once.
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Event tiers (Task 4b). Tier comes from the EVENT (importance + category +
+# report_kind), never from the outlet. Source quality stays a separate narrow
+# trust factor (0.9..1.0).
+#
+#   TIER_1 = VERY_HIGH importance, ACTUAL_DATA prints for CPI/PPI/PCE/NFP/FOMC
+#            / rate decisions, confirmed geopolitical shocks, ETF flow data.
+#   TIER_2 = central-bank speeches, secondary data, official statements.
+#   TIER_3 = analyst opinion, previews, commentary, forecasts.
+# ---------------------------------------------------------------------------
+TIER_MULTIPLIERS = {
+    "TIER_1": 1.00,
+    "TIER_2": 0.45,
+    "TIER_3": 0.15,
+}
+
+# Task 5a: intraday recency decay half-lives by EVENT TIER (not category).
+# Exponential decay: weight = 0.5 ** (age_hours / half_life).
+# Tier 1 ~6h, Tier 2 ~2h, Tier 3 ~1h.
+# TRADING_DAY_CUTOFF_HOURS: any item older than this gets weight 0.
+TIER_HALF_LIVES = {
+    "TIER_1": 6.0,
+    "TIER_2": 2.0,
+    "TIER_3": 1.0,
+}
+TRADING_DAY_CUTOFF_HOURS = 16.0
+
+# Task 3: one multiplier for rumors/unconfirmed items ("reportedly",
+# "sources say", "may", "could", "might", opinion pieces).
+RUMOR_MULTIPLIER = 0.5
+
+# Task 3: slight boost for confirmed/official items.
+CONFIRMED_BOOST = 1.05
+
+# Task 8: stability (no whipsaw) constants.
+# Minimum margin by which the opposite side must exceed the current side
+# to trigger a flip (unless a fresh Tier 1 item forces it).
+FLIP_MARGIN = 15.0
+# Minimum minutes between bias flips for non-Tier-1 events.
+FLIP_HOLD_MINUTES = 15
+
+# ---------------------------------------------------------------------------
+# Per-asset driver rankings (Task 6).
+# Each asset has its own ranked list of event types (drivers) by importance.
+# The driver rank weight scales the transmission magnitude: top driver = 1.0,
+# second = 0.9, third = 0.8, etc. This is applied ONCE in the weight path.
+# Event types not listed for an asset get a minimal weight (0.3).
+# ---------------------------------------------------------------------------
+DRIVER_RANKINGS: dict[str, dict[str, float]] = {
+    # GOLD: Fed path / real yields / USD first, then geopolitical risk-off (bullish),
+    # then ETF and central-bank buying.
+    "GOLD": {
+        "HAWKISH_POLICY": 1.00,
+        "DOVISH_POLICY": 1.00,
+        "RECESSION_CUT": 0.95,
+        "RISING_YIELDS": 0.95,
+        "FALLING_YIELDS": 0.95,
+        "STRONG_USD": 0.90,
+        "WEAK_USD": 0.90,
+        "HOT_INFLATION": 0.90,
+        "COOL_INFLATION": 0.85,
+        "STRONG_JOBS": 0.85,
+        "WEAK_JOBS": 0.80,
+        "GEOPOLITICAL_RISK": 1.00,   # risk-off = bullish gold
+        "BANKING_STRESS": 0.95,      # safe-haven demand
+        "RISK_OFF": 0.90,            # flight to quality
+        "RISK_ON": 0.50,             # risk-on hurts gold
+        "GOLD_ETF_FLOW": 0.95,
+        "BTC_ETF_FLOW": 0.05,
+        "CRYPTO_REGULATION": 0.05,
+        "CRYPTO_LIQUIDATION": 0.10,
+        "CHINA_DEMAND": 0.40,
+        "INDUSTRIAL_DEMAND": 0.20,
+        "COMMODITY_SUPPLY": 0.60,
+        "OIL_SUPPLY_TIGHTNESS": 0.15,
+        "OIL_SUPPLY_GLUT": 0.10,
+        "GENERAL_MACRO": 0.30,
+    },
+    # SILVER: gold's drivers plus industrial demand and China data.
+    "SILVER": {
+        "HAWKISH_POLICY": 0.95,
+        "DOVISH_POLICY": 0.95,
+        "RECESSION_CUT": 0.85,
+        "RISING_YIELDS": 0.90,
+        "FALLING_YIELDS": 0.90,
+        "STRONG_USD": 0.85,
+        "WEAK_USD": 0.85,
+        "HOT_INFLATION": 0.85,
+        "COOL_INFLATION": 0.80,
+        "STRONG_JOBS": 0.80,
+        "WEAK_JOBS": 0.75,
+        "GEOPOLITICAL_RISK": 0.70,   # weaker safe-haven (part industrial)
+        "BANKING_STRESS": 0.60,      # weaker safe-haven
+        "RISK_OFF": 0.55,
+        "RISK_ON": 0.55,
+        "GOLD_ETF_FLOW": 0.20,       # minor read-through
+        "BTC_ETF_FLOW": 0.10,
+        "CRYPTO_REGULATION": 0.05,
+        "CRYPTO_LIQUIDATION": 0.10,
+        "CHINA_DEMAND": 1.00,        # top driver for silver (industrial)
+        "INDUSTRIAL_DEMAND": 0.95,   # top driver for silver
+        "COMMODITY_SUPPLY": 0.75,
+        "OIL_SUPPLY_TIGHTNESS": 0.15,
+        "OIL_SUPPLY_GLUT": 0.10,
+        "GENERAL_MACRO": 0.30,
+    },
+    # BITCOIN: ETF flows, liquidity / rate path, regulation, risk sentiment.
+    "BITCOIN": {
+        "HAWKISH_POLICY": 0.85,
+        "DOVISH_POLICY": 0.85,
+        "RECESSION_CUT": 0.80,
+        "RISING_YIELDS": 0.90,
+        "FALLING_YIELDS": 0.85,
+        "STRONG_USD": 0.80,
+        "WEAK_USD": 0.75,
+        "HOT_INFLATION": 0.90,
+        "COOL_INFLATION": 0.80,
+        "STRONG_JOBS": 0.85,
+        "WEAK_JOBS": 0.80,
+        "GEOPOLITICAL_RISK": 0.35,   # risk-off = bearish btc
+        "BANKING_STRESS": 0.90,      # liquidity stress
+        "RISK_ON": 1.00,             # top driver: risk-on = bullish btc
+        "RISK_OFF": 1.00,            # top driver: risk-off = bearish btc
+        "GOLD_ETF_FLOW": 0.05,
+        "BTC_ETF_FLOW": 1.00,        # top driver: ETF flows
+        "CRYPTO_REGULATION": 1.00,   # top driver: regulation
+        "CRYPTO_LIQUIDATION": 1.00,  # top driver: liquidations
+        "CHINA_DEMAND": 0.25,
+        "INDUSTRIAL_DEMAND": 0.20,
+        "COMMODITY_SUPPLY": 0.10,
+        "OIL_SUPPLY_TIGHTNESS": 0.10,
+        "OIL_SUPPLY_GLUT": 0.05,
+        "GENERAL_MACRO": 0.30,
+    },
+}
+
+# ---------------------------------------------------------------------------
+# Equity card relevance matrix (Task 7).
+# The equity card has its OWN relevance table, separate from BITCOIN's slot.
+# Relevant categories: EQUITIES, central bank, macro data, geopolitical,
+# banking stress, risk sentiment. All scaled 0.0-1.0.
+# ---------------------------------------------------------------------------
+EQUITY_RELEVANCE: dict[str, float] = {
+    NewsCategory.EQUITIES: 1.00,
+    NewsCategory.CENTRAL_BANK: 0.95,
+    NewsCategory.INTEREST_RATES: 0.95,
+    NewsCategory.INFLATION: 0.90,
+    NewsCategory.EMPLOYMENT: 0.90,
+    NewsCategory.GDP: 0.85,
+    NewsCategory.TREASURY_YIELDS: 0.95,
+    NewsCategory.USD_DXY: 0.90,
+    NewsCategory.GEOPOLITICS: 0.70,
+    NewsCategory.RISK_SENTIMENT: 0.80,
+    NewsCategory.BANKING_FINANCIAL_STRESS: 0.85,
+    NewsCategory.ETF_FLOWS: 0.55,
+    NewsCategory.COMMODITY_SUPPLY_DEMAND: 0.30,
+    NewsCategory.INDUSTRIAL_DEMAND: 0.25,
+    NewsCategory.CHINA: 0.40,
+    NewsCategory.CRYPTO_REGULATION: 0.10,
+    NewsCategory.BITCOIN_ETF_FLOWS: 0.05,
+    NewsCategory.CRYPTO_MARKET_FLOWS: 0.05,
+    NewsCategory.OIL_ENERGY: 0.35,
+    NewsCategory.OTHER: 0.10,
+}
+

@@ -23,10 +23,11 @@ from app.analysis.economic_impact import (
     signals_for_events,
     to_calendar_summary,
 )
+from app.analysis import release_surprise
 from app.analysis.event_deduplication import EventDeduplicator
 from app.analysis.fj_sessions import FINANCIAL_JUICE_SOURCE
 from app.analysis.news_classifier import analyze_article
-from app.analysis.sentiment_engine import WeightedSignal
+from app.analysis.sentiment_engine import WeightedSignal, remember_bias
 from app.analysis.signal_factory import build_signal
 from app.services.bias_snapshots import AssetVerdict
 from app.config import settings
@@ -373,6 +374,44 @@ def _calendar_signal_to_weighted(sig: CalendarSignal) -> WeightedSignal:
     )
 
 
+def _suppress_previews(signals: list[WeightedSignal]) -> list[WeightedSignal]:
+    """
+    Task 5b: When a scheduled release (ACTUAL_DATA) arrives for an indicator,
+    earlier preview or forecast headlines for the same indicator family and
+    same day stop counting (weight 0). Match by indicator family and date,
+    not by exact text.
+
+    Modifies signals in place by setting relevance=0 for suppressed signals.
+    """
+    from app.config import settings
+    from app.analysis.release_surprise import indicator_family
+
+    if not settings.preview_suppression_enabled:
+        return signals
+
+    # Collect ACTUAL signals by (indicator_family, date)
+    actual_keys = set()
+    for s in signals:
+        if s.report_kind is ReportKind.ACTUAL:
+            family = indicator_family(s.title)
+            if family != "unknown":
+                date_key = s.published_at.date() if s.published_at else None
+                if date_key:
+                    actual_keys.add((family, date_key))
+
+    # Suppress PREP/GENERAL signals that match an ACTUAL
+    for s in signals:
+        if s.report_kind in (ReportKind.PREP, ReportKind.GENERAL):
+            family = indicator_family(s.title)
+            if family != "unknown":
+                date_key = s.published_at.date() if s.published_at else None
+                if date_key and (family, date_key) in actual_keys:
+                    s.relevance = 0.0  # Weight will be 0 in _signal_weight
+                    s.persistence = 0.0  # Extra safety
+
+    return signals
+
+
 def calendar_summary(asset: Asset, limit: int = 8) -> list[dict]:
     """Dashboard rows for one asset's economic calendar."""
     return to_calendar_summary(_calendar_signals, asset, limit=limit)
@@ -418,6 +457,14 @@ def _recompute_sentiment(session):
         except ValueError:
             cat_enum = NewsCategory.OTHER
 
+        # Task 3: an ACTUAL scheduled-data report also carries a surprise
+        # weight - its direction was already fixed at ingest from the
+        # surprise sign, this is only how LARGE the surprise was.
+        kind = ReportKind(row.report_kind)
+        release_text = f"{row.title} {row.body}"
+        printed = (release_surprise.parse(release_text)
+                   if kind is ReportKind.ACTUAL else None)
+
         for impact in row.impacts:
             # Phase 1: category drives the decay half-life, and the event key
             # is the cluster identity - both were previously left at their
@@ -443,7 +490,9 @@ def _recompute_sentiment(session):
                     independent_sources=(event.article_count if event else 1),
                     reason=impact.reason,
                     transmission=impact.transmission,
-                    report_kind=ReportKind(row.report_kind),
+                    report_kind=kind,
+                    surprise_weight=release_surprise.surprise_weight(
+                        printed, release_text),
                     session_multiplier=session_relevance(
                         detect_session(), cat_enum.value),
                 )
@@ -464,6 +513,9 @@ def _recompute_sentiment(session):
 
     global _last_regime
     _last_regime = assessment
+
+    # Task 5b: suppress preview/forecast headlines when actual release arrives
+    signals = _suppress_previews(signals)
 
     # Item 8: an imminent high-impact release makes any standing bias unreliable.
     at_risk, risk_note = (False, "")
@@ -488,6 +540,12 @@ def _recompute_sentiment(session):
             _decision_log().record_bias(current_result)
         except Exception as exc:  # noqa: BLE001 - auditing is best-effort
             log.debug("decision log write failed: %s", exc)
+
+        # Binary bias: carry-forward history must equal the PUBLISHED (CURRENT)
+        # verdict. market_prep/market_wrap computed their own views above via
+        # compute() and would otherwise be the last write to the shared
+        # per-asset state.
+        remember_bias(asset.value, current_result.bias)
 
         for scope, result in (
             ("CURRENT", current_result),

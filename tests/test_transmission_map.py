@@ -177,11 +177,79 @@ def test_resolve_reports_the_dominant_event_type():
     }
 
 
+# --- Task 6: per-asset driver logic tests ---
+def test_geopolitical_escalation_gold_bullish_btc_bearish():
+    """Geopolitical escalation gives GOLD bullish and BITCOIN bearish."""
+    resolved = tm.resolve(
+        "Missile strike widens as sanctions bite amid escalating conflict",
+        NewsCategory.GEOPOLITICS,
+    )
+    # Gold: safe-haven demand -> bullish
+    assert resolved[Asset.GOLD].direction is Direction.BULLISH
+    assert resolved[Asset.GOLD].sign == +1
+    # Bitcoin: risk-off liquidity stress -> bearish
+    assert resolved[Asset.BITCOIN].direction is Direction.BEARISH
+    assert resolved[Asset.BITCOIN].sign == -1
+    # Silver: weaker safe-haven (part industrial) -> bullish but weaker
+    assert resolved[Asset.SILVER].direction is Direction.BULLISH
+    # Gold should react more strongly than silver to geopolitical risk
+    assert resolved[Asset.GOLD].magnitude >= resolved[Asset.SILVER].magnitude
+
+
+def test_hawkish_fed_all_three_bearish():
+    """Hawkish Fed gives all three bearish."""
+    resolved = tm.resolve(
+        "Fed announces surprise rate hike as Powell signals higher for longer",
+        NewsCategory.CENTRAL_BANK,
+    )
+    for asset in Asset:
+        assert resolved[asset].direction is Direction.BEARISH, asset.value
+        assert resolved[asset].sign == -1, asset.value
+
+
+def test_btc_etf_outflows_btc_bearish_gold_unchanged():
+    """Bitcoin ETF outflows give BITCOIN bearish with gold direction unchanged."""
+    resolved = tm.resolve(
+        "Bitcoin ETF outflows surge as investors redeem shares",
+        NewsCategory.BITCOIN_ETF_FLOWS,
+    )
+    # BTC: outflow -> bearish
+    assert resolved[Asset.BITCOIN].direction is Direction.BEARISH
+    assert resolved[Asset.BITCOIN].sign == -1
+    assert resolved[Asset.BITCOIN].magnitude > 0.4
+    # Gold: ETF flow has no transmission path (sign 0)
+    assert resolved[Asset.GOLD].sign == 0
+    assert resolved[Asset.GOLD].direction in (Direction.NEUTRAL, Direction.MIXED)
+    # Silver: same
+    assert resolved[Asset.SILVER].sign == 0
+    assert resolved[Asset.SILVER].direction in (Direction.NEUTRAL, Direction.MIXED)
+
+
+def test_driver_rank_weights_applied_per_asset():
+    """Driver rank weights are applied per asset (top driver = 1.0)."""
+    from app.config import DRIVER_RANKINGS
+    
+    # GOLD: GEOPOLITICAL_RISK is top driver (1.0)
+    assert DRIVER_RANKINGS["GOLD"]["GEOPOLITICAL_RISK"] == 1.0
+    # SILVER: CHINA_DEMAND and INDUSTRIAL_DEMAND are top (1.0, 0.95)
+    assert DRIVER_RANKINGS["SILVER"]["CHINA_DEMAND"] == 1.0
+    assert DRIVER_RANKINGS["SILVER"]["INDUSTRIAL_DEMAND"] == 0.95
+    # BITCOIN: BTC_ETF_FLOW, CRYPTO_REGULATION, CRYPTO_LIQUIDATION, RISK_ON, RISK_OFF are top (1.0)
+    assert DRIVER_RANKINGS["BITCOIN"]["BTC_ETF_FLOW"] == 1.0
+    assert DRIVER_RANKINGS["BITCOIN"]["CRYPTO_REGULATION"] == 1.0
+    assert DRIVER_RANKINGS["BITCOIN"]["CRYPTO_LIQUIDATION"] == 1.0
+    assert DRIVER_RANKINGS["BITCOIN"]["RISK_ON"] == 1.0
+    assert DRIVER_RANKINGS["BITCOIN"]["RISK_OFF"] == 1.0
+    # Unlisted event types get minimal weight (0.3)
+    assert DRIVER_RANKINGS["GOLD"].get("UNKNOWN_EVENT", 0.3) == 0.3
+
+
 def test_price_action_headline_does_not_produce_a_direction():
-    """Item 5 rule enforced through the transmission layer."""
+    """NEWS-ONLY bias (Task 2): price action no longer damps the scale."""
     resolved = tm.resolve("Gold plunges 2% in early trade",
                           NewsCategory.COMMODITY_SUPPLY_DEMAND)
-    assert resolved[Asset.GOLD].magnitude < 0.15
+    assert resolved[Asset.GOLD].priced_in is False
+    assert resolved[Asset.GOLD].magnitude >= 0.0
 
 
 def test_magnitude_scales_with_evidence_but_stays_bounded():

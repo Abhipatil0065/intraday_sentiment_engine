@@ -43,6 +43,11 @@ BULLISH = "BULLISH"
 BEARISH = "BEARISH"
 NO_BIAS = "NO_BIAS"
 
+# The ONE lean shown when a named side contradicts the raw split (a tie-break
+# verdict whose raw score leans the other way): one point over half toward the
+# label - never a strong-looking bar for a call the engine had to tie-break.
+LEAN_BULL_PCT = 51
+
 # The engine's own vocabulary is accepted, plus the enum's .value form, so
 # callers may pass either Bias.BULLISH or the plain string.
 _LABEL_FOR_BIAS = {
@@ -123,6 +128,18 @@ def to_display(score: float, bias) -> dict:
     # break the 100-total invariant, so it is clamped before the arithmetic.
     bull_pct = _clamp_pct(int(round(50 + numeric / 2.0)))
     bear_pct = 100 - bull_pct
+
+    # The split must never contradict a named side. A tie-break verdict can
+    # carry a raw score leaning the other way, and a bar that disagrees with
+    # the badge tells the reader two stories. When that happens the split is
+    # replaced by the one small lean toward the label (LEAN_BULL_PCT), so a
+    # weak call still reads as weak instead of flipping into a strong one.
+    if name == BULLISH and bull_pct < 50:
+        bull_pct = LEAN_BULL_PCT
+        bear_pct = 100 - bull_pct
+    elif name == BEARISH and bear_pct < 50:
+        bull_pct = 100 - LEAN_BULL_PCT
+        bear_pct = 100 - bull_pct
 
     if name == BULLISH:
         # An explicit call is never downgraded, even at an even split.

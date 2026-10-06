@@ -140,6 +140,63 @@ def _transmission_for(asset: Asset, direction: Direction) -> str:
             "intraday input for this asset.")
 
 
+def _apply_release_surprise(result: ArticleAnalysis, text: str) -> None:
+    """
+    TASK 3: an article reporting an ACTUAL scheduled-data print takes each
+    asset's direction from the SURPRISE (actual minus forecast, falling back
+    to previous) via the per-asset table - never from words like "rises" or
+    "falls". The existing cue direction is kept only when forecast and
+    previous are both missing, i.e. there is nothing to compare against.
+
+    TASK 3d: multiple prints in one headline are combined by weight.
+    """
+    from app.analysis.release_surprise import (
+        combine_prints_for_asset,
+        parse_all,
+        surprise_weight,
+    )
+
+    prints = parse_all(text)
+    if not prints:
+        return
+    result.report_kind = ReportKind.ACTUAL
+
+    for impact in result.assets:
+        # Combine all prints for this asset
+        direction, combined_weight = combine_prints_for_asset(
+            impact.asset, prints, impact.direction, use_equity_column=False, text=text)
+        impact.direction = direction
+        # Update surprise_weight on the signal (will be used downstream)
+        # Note: the signal's surprise_weight is set at ingest time in pipeline.py
+        # from the single print. Here we just update the direction.
+        # The weight is already applied via the signal's surprise_weight field.
+
+        # Determine base for reason string (use the first print with an expectation)
+        base = None
+        label = ""
+        for p in prints:
+            if p.forecast is not None:
+                base = p.forecast
+                label = "forecast"
+                break
+            elif p.previous is not None:
+                base = p.previous
+                label = "previous"
+                break
+
+        if base is None:
+            impact.reason = (
+                f"Actual {prints[0].actual:g} with no published expectation - "
+                f"cue direction kept ({direction.value.lower()}) for "
+                f"{impact.asset.label}.")
+        else:
+            impact.reason = (
+                f"Actual {prints[0].actual:g} vs {base:g} {label} "
+                f"({prints[0].actual - base:+g}) -> {direction.value.lower()} "
+                f"for {impact.asset.label}.")
+        impact.transmission = _transmission_for(impact.asset, direction)
+
+
 def heuristic_analyze(title: str, body: str = "") -> ArticleAnalysis:
     """
     Deterministic classification - the always-available fallback engine.
@@ -179,15 +236,21 @@ def heuristic_analyze(title: str, body: str = "") -> ArticleAnalysis:
                 strength=_strength_from(cue_magnitude, rel, result.importance),
                 relevance=rel,
                 persistence=persistence,
+                # NEWS-ONLY bias (Task 2): price_confirmation/price_action
+                # stays on the feed shape but is constant and unused in math.
                 reason=_build_reason(asset, result.category, impact.direction,
                                      text,
                                      dominant=impact.dominant.value
                                      if impact.dominant else None,
-                                     priced_in=quality["price_action"]),
+                                     priced_in=False),
                 transmission=_transmission_for(asset, impact.direction),
                 metal_character=char if asset is Asset.SILVER else None,
             )
         )
+
+    # Task 3: actual-data prints decide direction from the surprise, not the
+    # wording (report_kind becomes ACTUAL only when a print was parsed).
+    _apply_release_surprise(result, text)
 
     result.relevance_score = max((a.relevance for a in result.assets), default=0.0)
     if not result.assets:
@@ -354,9 +417,8 @@ async def llm_analyze(title: str, body: str = "") -> ArticleAnalysis:
             # plus an explicit mention - the model does not get to invent how
             # much an asset should matter.
             rel = relevance_for(result.category, entry.asset, title)
-            magnitude = entry.magnitude
-            if entry.priced_in:
-                magnitude *= float(settings.priced_in_multiplier)
+            # NEWS-ONLY bias (Task 2): `priced_in` stays on the schema but is
+            # constant and never scales strength/weight/score.
             result.assets.append(
                 AssetAnalysis(
                     asset=entry.asset,
@@ -371,6 +433,10 @@ async def llm_analyze(title: str, body: str = "") -> ArticleAnalysis:
                                      if entry.asset is Asset.SILVER else None),
                 )
             )
+
+        # Task 3: the surprise decides direction for actual-data reports,
+        # whichever engine produced the candidate directions.
+        _apply_release_surprise(result, f"{title} {body}")
 
         if not result.assets:
             # An EMPTY assets array is a VALID answer: the model is correctly

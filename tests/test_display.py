@@ -620,17 +620,16 @@ def test_decision_log_path_is_untouched_by_display():
             f"app/analysis/display.py must stay pure, found {forbidden!r}")
 
 
-def test_no_bias_gate_is_untouched():
+def test_no_bias_gate_is_removed():
     """
-    The NO_BIAS rule must still require BOTH floors. This is the scoring
-    behaviour the display change was explicitly not allowed to alter.
+    Task 1: the old score/confidence gate (_decide) that withheld a label is
+    gone. A signed score always names a side and confidence never gates it.
     """
-    from app.analysis.sentiment_engine import _decide
+    from app.analysis import sentiment_engine as se
 
-    assert _decide(0.0, 0.0).value == "NO_BIAS"
-    assert _decide(99.0, 0.01).value == "NO_BIAS"   # confidence too low
-    assert _decide(0.5, 0.99).value == "NO_BIAS"    # score too small
-    assert _decide(50.0, 0.8).value == "BULLISH"
+    assert not hasattr(se, "_decide"), "the NO_BIAS gate must stay removed"
+    r = se.compute([], se.Asset.GOLD)
+    assert r.bias.value in ("BULLISH", "BEARISH")
 
 
 # --------------------------------------------------------------------------
@@ -671,18 +670,19 @@ def test_api_block_still_exposes_score_and_confidence(session):
         assert block["display"]["bull_pct"] + block["display"]["bear_pct"] == 100
 
 
-def test_empty_state_block_is_neutral(session):
+def test_empty_state_block_is_directional_and_even(session):
     """
     With nothing stored, _block must produce the explicit empty state - and
-    that state is a genuine NO_BIAS, so it renders neutral rather than a side.
+    binary bias means it names a side (DEFAULT_BIAS) rather than a grey
+    NO_BIAS, while the split stays an honest 50/50.
     """
     from app.main import _block
 
     empty = _block(session, "ZZZ_NO_SUCH_ASSET", "MARKET_PREP")
     assert empty["score"] == 0.0
     assert empty["confidence"] == 0.0
-    assert empty["bias"] == "NO_BIAS"
-    assert empty["display"]["label"] == "NEUTRAL"
+    assert empty["bias"] in ("BULLISH", "BEARISH")
+    assert empty["display"]["label"] == empty["bias"]
     assert empty["display"]["pct"] == 50
     assert empty["display"]["bull_pct"] == 50
     assert empty["display"]["bear_pct"] == 50

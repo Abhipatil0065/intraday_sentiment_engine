@@ -22,6 +22,7 @@ from sqlalchemy import func, select
 
 from app.analysis import fj_sessions, llm_client
 from app.analysis.display import to_display
+from app.analysis.sentiment_engine import DEFAULT_BIAS
 from app.config import settings
 from app.database import init_db, session_scope
 from app.ingestion.base import parse_source_config
@@ -178,23 +179,27 @@ def _block(session, asset: str, scope: str) -> dict:
     """
     One sentiment block, or an explicit empty state (never invented data).
 
-    Item 2: the block reports score / confidence / bias, where bias may be
-    NO_BIAS. There is no forced 100% bull/bear split any more.
+    BINARY BIAS: the block reports score / confidence / bias, where bias is
+    strictly BULLISH or BEARISH. ``stale`` marks a carried-forward verdict -
+    no signals reached this asset in the window (n=0), or no snapshot exists
+    at all.
     """
     snap = _latest_snapshot(session, asset, scope)
     if snap is None:
-        # The empty state is genuinely NO_BIAS, so it renders NEUTRAL rather
-        # than an empty box - and carries the same display block shape as a
-        # real one, so the UI never has to branch on "is there data".
+        # Nothing computed yet. Still directional (binary bias): the default
+        # direction renders as a 50/50 split with a named side rather than a
+        # grey NEUTRAL - and carries the same display block shape as a real
+        # one, so the UI never has to branch on "is there data".
         return {
             "asset": asset, "scope": scope,
-            "score": 0.0, "confidence": 0.0, "bias": "NO_BIAS",
-            "display": to_display(0.0, "NO_BIAS"),
+            "score": 0.0, "confidence": 0.0, "bias": DEFAULT_BIAS.value,
+            "display": to_display(0.0, DEFAULT_BIAS.value),
             # No snapshots at all, so there is no stance to date.
             "bias_since_utc": None,
             "mode": "heuristic", "delta_60m": 0.0,
             "event_risk": False, "event_risk_note": "",
             "drivers": [], "bull_drivers": [], "bear_drivers": [], "conflict": None,
+            "stale": True,
             "note": "No sentiment computed yet for this scope.",
             "contributing_articles": 0, "contributing_clusters": 0,
             "price_note": "Price-action confirmation unavailable.",
@@ -222,6 +227,10 @@ def _block(session, asset: str, scope: str) -> dict:
         "bull_drivers": snap.bull_drivers or [],
         "bear_drivers": snap.bear_drivers or [],
         "conflict": snap.conflict,
+        # Binary bias: a snapshot with n=0 carried its bias forward from
+        # history (or the newest article / DEFAULT_BIAS) instead of news in
+        # this window.
+        "stale": snap.contributing_articles == 0,
         "note": snap.note or "",
         "contributing_articles": snap.contributing_articles,
         "contributing_clusters": 0,
