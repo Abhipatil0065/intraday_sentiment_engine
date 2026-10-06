@@ -72,6 +72,8 @@ _running = False
 _last_regime = None  # RegimeAssessment from the most recent recompute
 # Economic-calendar signals from the most recent fetch, shared with the API.
 _calendar_signals: list[CalendarSignal] = []
+# Session-aware global equity card from the most recent recompute (NOW-only).
+_last_equity_card: Optional[dict] = None
 
 
 def runtime_state() -> dict:
@@ -553,7 +555,23 @@ def _recompute_sentiment(session):
     except Exception as exc:  # noqa: BLE001 - diagnostics never break a poll
         log.warning("bias snapshot stage skipped: %s", exc)
 
+    # Session-aware global equity card: NOW-only, in-memory, never persisted.
+    # No SentimentSnapshot / BiasSnapshot rows - the frontend keys flip state
+    # by the region field in the payload.
+    global _last_equity_card
+    try:
+        from app.analysis.equity_card import build_equity_card, to_payload
+        _last_equity_card = to_payload(build_equity_card(signals))
+    except Exception as exc:  # noqa: BLE001 - equity card never breaks a poll
+        log.debug("equity card build failed: %s", exc)
+        _last_equity_card = None
+
     return signals, assessment
+
+
+def current_equity_card() -> Optional[dict]:
+    """Read-only view of the most recent equity card (a copied dict)."""
+    return dict(_last_equity_card) if _last_equity_card else None
 
 
 def _is_article_today_query(published: Optional[datetime]) -> bool:

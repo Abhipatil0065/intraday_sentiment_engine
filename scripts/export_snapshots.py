@@ -50,7 +50,7 @@ FIELDNAMES = [
     "manual_price_note",
 ]
 
-ALL_ASSETS = ["XAUUSD", "XAGUSD", "BTCUSD", "USOIL"]
+ALL_ASSETS = ["XAUUSD", "XAGUSD", "BTCUSD"]
 
 
 def parse_bound(raw: str, *, end_of_day: bool) -> datetime | None:

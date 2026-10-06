@@ -63,8 +63,6 @@ TRANSMISSION: dict[str, dict[Asset, str]] = {
                       "read-through) -> bullish XAGUSD",
         Asset.BITCOIN: "Supportive news -> easier policy / stronger risk appetite / "
                        "institutional inflows -> bullish BTCUSD",
-        Asset.OIL: "Supportive news -> tighter physical supply / OPEC+ discipline or "
-                   "stronger fuel demand -> bullish USOIL",
     },
     Direction.BEARISH.value: {
         Asset.GOLD: "Negative news -> higher rate expectations / stronger USD -> higher "
@@ -73,8 +71,6 @@ TRANSMISSION: dict[str, dict[Asset, str]] = {
                       "drag) -> bearish XAGUSD",
         Asset.BITCOIN: "Negative news -> tighter policy / risk-off / outflows -> "
                        "bearish BTCUSD",
-        Asset.OIL: "Negative news -> supply glut, inventory builds or weak fuel "
-                   "demand -> bearish USOIL",
     },
 }
 

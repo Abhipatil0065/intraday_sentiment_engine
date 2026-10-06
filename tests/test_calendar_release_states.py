@@ -54,7 +54,7 @@ def test_an_unlisted_country_gets_the_conservative_default():
 
 def test_china_outweighs_gold_but_not_silver():
     """
-    China's industrial cycle drives silver and oil far more than gold, which
+    China's industrial cycle drives silver far more than gold or bitcoin, which
     is exactly what the per-asset override exists for.
     """
     from app.analysis.economic_impact import _country_multiplier
@@ -62,8 +62,10 @@ def test_china_outweighs_gold_but_not_silver():
     chn = ev("China CPI YoY", country="CNY")
     assert (_country_multiplier(chn, Asset.SILVER)
             > _country_multiplier(chn, Asset.GOLD))
-    assert (_country_multiplier(chn, Asset.OIL)
-            > _country_multiplier(chn, Asset.GOLD))
+    assert (_country_multiplier(chn, Asset.SILVER)
+            > _country_multiplier(chn, Asset.BITCOIN))
+    assert (_country_multiplier(chn, Asset.BITCOIN)
+            == pytest.approx(_country_multiplier(chn, Asset.GOLD)))
 
 
 def test_country_multipliers_can_be_turned_off(monkeypatch):
@@ -364,37 +366,48 @@ def test_scaling_one_asset_never_changes_another_assets_weight():
     """
     The central guarantee of the per-asset cap: assets are capped independently.
 
-    Gold is pushed over the cap by a big employment cluster while oil stays
-    under it. Oil's weights must come through bit-for-bit unchanged.
+    Gold is pushed over the cap by direct per-asset signals while silver and
+    bitcoin stay under it and must come through bit-for-bit unchanged.
     """
     cap = float(settings.calendar_composite_max_weight)
-    events = [
-        ev("US Nonfarm Payrolls", 180.0, 150.0, 220.0),
-        ev("US Unemployment Rate", 4.4, 4.3, 4.6),
-    ]
+    from app.analysis.economic_impact import CalendarSignal
+    from app.models.enums import Direction, EconomicImportance, ImpactStrength
+    base = ev("US Nonfarm Payrolls", 180.0, 150.0, 220.0)
+
+    def sig(asset, relevance):
+        return CalendarSignal(event=base, profile=None, asset=asset,
+                              direction=Direction.BULLISH,
+                              strength=ImpactStrength.HIGH, relevance=relevance,
+                              importance=EconomicImportance.HIGH, persistence=0.5,
+                              reason="fixture",
+                              transmission="fixture", mode="EXPECTED")
+
+    raw = [sig(Asset.GOLD, cap * 0.6), sig(Asset.GOLD, cap * 0.6),
+           sig(Asset.SILVER, cap * 0.3), sig(Asset.BITCOIN, cap * 0.3)]
     pre: dict = {}
-    for e in events:
-        for s in signals_for_event(e):
-            pre.setdefault(s.asset.value, []).append(s.relevance)
+    for s in raw:
+        pre.setdefault(s.asset.value, []).append(s.relevance)
 
     post: dict = {}
-    for s in cap_composite_release([s for e in events
-                                    for s in signals_for_event(e)]):
+    for s in cap_composite_release(raw):
         post.setdefault(s.asset.value, []).append(s.relevance)
 
     # Gold genuinely breaches, so the fixture is meaningful.
     assert sum(pre[Asset.GOLD.value]) > cap
-    # Oil was already under the cap and must be untouched.
-    assert sum(pre[Asset.OIL.value]) <= cap
-    assert post[Asset.OIL.value] == pytest.approx(pre[Asset.OIL.value],
-                                                 rel=1e-9)
+    # Every asset already under the cap must be untouched.
+    under_cap = [a for a in (Asset.GOLD, Asset.SILVER, Asset.BITCOIN)
+                 if a.value in pre and sum(pre[a.value]) <= cap]
+    assert under_cap, "fixture must leave at least one asset under the cap"
+    for asset in under_cap:
+        assert post[asset.value] == pytest.approx(pre[asset.value],
+                                                  rel=1e-9)
     # ...while gold is scaled to exactly the cap.
     assert sum(post[Asset.GOLD.value]) == pytest.approx(cap, abs=1e-6)
 
 
 def test_a_narrow_release_and_a_multi_asset_release_share_the_rule():
     """
-    A narrow industrial print (China copper imports -> oil + silver only) and a
+    A narrow industrial print (China copper imports -> silver-led narrow set) and a
     four-asset release (CPI) must obey the SAME per-asset bound. The cap must
     not depend on how many assets a release happens to touch.
 

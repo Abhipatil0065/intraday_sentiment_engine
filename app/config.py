@@ -347,7 +347,7 @@ class Settings(BaseSettings):
     # Asset-specific overrides, keyed "COUNTRY:ASSET". CNY needs this because
     # silver and oil follow China's industrial cycle far more closely than
     # gold or bitcoin do.
-    calendar_country_asset_overrides: str = "CNY:XAGUSD=0.8,CNY:USOIL=0.8"
+    calendar_country_asset_overrides: str = "CNY:XAGUSD=0.8"
 
     # Phase 8 cache: serve the last good payload when every provider fails.
     calendar_cache_enabled: bool = True

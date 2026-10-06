@@ -328,11 +328,6 @@ ASSET_CUES: dict = {
                     "equity", "equities", "hawkish", "dovish", "geopolit",
                     "stablecoin", "outflow", "inflow"),
     # Crude's own drivers first, then the macro families that move it.
-    Asset.OIL: ("oil", "crude", "wti", "brent", "opec", "opec+", "barrel",
-                "refinery", "petroleum", "inventory", "inventories", "hormuz",
-                "saudi", "aramco", "supply", "demand", "production", "output",
-                "fed", "rate", "yield", "dollar", "dxy", "growth", "geopolit",
-                "sanction", "hawkish", "dovish", "pipeline", "shale"),
 }
 
 

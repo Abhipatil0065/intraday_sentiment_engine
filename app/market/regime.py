@@ -39,16 +39,16 @@ REGIME_SIGNALS: dict[MarketRegime, list[NewsCategory]] = {
 # Values nudge the assumed direction, they never overwrite per-item analysis.
 REGIME_ASSET_BIAS: dict[MarketRegime, dict[Asset, float]] = {
     # positive = adds bullish pressure, negative = adds bearish pressure
-    MarketRegime.HAWKISH: {Asset.GOLD: -0.35, Asset.SILVER: -0.35, Asset.BITCOIN: -0.45, Asset.OIL: -0.30},
-    MarketRegime.DOVISH: {Asset.GOLD: 0.35, Asset.SILVER: 0.35, Asset.BITCOIN: 0.45, Asset.OIL: 0.25},
-    MarketRegime.RISK_OFF: {Asset.GOLD: 0.25, Asset.SILVER: 0.05, Asset.BITCOIN: -0.45, Asset.OIL: -0.25},
-    MarketRegime.RISK_ON: {Asset.GOLD: -0.15, Asset.SILVER: 0.25, Asset.BITCOIN: 0.40, Asset.OIL: 0.30},
-    MarketRegime.INFLATIONARY: {Asset.GOLD: 0.30, Asset.SILVER: 0.20, Asset.BITCOIN: -0.20, Asset.OIL: 0.45},
-    MarketRegime.DEFLATIONARY: {Asset.GOLD: 0.25, Asset.SILVER: -0.10, Asset.BITCOIN: -0.30, Asset.OIL: -0.40},
-    MarketRegime.LIQUIDITY_DRIVEN: {Asset.GOLD: 0.10, Asset.SILVER: 0.10, Asset.BITCOIN: 0.35, Asset.OIL: 0.10},
-    MarketRegime.GROWTH_DRIVEN: {Asset.GOLD: -0.10, Asset.SILVER: 0.35, Asset.BITCOIN: 0.30, Asset.OIL: 0.35},
-    MarketRegime.GEOPOLITICAL: {Asset.GOLD: 0.40, Asset.SILVER: 0.10, Asset.BITCOIN: -0.20, Asset.OIL: 0.50},
-    MarketRegime.MIXED: {Asset.GOLD: 0.0, Asset.SILVER: 0.0, Asset.BITCOIN: 0.0, Asset.OIL: 0.0},
+    MarketRegime.HAWKISH: {Asset.GOLD: -0.35, Asset.SILVER: -0.35, Asset.BITCOIN: -0.45},
+    MarketRegime.DOVISH: {Asset.GOLD: 0.35, Asset.SILVER: 0.35, Asset.BITCOIN: 0.45},
+    MarketRegime.RISK_OFF: {Asset.GOLD: 0.25, Asset.SILVER: 0.05, Asset.BITCOIN: -0.45},
+    MarketRegime.RISK_ON: {Asset.GOLD: -0.15, Asset.SILVER: 0.25, Asset.BITCOIN: 0.40},
+    MarketRegime.INFLATIONARY: {Asset.GOLD: 0.30, Asset.SILVER: 0.20, Asset.BITCOIN: -0.20},
+    MarketRegime.DEFLATIONARY: {Asset.GOLD: 0.25, Asset.SILVER: -0.10, Asset.BITCOIN: -0.30},
+    MarketRegime.LIQUIDITY_DRIVEN: {Asset.GOLD: 0.10, Asset.SILVER: 0.10, Asset.BITCOIN: 0.35},
+    MarketRegime.GROWTH_DRIVEN: {Asset.GOLD: -0.10, Asset.SILVER: 0.35, Asset.BITCOIN: 0.30},
+    MarketRegime.GEOPOLITICAL: {Asset.GOLD: 0.40, Asset.SILVER: 0.10, Asset.BITCOIN: -0.20},
+    MarketRegime.MIXED: {Asset.GOLD: 0.0, Asset.SILVER: 0.0, Asset.BITCOIN: 0.0},
 }
 
 

@@ -133,6 +133,28 @@ class CalendarEventOut(BaseModel):
     transmission: str = ""
 
 
+class EquityCard(BaseModel):
+    """One session-aware global equity card (NOW-only, never persisted).
+
+    ``region`` is ASIA / EUROPE / US so the frontend can key flip state by
+    region even when the title string changes; ``no_data`` marks the neutral
+    50/50 fallback when no regional EQUITIES signals matched.
+    """
+
+    region: str = "US"
+    title: str = "US EQUITY"
+    symbol: str = "SPX / NDX"
+    score: float = 0.0            # -100 .. +100
+    confidence: float = 0.0       # 0 .. 1
+    bias: str = "NO_BIAS"         # BULLISH | BEARISH | NO_BIAS
+    mode: str = "heuristic"
+    drivers: list[DriverOut] = Field(default_factory=list)
+    contributing_articles: int = 0
+    no_data: bool = True
+    note: str = ""
+    last_updated: str = ""
+
+
 class AssetView(BaseModel):
     """Full dashboard payload for one asset: PREP + WRAP + CURRENT."""
 
@@ -185,6 +207,9 @@ class DashboardPayload(BaseModel):
     regime_confidence: float = 0.0
     regime_drivers: list[str] = Field(default_factory=list)
     assets: list[AssetView] = Field(default_factory=list)
+    equity: Optional[EquityCard] = None
+    equity_title: str = ""
+    equity_region: str = ""
     news_feed: list[NewsItemOut] = Field(default_factory=list)
     # Size of the WHOLE day, not of news_feed (which is one page). The header
     # renders "showing N of TOTAL" from this, so a reader can always tell how

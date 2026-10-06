@@ -54,7 +54,7 @@ FIXTURES = [
     ]),
 ]
 
-ASSETS = ["XAUUSD", "XAGUSD", "BTCUSD", "USOIL"]
+ASSETS = ["XAUUSD", "XAGUSD", "BTCUSD"]
 print()
 print("%-32s %-26s %s" % ("fixture", "asset", "BEFORE -> AFTER"))
 print("-" * 78)

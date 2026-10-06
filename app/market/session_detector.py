@@ -115,6 +115,69 @@ CATEGORY_SESSION_WEIGHT: dict[SessionName, dict[str, float]] = {
 }
 
 
+# Session-aware global equity card (one card, title follows the session).
+# Forex/CFD convention windows above are NY-tz; this map only names the card.
+EQUITY_SESSION_MAP: dict[SessionName, dict[str, object]] = {
+    SessionName.ASIA: {
+        "title": "ASIA EQUITY",
+        "symbol": "NIKKEI / HSI",
+        "keywords": [
+            "nikkei", "topix", "japan", "boj", "bank of japan",
+            "hang seng", "hsi", "shanghai", "sse", "csi 300", "china",
+            "kospi", "korea", "asian shares", "asia-pacific", "nifty",
+            "sensex", "india", "asx", "australia", "rba",
+        ],
+    },
+    SessionName.EUROPE: {
+        "title": "EUROPE EQUITY",
+        "symbol": "DAX / STOXX50",
+        "keywords": [
+            "dax", "stoxx", "ftse", "cac 40", "cac40", "euro stoxx",
+            "european shares", "europe", "ecb", "european central bank",
+            "bank of england", "boe", "bundesbank",
+        ],
+    },
+    SessionName.US: {
+        "title": "US EQUITY",
+        "symbol": "SPX / NDX",
+        "keywords": [
+            "s&p", "s&p 500", "spx", "nasdaq", "ndx", "dow jones", "dow",
+            "nyse", "wall street", "us stocks", "fed", "federal reserve",
+            "fomc", "treasury", "russell 2000",
+        ],
+    },
+}
+
+
+def equity_session(now: Optional[datetime] = None) -> SessionName:
+    """Active equity region: current session, or previous one in OFF_HOURS."""
+    current = detect_session(now)
+    if current is SessionName.OFF_HOURS:
+        return previous_session(now)
+    return current
+
+
+def equity_title(session: SessionName) -> str:
+    """Card title for a session, e.g. SessionName.ASIA -> 'ASIA EQUITY'."""
+    info = EQUITY_SESSION_MAP.get(equity_session()
+                                  if session is SessionName.OFF_HOURS
+                                  else session)
+    if info is not None:
+        title = info.get("title")
+        if isinstance(title, str) and title:
+            return title
+    return "US EQUITY"
+
+
+def equity_keywords(session: SessionName) -> tuple[str, ...]:
+    """Lowercase keyword set used to filter EQUITIES news to one region."""
+    info = EQUITY_SESSION_MAP.get(session)
+    if not info:
+        return ()
+    words = info.get("keywords") or []
+    return tuple(str(w).lower() for w in words if str(w).strip())
+
+
 def session_relevance(session: SessionName, category: str) -> float:
     """Multiplier applied to asset relevance for the active session."""
     return CATEGORY_SESSION_WEIGHT.get(session, {}).get(category, 1.0)

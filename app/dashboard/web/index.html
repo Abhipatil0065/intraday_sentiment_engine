@@ -8,7 +8,7 @@
   :root{
     --bg:#0b0e14; --panel:#141922; --panel2:#1a2029; --line:#232b3a;
     --txt:#e6edf3; --dim:#8b98a9; --gold:#f0b429; --silver:#c0c8d1;
-    --btc:#f7931a; --oil:#3fb6c8; --bull:#2ea043; --bear:#f85149; --neu:#6e7681;
+    --btc:#f7931a; --bull:#2ea043; --bear:#f85149; --neu:#6e7681;
   }
   *{box-sizing:border-box;margin:0;padding:0}
   body{
@@ -50,7 +50,7 @@
   .mcard.gold{--accent:var(--gold)}
   .mcard.silver{--accent:var(--silver)}
   .mcard.bitcoin{--accent:var(--btc)}
-.mcard.oil{--accent:var(--oil)}
+  .mcard.equity{--accent:var(--gold)}
   .mtop{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
   .mname{font-size:22px;font-weight:700;letter-spacing:1.2px;line-height:1.1}
   .msym{font-size:12px;color:var(--dim);letter-spacing:1px}
@@ -152,7 +152,6 @@
   .asset.gold{--accent:var(--gold)}
   .asset.silver{--accent:var(--silver)}
   .asset.bitcoin{--accent:var(--btc)}
-.asset.oil{--accent:var(--oil)}
   .ahead{display:flex;align-items:center;gap:14px;padding:11px 15px;
          border-bottom:1px solid var(--line);background:var(--panel2);flex-wrap:wrap}
   .name{font-size:16px;font-weight:700;letter-spacing:1.2px;line-height:1.15}
@@ -475,30 +474,37 @@ function dominantSide(d){
    tie, so neither box grows) and at is an ISO stamp or null. */
 function trackFlip(asset,side,seed){
   if(!asset) return {side:'',at:null};
-  var prev=FLIP_STATE[asset]||{};
+  /* Equity regions each keep their own flip clock: switching sessions must
+     not reuse the previous region's "Flipped HH:MM". */
+  var key=String(asset);
+  if(key.indexOf('EQUITY:')===0){ key=key; }
+  else if(DATA&&DATA.equity_region&&(asset===DATA.equity_title||asset==='EQUITY')){
+    key='EQUITY:'+DATA.equity_region;
+  }
+  var prev=FLIP_STATE[key]||{};
   /* A tie changes nothing: keep the previous bias AND its timestamp. */
   if(!side) return {side:'',at:prev.at||null};
   if(!prev.bias){
     /* First sighting. There is nothing to have flipped FROM, so a real flip
        time is never invented here - but the server can tell us how long the
        current side has held, and that is far more useful than a blank. */
-    FLIP_STATE[asset]={bias:side,at:seed||null};
+    FLIP_STATE[key]={bias:side,at:seed||null};
     saveFlipState();
-    return {side:side,at:FLIP_STATE[asset].at};
+    return {side:side,at:FLIP_STATE[key].at};
   }
   if(prev.bias!==side){
     /* A real change: stamp it now and keep only the newest. The opposite box
        reads prev.at from this same record, so it automatically loses the time. */
-    FLIP_STATE[asset]={bias:side,at:new Date().toISOString()};
+    FLIP_STATE[key]={bias:side,at:new Date().toISOString()};
     saveFlipState();
-    return {side:side,at:FLIP_STATE[asset].at};
+    return {side:side,at:FLIP_STATE[key].at};
   }
   /* Same side as last time - the 180s poll lands here. The stored time is left
      alone, and a record still holding null is topped up from the server so a
      tab opened before this existed does not stay permanently blank. */
   if(!prev.at && seed){
     prev.at=seed;
-    FLIP_STATE[asset]=prev;
+    FLIP_STATE[key]=prev;
     saveFlipState();
   }
   return {side:side,at:prev.at||null};
@@ -596,13 +602,49 @@ function prepCard(a){
     +'</div>'
     +'</div>';
 }
+/* ONE session-aware global equity card in the 4th strip slot.
+   Reuses mbar/msplit/mnote/verdictClass - no copied markup. Reads
+   payload.equity + payload.equity_title; the element stays in place and only
+   title/symbol/data change on a session switch. Flip key is
+   'EQUITY:<region>' so each region keeps its own "Flipped HH:MM". */
+function equityCard(){
+  var e=(DATA&&DATA.equity)||{};
+  var title=(DATA&&DATA.equity_title)||e.title||'EQUITY';
+  var region=(DATA&&DATA.equity_region)||e.region||'';
+  var b={score:+e.score||0, bias:e.bias||'NO_BIAS',
+         bull_drivers:(e.drivers||[]).filter(function(x){return String((x&&x.direction)||'').toUpperCase()==='BULLISH';}),
+         bear_drivers:(e.drivers||[]).filter(function(x){return String((x&&x.direction)||'').toUpperCase()==='BEARISH';}),
+         contributing_articles:+e.contributing_articles||0,
+         mode:e.mode||'heuristic', delta_60m:0};
+  var d=disp(b);
+  return '<div class="mcard equity" data-goto="equity" title="Session equity card">'
+    +'<div class="mtop"><span class="mname">'+esc(String(title).toUpperCase())+'</span>'
+    +'<span class="msym">'+esc(e.symbol||'')+'</span></div>'
+    +'<div class="mrow"><span class="mlabel">SESSIONS</span>'
+    +'<span class="msess">'+sessionChain()+'</span></div>'
+    +'<div class="mrow"><span class="mlabel">EQUITY NOW</span>'
+    +'<span class="verdict '+verdictClass(d.label)+'">'+d.label+' '+d.pct+'%</span>'
+    +'</div>'
+    +'<div class="msub">region '+esc(region||'n/a')
+    +(e.no_data?' &middot; no regional news':'')+'</div>'
+    +mbar(b)
+    +msplit(b,'EQUITY:'+(region||''))
+    +'<div class="mdrv">'
+    +mnote('bull','BULLISH DRIVERS',b.bull_drivers,3)
+    +mnote('bear','BEARISH DRIVERS',b.bear_drivers,3)+'</div>'
+    +'<div class="mfoot"><span>mode <b>'+esc(b.mode)+'</b></span>'
+    +'<span>n=<b>'+b.contributing_articles+'</b></span>'
+    +(e.note?('<span>'+esc(e.note)+'</span>'):'')
+    +'</div>'
+    +'</div>';
+}
 function renderPrepStrip(assets){
   var box=document.getElementById('prepStrip');
   if(!assets||!assets.length){ box.innerHTML=''; return; }
   box.innerHTML='<div class="strip-head">'
     +'<span class="st">MARKET PREP &mdash; EXPECTED / FORWARD-LOOKING SETUP</span>'
     +'<span class="ss">SESSIONS '+sessionChain()+'</span></div>'
-    +'<div class="strip-cards">'+assets.map(prepCard).join('')+'</div>'
+    +'<div class="strip-cards">'+assets.map(prepCard).join('')+equityCard()+'</div>'
     +'<div class="hr"></div>';
 }
 /* ---- Economic calendar ------------------------------------------------

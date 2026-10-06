@@ -11,7 +11,6 @@ class Asset(str, Enum):
     GOLD = "XAUUSD"
     SILVER = "XAGUSD"
     BITCOIN = "BTCUSD"
-    OIL = "USOIL"
 
     @property
     def label(self) -> str:
@@ -19,7 +18,6 @@ class Asset(str, Enum):
             Asset.GOLD: "Gold",
             Asset.SILVER: "Silver",
             Asset.BITCOIN: "Bitcoin",
-            Asset.OIL: "Oil",
         }[self]
 
     @classmethod

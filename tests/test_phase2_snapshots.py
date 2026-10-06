@@ -46,7 +46,7 @@ def verdict(asset=Asset.GOLD, score=-30.0, confidence=0.4, bias="BEARISH",
 def test_one_row_per_asset():
     rows = build_rows([verdict(a) for a in Asset], now=NOW)
     assert [r["asset"] for r in rows] == Asset.values()
-    assert len(rows) == 4
+    assert len(rows) == len(Asset.values()) == 3
 
 
 def test_row_carries_every_required_column():

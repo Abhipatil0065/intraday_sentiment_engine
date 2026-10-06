@@ -27,7 +27,8 @@ from app.database import init_db, session_scope
 from app.ingestion.base import parse_source_config
 from app.logging_conf import get_logger, setup_logging
 from app.market.session_detector import (
-    detect_session, next_session, previous_session,
+    detect_session, equity_session, equity_title, next_session,
+    previous_session,
 )
 from app.models.db_models import Alert, NewsArticle, NewsEvent, PipelineRun
 from app.models.enums import (
@@ -354,6 +355,13 @@ def build_payload(session) -> dict:
 
     # Regime comes from the most recent sentiment recompute, not a constant.
     regime = state.get("regime")
+    # Session-aware global equity card: NOW-only, computed in the recompute.
+    # Falls back to a neutral card so the frontend never sees a missing key.
+    equity = pipeline.current_equity_card()
+    if not equity:
+        from app.analysis.equity_card import neutral_card, to_payload
+        active = equity_session()
+        equity = to_payload(neutral_card(active))
     return {
         "date": T.now_market().strftime("%Y-%m-%d"),
         "current_time": T.now_market().astimezone(T.display_tz()).strftime("%H:%M:%S"),
@@ -362,6 +370,9 @@ def build_payload(session) -> dict:
         "current_session": detect_session().value,
         "previous_session": previous_session().value,
         "next_session": next_session().value,
+        "equity": equity,
+        "equity_title": equity.get("title", equity_title(equity_session())),
+        "equity_region": equity.get("region", equity_session().value),
         "regime": (regime.regime.value if regime else MarketRegime.MIXED.value),
         "regime_confidence": (regime.confidence if regime else 0.0),
         "regime_drivers": (regime.drivers if regime else []),

@@ -11,78 +11,78 @@
   ],
 
   "HAWKISH_POLICY": {
-    "XAUUSD": [-1, 1.00], "XAGUSD": [-1, 0.92], "BTCUSD": [-1, 0.88], "USOIL": [-1, 0.85]
+    "XAUUSD": [-1, 1.00], "XAGUSD": [-1, 0.92], "BTCUSD": [-1, 0.88]
   },
   "DOVISH_POLICY": {
-    "XAUUSD": [1, 1.00], "XAGUSD": [1, 0.90], "BTCUSD": [1, 0.82], "USOIL": [1, 0.80]
+    "XAUUSD": [1, 1.00], "XAGUSD": [1, 0.90], "BTCUSD": [1, 0.82]
   },
   "RECESSION_CUT": {
-    "XAUUSD": [1, 1.10], "XAGUSD": [0, 0.45], "BTCUSD": [0, 0.55], "USOIL": [-1, 0.75]
+    "XAUUSD": [1, 1.10], "XAGUSD": [0, 0.45], "BTCUSD": [0, 0.55]
   },
   "RISING_YIELDS": {
-    "XAUUSD": [-1, 1.10], "XAGUSD": [-1, 0.95], "BTCUSD": [-1, 0.90], "USOIL": [-1, 0.55]
+    "XAUUSD": [-1, 1.10], "XAGUSD": [-1, 0.95], "BTCUSD": [-1, 0.90]
   },
   "FALLING_YIELDS": {
-    "XAUUSD": [1, 0.95], "XAGUSD": [1, 0.85], "BTCUSD": [1, 0.80], "USOIL": [1, 0.50]
+    "XAUUSD": [1, 0.95], "XAGUSD": [1, 0.85], "BTCUSD": [1, 0.80]
   },
   "STRONG_USD": {
-    "XAUUSD": [-1, 0.95], "XAGUSD": [-1, 0.90], "BTCUSD": [-1, 0.80], "USOIL": [-1, 1.00]
+    "XAUUSD": [-1, 0.95], "XAGUSD": [-1, 0.90], "BTCUSD": [-1, 0.80]
   },
   "WEAK_USD": {
-    "XAUUSD": [1, 0.85], "XAGUSD": [1, 0.80], "BTCUSD": [1, 0.70], "USOIL": [1, 0.95]
+    "XAUUSD": [1, 0.85], "XAGUSD": [1, 0.80], "BTCUSD": [1, 0.70]
   },
   "HOT_INFLATION": {
-    "XAUUSD": [-1, 1.00], "XAGUSD": [-1, 0.92], "BTCUSD": [-1, 0.90], "USOIL": [-1, 0.60]
+    "XAUUSD": [-1, 1.00], "XAGUSD": [-1, 0.92], "BTCUSD": [-1, 0.90]
   },
   "COOL_INFLATION": {
-    "XAUUSD": [1, 0.92], "XAGUSD": [1, 0.85], "BTCUSD": [1, 0.82], "USOIL": [1, 0.55]
+    "XAUUSD": [1, 0.92], "XAGUSD": [1, 0.85], "BTCUSD": [1, 0.82]
   },
   "STRONG_JOBS": {
-    "XAUUSD": [-1, 0.90], "XAGUSD": [-1, 0.85], "BTCUSD": [-1, 0.88], "USOIL": [-1, 0.70]
+    "XAUUSD": [-1, 0.90], "XAGUSD": [-1, 0.85], "BTCUSD": [-1, 0.88]
   },
   "WEAK_JOBS": {
-    "XAUUSD": [1, 0.85], "XAGUSD": [1, 0.80], "BTCUSD": [1, 0.82], "USOIL": [1, 0.75]
+    "XAUUSD": [1, 0.85], "XAGUSD": [1, 0.80], "BTCUSD": [1, 0.82]
   },
   "GEOPOLITICAL_RISK": {
-    "XAUUSD": [1, 1.05], "XAGUSD": [1, 0.70], "BTCUSD": [-1, 0.35], "USOIL": [1, 1.15]
+    "XAUUSD": [1, 1.05], "XAGUSD": [1, 0.70], "BTCUSD": [-1, 0.35]
   },
   "BANKING_STRESS": {
-    "XAUUSD": [1, 1.15], "XAGUSD": [1, 0.60], "BTCUSD": [-1, 0.90], "USOIL": [-1, 0.65]
+    "XAUUSD": [1, 1.15], "XAGUSD": [1, 0.60], "BTCUSD": [-1, 0.90]
   },
   "RISK_ON": {
-    "XAUUSD": [-1, 0.45], "XAGUSD": [1, 0.55], "BTCUSD": [1, 1.00], "USOIL": [1, 0.70]
+    "XAUUSD": [-1, 0.45], "XAGUSD": [1, 0.55], "BTCUSD": [1, 1.00]
   },
   "RISK_OFF": {
-    "XAUUSD": [1, 0.65], "XAGUSD": [1, 0.35], "BTCUSD": [-1, 1.05], "USOIL": [-1, 0.60]
+    "XAUUSD": [1, 0.65], "XAGUSD": [1, 0.35], "BTCUSD": [-1, 1.05]
   },
   "GOLD_ETF_FLOW": {
-    "XAUUSD": [1, 1.05], "XAGUSD": [0, 0.20], "BTCUSD": [0, 0.05], "USOIL": [0, 0.05]
+    "XAUUSD": [1, 1.05], "XAGUSD": [0, 0.20], "BTCUSD": [0, 0.05]
   },
   "BTC_ETF_FLOW": {
-    "XAUUSD": [0, 0.05], "XAGUSD": [0, 0.10], "BTCUSD": [1, 1.10], "USOIL": [0, 0.05]
+    "XAUUSD": [0, 0.05], "XAGUSD": [0, 0.10], "BTCUSD": [1, 1.10]
   },
   "CRYPTO_REGULATION": {
-    "XAUUSD": [0, 0.05], "XAGUSD": [0, 0.05], "BTCUSD": [1, 1.00], "USOIL": [0, 0.05]
+    "XAUUSD": [0, 0.05], "XAGUSD": [0, 0.05], "BTCUSD": [1, 1.00]
   },
   "CRYPTO_LIQUIDATION": {
-    "XAUUSD": [0, 0.10], "XAGUSD": [0, 0.10], "BTCUSD": [-1, 1.05], "USOIL": [0, 0.15]
+    "XAUUSD": [0, 0.10], "XAGUSD": [0, 0.10], "BTCUSD": [-1, 1.05]
   },
   "CHINA_DEMAND": {
-    "XAUUSD": [1, 0.45], "XAGUSD": [1, 1.00], "BTCUSD": [0, 0.25], "USOIL": [1, 0.75]
+    "XAUUSD": [1, 0.45], "XAGUSD": [1, 1.00], "BTCUSD": [0, 0.25]
   },
   "INDUSTRIAL_DEMAND": {
-    "XAUUSD": [0, 0.25], "XAGUSD": [1, 0.90], "BTCUSD": [0, 0.20], "USOIL": [1, 0.85]
+    "XAUUSD": [0, 0.25], "XAGUSD": [1, 0.90], "BTCUSD": [0, 0.20]
   },
   "COMMODITY_SUPPLY": {
-    "XAUUSD": [1, 0.60], "XAGUSD": [1, 0.75], "BTCUSD": [0, 0.10], "USOIL": [-1, 0.30]
+    "XAUUSD": [1, 0.60], "XAGUSD": [1, 0.75], "BTCUSD": [0, 0.10]
   },
   "OIL_SUPPLY_TIGHTNESS": {
-    "XAUUSD": [0, 0.20], "XAGUSD": [0, 0.15], "BTCUSD": [0, 0.10], "USOIL": [1, 1.30]
+    "XAUUSD": [0, 0.20], "XAGUSD": [0, 0.15], "BTCUSD": [0, 0.10]
   },
   "OIL_SUPPLY_GLUT": {
-    "XAUUSD": [0, 0.10], "XAGUSD": [0, 0.10], "BTCUSD": [0, 0.05], "USOIL": [-1, 1.25]
+    "XAUUSD": [0, 0.10], "XAGUSD": [0, 0.10], "BTCUSD": [0, 0.05]
   },
   "GENERAL_MACRO": {
-    "XAUUSD": [0, 0.30], "XAGUSD": [0, 0.30], "BTCUSD": [0, 0.30], "USOIL": [0, 0.30]
+    "XAUUSD": [0, 0.30], "XAGUSD": [0, 0.30], "BTCUSD": [0, 0.30]
   }
 }
