@@ -10,11 +10,10 @@ importance, asset relevance and expected persistence downstream.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from app.logging_conf import get_logger
 from app.models.enums import Direction, EconomicImportance, ImpactStrength
-from app.utils import timeutils as T
+from app.utils.timestamp_parse import age_hours
 
 log = get_logger(__name__)
 
@@ -30,9 +29,9 @@ RECENCY_BUCKETS: list[tuple[float, float]] = [
 RECENCY_FLOOR = 0.15  # 8h+
 
 
-def recency_weight(published_at: Optional[datetime], *, now: Optional[datetime] = None) -> float:
+def recency_weight(published_at: datetime | None, *, now: datetime | None = None) -> float:
     """0.15 - 1.00 based on age. Unparseable timestamps get the floor."""
-    hours = T.age_hours(published_at, now=now)
+    hours = age_hours(published_at, now=now)
     if hours is None:
         return RECENCY_FLOOR
     if hours < 0:
@@ -76,14 +75,14 @@ def directional_sign(direction: Direction) -> float:
 
 def compute_final_weight(
     *,
-    published_at: Optional[datetime],
+    published_at: datetime | None,
     importance: EconomicImportance,
     strength: ImpactStrength,
     asset_relevance: float,
     persistence: float,
     source_quality: str = "TIER_2_MAJOR",
     session_multiplier: float = 1.0,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
 ) -> dict[str, float]:
     """
     FINAL NEWS WEIGHT = Recency x Importance x Relevance x Persistence

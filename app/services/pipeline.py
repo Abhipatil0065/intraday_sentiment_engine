@@ -10,47 +10,43 @@ This module owns the end-to-end control flow. The background scheduler calls
 
 from __future__ import annotations
 
-import asyncio
 import atexit
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import and_, delete, exists, func, or_, select
 
+from app.analysis import llm_client, release_surprise
 from app.analysis.economic_impact import (
     CalendarSignal,
-    headline as calendar_headline,
     signals_for_events,
     to_calendar_summary,
 )
-from app.analysis import release_surprise
+from app.analysis.economic_impact import (
+    headline as calendar_headline,
+)
 from app.analysis.event_deduplication import EventDeduplicator
 from app.analysis.fj_sessions import FINANCIAL_JUICE_SOURCE
-from app.analysis import llm_client
 from app.analysis.news_classifier import analyze_article
 from app.analysis.sentiment_engine import WeightedSignal, remember_bias
 from app.analysis.signal_factory import build_signal
-from app.services.bias_snapshots import AssetVerdict
 from app.config import settings
 from app.database import session_scope
 from app.ingestion.base import RawArticle
 from app.ingestion.economic_calendar import fetch_calendar
 from app.ingestion.news_fetcher import fetch_all_news
 from app.logging_conf import get_logger
-from app.market import market_prep, market_wrap, regime as regime_mod
+from app.market import market_prep, market_wrap
+from app.market import regime as regime_mod
 from app.market.session_detector import (
     detect_session,
-    next_session,
-    previous_session,
     session_relevance,
 )
 from app.models.db_models import (
-    Alert,
+    ArticleEvent,
     AssetImpact,
     NewsArticle,
     NewsEvent,
-    ArticleEvent,
     PipelineRun,
     SentimentSnapshot,
 )
@@ -61,23 +57,29 @@ from app.models.enums import (
     ImpactStrength,
     NewsCategory,
     ReportKind,
-    SessionName,
 )
+from app.services.bias_snapshots import AssetVerdict
 from app.utils import timeutils as T
+from app.utils.timestamp_parse import (
+    age_hours,
+    parse_timestamp,
+    within_max_age,
+    within_rolling_window,
+)
 
 log = get_logger(__name__)
 
 # Shared across runs so dedup survives within a process session.
 _dedup = EventDeduplicator()
-_last_update: Optional[datetime] = None
-_last_successful_tick: Optional[str] = None
+_last_update: datetime | None = None
+_last_successful_tick: str | None = None
 _news_since_update = 0
 _running = False
 _last_regime = None  # RegimeAssessment from the most recent recompute
 # Economic-calendar signals from the most recent fetch, shared with the API.
 _calendar_signals: list[CalendarSignal] = []
 # Session-aware global equity card from the most recent recompute (NOW-only).
-_last_equity_card: Optional[dict] = None
+_last_equity_card: dict | None = None
 
 # Cached health metrics - written by the pipeline, read by /api/health without
 # touching the database so the endpoint stays instant even while a tick runs.
@@ -88,7 +90,7 @@ _health_metrics: dict = {
 }
 
 # Tick start time for hung-tick detection
-_tick_started_at: Optional[datetime] = None
+_tick_started_at: datetime | None = None
 
 # Maximum tick duration before considering it hung (10 minutes)
 MAX_TICK_DURATION_SECONDS = 600
@@ -185,7 +187,7 @@ def runtime_state() -> dict:
     }
 
 
-def last_successful_tick() -> Optional[str]:
+def last_successful_tick() -> str | None:
     """ISO timestamp of the most recent tick that finished without raising."""
     return _last_successful_tick
 
@@ -238,13 +240,13 @@ def reset_counter() -> None:
     _news_since_update = 0
 
 
-def _parse_article_time(art: RawArticle) -> tuple[Optional[datetime], Optional[datetime], Optional[str]]:
-    published, label = T.parse_timestamp(art.published_raw)
-    updated, _ = T.parse_timestamp(art.updated_raw)
+def _parse_article_time(art: RawArticle) -> tuple[datetime | None, datetime | None, str | None]:
+    published, label = parse_timestamp(art.published_raw)
+    updated, _ = parse_timestamp(art.updated_raw)
     return published, updated, label
 
 
-def _is_update_article(published: Optional[datetime], updated: Optional[datetime]) -> bool:
+def _is_update_article(published: datetime | None, updated: datetime | None) -> bool:
     """
     Section 19: an old article re-stamped today is NOT automatically a new event.
 
@@ -314,7 +316,7 @@ async def _is_fj_session_report(art: RawArticle) -> bool:
 
 
 def _fj_session_report_is_admissible(published: datetime,
-                                    now: Optional[datetime] = None) -> bool:
+                                    now: datetime | None = None) -> bool:
     """
     Admit a FinancialJuice session report on the INDIAN trading date.
 
@@ -357,7 +359,7 @@ async def _ingest_article(art: RawArticle, session, stats: IngestStats,
     if published is None:
         stats.rejected += 1
         return None
-    if not T.within_rolling_window(published) or not T.within_max_age(published):
+    if not within_rolling_window(published) or not within_max_age(published):
         stats.rejected += 1
         return None
     if await _is_fj_session_report(art):
@@ -476,7 +478,7 @@ async def _ingest_article(art: RawArticle, session, stats: IngestStats,
     return row
 
 
-def _last_signal_age_min(signals, now: datetime) -> Optional[float]:
+def _last_signal_age_min(signals, now: datetime) -> float | None:
     """
     Minutes since the NEWEST signal that actually carried weight.
 
@@ -493,7 +495,7 @@ def _last_signal_age_min(signals, now: datetime) -> Optional[float]:
     for s in signals:
         if s.published_at is None or s.final_weight <= 0:
             continue
-        hours = T.age_hours(s.published_at, now=now)
+        hours = age_hours(s.published_at, now=now)
         if hours is None:
             continue
         ages.append(max(0.0, float(hours) * 60.0))
@@ -565,8 +567,8 @@ def _suppress_previews(signals: list[WeightedSignal]) -> list[WeightedSignal]:
 
     Modifies signals in place by setting relevance=0 for suppressed signals.
     """
-    from app.config import settings
     from app.analysis.release_surprise import indicator_family
+    from app.config import settings
 
     if not settings.preview_suppression_enabled:
         return signals
@@ -716,6 +718,11 @@ def _recompute_sentiment(session, stats: IngestStats):
     # Task 5b: suppress preview/forecast headlines when actual release arrives
     signals = _suppress_previews(signals)
 
+    # Near-duplicate clustering at scoring time (item 1 fix)
+    # Collapse near-identical headlines within a 30-minute window across sources
+    from app.analysis.event_clustering import cluster_signals
+    signals = cluster_signals(signals, window_hours=0.5)
+
     # Item 8: an imminent high-impact release makes any standing bias unreliable.
     at_risk, risk_note = (False, "")
     try:
@@ -826,12 +833,12 @@ def _recompute_sentiment(session, stats: IngestStats):
     return signals, assessment
 
 
-def current_equity_card() -> Optional[dict]:
+def current_equity_card() -> dict | None:
     """Read-only view of the most recent equity card (a copied dict)."""
     return dict(_last_equity_card) if _last_equity_card else None
 
 
-def _is_article_today_query(published: Optional[datetime]) -> bool:
+def _is_article_today_query(published: datetime | None) -> bool:
     """
     The TODAY test, re-evaluated NOW rather than trusting a stored flag.
 
@@ -862,7 +869,6 @@ def news_day_predicate():
     to prevent. They stay governed by ``is_today``, which is the flag ingest set
     for them.
     """
-    from app.analysis.fj_sessions import FINANCIAL_JUICE_SOURCE
 
     day_start = T.market_day_start_utc().replace(tzinfo=None)
 
@@ -893,7 +899,7 @@ def _load_existing_guids(session) -> set[str]:
     return {g for (g,) in session.execute(select(NewsArticle.guid)).all()}
 
 
-def purge_old_news(session, *, keep_days: Optional[int] = None) -> dict:
+def purge_old_news(session, *, keep_days: int | None = None) -> dict:
     """
     Delete news older than the retention window (section 19a).
 
@@ -920,7 +926,8 @@ def purge_old_news(session, *, keep_days: Optional[int] = None) -> dict:
         return result  # purging disabled
 
     try:
-        from datetime import datetime as _dt, timedelta, timezone
+        from datetime import datetime as _dt
+        from datetime import timedelta, timezone
 
         tz = T.market_tz()
         today_local = T.now_utc().astimezone(tz).date()
@@ -1091,7 +1098,7 @@ async def run_once() -> IngestStats:
                         # Article was rejected (not new) but would have used LLM slot
                         # Don't count this against the batch limit since it's not a new article
                         pass
-                except Exception as exc:  # noqa: BLE001 - isolate per-article
+                except Exception as exc:
                     log.exception("Failed to ingest: %s", art.title[:80])
                     stats.errors.append(f"ingest: {type(exc).__name__}: {exc}")
 
@@ -1171,7 +1178,7 @@ async def run_once() -> IngestStats:
             stats.skipped_unroutable,
         )
         return stats
-    except Exception as exc:  # noqa: BLE001 - scheduler must survive
+    except Exception as exc:
         log.exception("Pipeline run failed")
         stats.errors.append(f"pipeline: {type(exc).__name__}: {exc}")
         try:

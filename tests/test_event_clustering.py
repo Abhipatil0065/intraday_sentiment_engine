@@ -136,3 +136,125 @@ def test_seeding_from_titles_rebuilds_the_index():
     c.seed_from_titles(["Fed holds rates steady"], NOW)
     m = c.match("Fed holds rates steady", NOW, source="CNBC")
     assert m.is_new_cluster is False
+
+
+# --------------------------------------------------------------------------
+# cluster_signals function tests (scoring-time clustering)
+# --------------------------------------------------------------------------
+def test_cluster_signals_collapses_duplicates():
+    """8 near-duplicate articles should collapse to 1 cluster with corroboration boost."""
+    from app.analysis.event_clustering import cluster_signals
+    from app.analysis.sentiment_engine import WeightedSignal
+    from app.models.enums import Asset, Direction, ImpactStrength, EconomicImportance, NewsCategory
+    from datetime import datetime, timezone, timedelta
+
+    base_time = datetime(2026, 10, 4, 14, 0, tzinfo=timezone.utc)
+
+    # Create 8 near-duplicate signals (different sources, same time window)
+    signals = []
+    source_qualities = ["TIER_1_OFFICIAL", "TIER_2_MAJOR", "TIER_2_MAJOR", "TIER_2_MAJOR", "TIER_2_MAJOR", "TIER_3_CRYPTO", "TIER_4_OTHER", "TIER_4_OTHER"]
+    for i, sq in enumerate(source_qualities):
+        signals.append(WeightedSignal(
+            asset=Asset.GOLD,
+            title=f"Fed minutes show policymakers see another rate hike by year end {i}",
+            direction=Direction.BEARISH,
+            strength=ImpactStrength.HIGH,
+            importance=EconomicImportance.VERY_HIGH,
+            published_at=base_time + timedelta(minutes=i),
+            relevance=0.8,
+            persistence=0.5,
+            source_quality=sq,
+            category=NewsCategory.CENTRAL_BANK,
+            final_weight=1.0,  # Will be computed in real usage
+        ))
+
+    clustered = cluster_signals(signals, window_hours=0.5)
+
+    # Should collapse to 1 cluster
+    assert len(clustered) == 1
+    # Should have corroboration boost for multiple independent sources
+    # corroboration_multiplier(8) = 1.0 + 0.10 * sum(1/log2(i+1) for i=2..8)
+    # = 1.0 + 0.10 * (1/log2(3) + 1/log2(4) + ... + 1/log2(9))
+    # ≈ 1.0 + 0.10 * 2.5 = 1.25 (capped at 1.30)
+    assert clustered[0].corroboration >= 1.15  # At least some boost
+    assert clustered[0].corroboration <= 1.30  # Capped
+
+
+def test_cluster_signals_keeps_unrelated():
+    """Unrelated headlines should not be clustered together."""
+    from app.analysis.event_clustering import cluster_signals
+    from app.analysis.sentiment_engine import WeightedSignal
+    from app.models.enums import Asset, Direction, ImpactStrength, EconomicImportance, NewsCategory
+    from datetime import datetime, timezone
+
+    base_time = datetime(2026, 10, 4, 14, 0, tzinfo=timezone.utc)
+
+    signals = [
+        WeightedSignal(
+            asset=Asset.GOLD,
+            title="Fed holds rates steady",
+            direction=Direction.BEARISH,
+            strength=ImpactStrength.HIGH,
+            importance=EconomicImportance.VERY_HIGH,
+            published_at=base_time,
+            relevance=0.8,
+            persistence=0.5,
+            source_quality="TIER_2_MAJOR",
+            category=NewsCategory.CENTRAL_BANK,
+        ),
+        WeightedSignal(
+            asset=Asset.GOLD,
+            title="China factory output beats forecasts",
+            direction=Direction.BULLISH,
+            strength=ImpactStrength.MEDIUM,
+            importance=EconomicImportance.HIGH,
+            published_at=base_time,
+            relevance=0.6,
+            persistence=0.5,
+            source_quality="TIER_2_MAJOR",
+            category=NewsCategory.CHINA,
+        ),
+    ]
+
+    clustered = cluster_signals(signals, window_hours=0.5)
+    assert len(clustered) == 2  # Two separate clusters
+
+
+def test_cluster_signals_respects_time_window():
+    """Articles outside the time window should not be clustered."""
+    from app.analysis.event_clustering import cluster_signals
+    from app.analysis.sentiment_engine import WeightedSignal
+    from app.models.enums import Asset, Direction, ImpactStrength, EconomicImportance, NewsCategory
+    from datetime import datetime, timezone, timedelta
+
+    base_time = datetime(2026, 10, 4, 14, 0, tzinfo=timezone.utc)
+
+    signals = [
+        WeightedSignal(
+            asset=Asset.GOLD,
+            title="Fed holds rates steady",
+            direction=Direction.BEARISH,
+            strength=ImpactStrength.HIGH,
+            importance=EconomicImportance.VERY_HIGH,
+            published_at=base_time,
+            relevance=0.8,
+            persistence=0.5,
+            source_quality="TIER_2_MAJOR",
+            category=NewsCategory.CENTRAL_BANK,
+        ),
+        WeightedSignal(
+            asset=Asset.GOLD,
+            title="Fed holds rates steady",
+            direction=Direction.BEARISH,
+            strength=ImpactStrength.HIGH,
+            importance=EconomicImportance.VERY_HIGH,
+            published_at=base_time + timedelta(hours=2),  # Outside 30-min window
+            relevance=0.8,
+            persistence=0.5,
+            source_quality="TIER_2_MAJOR",
+            category=NewsCategory.CENTRAL_BANK,
+        ),
+    ]
+
+    clustered = cluster_signals(signals, window_hours=0.5)
+    assert len(clustered) == 2  # Two separate clusters due to time window

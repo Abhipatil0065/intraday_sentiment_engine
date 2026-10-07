@@ -24,10 +24,11 @@ differently.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from typing import Iterable, Optional
+from datetime import datetime, timedelta, timezone
 
+from app.analysis.sentiment_engine import WeightedSignal
 from app.config import settings
 from app.logging_conf import get_logger
 
@@ -90,6 +91,134 @@ def corroboration_multiplier(independent_sources: int) -> float:
     return round(1.0 + boost, 4)
 
 
+def cluster_signals(signals: list, window_hours: float = 0.5) -> list:
+    """
+    Cluster signals by normalized title within a time window.
+
+    This implements near-duplicate clustering at SCORING time (not ingestion time).
+    Each cluster contributes ONE signal (the highest-weight member) with a
+    corroboration boost based on the number of independent sources in the cluster.
+
+    Args:
+        signals: List of WeightedSignal objects
+        window_hours: Time window for clustering (default 0.5 hours = 30 minutes)
+
+    Returns:
+        List of clustered WeightedSignal objects with updated corroboration
+    """
+    if not signals:
+        return []
+
+    # Group by asset first
+    by_asset: dict = {}
+    for s in signals:
+        by_asset.setdefault(s.asset, []).append(s)
+
+    clustered: list[WeightedSignal] = []
+    window = timedelta(hours=window_hours)
+
+    for asset_signals in by_asset.values():
+        # Sort by published time (handle timezone-aware and naive datetimes)
+        def get_sort_key(s):
+            dt = s.published_at
+            if dt is None:
+                return datetime.min.replace(tzinfo=timezone.utc)
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=timezone.utc)
+            return dt
+
+        asset_signals.sort(key=get_sort_key)
+
+        # Simple clustering: group by normalized title within time window
+        clusters: list[list[WeightedSignal]] = []
+        for s in asset_signals:
+            if s.published_at is None:
+                clusters.append([s])
+                continue
+
+            matched = False
+            for cluster in clusters:
+                # Check if this signal belongs to an existing cluster
+                # Use the first signal in cluster as representative
+                rep = cluster[0]
+                if rep.published_at is None:
+                    continue
+                # Time window check (normalize both to UTC)
+                s_dt = s.published_at
+                rep_dt = rep.published_at
+                if s_dt.tzinfo is None:
+                    s_dt = s_dt.replace(tzinfo=timezone.utc)
+                if rep_dt.tzinfo is None:
+                    rep_dt = rep_dt.replace(tzinfo=timezone.utc)
+                if abs((s_dt - rep_dt).total_seconds()) > window.total_seconds():
+                    continue
+                # Title similarity check using normalised tokens
+                s_tokens = normalise_tokens(s.title)
+                rep_tokens = normalise_tokens(rep.title)
+                if not s_tokens or not rep_tokens:
+                    continue
+                union = len(s_tokens | rep_tokens)
+                inter = len(s_tokens & rep_tokens)
+                jaccard = inter / union if union else 0.0
+                # Also check entity overlap
+                s_entities = extract_entities(s.title)
+                rep_entities = extract_entities(rep.title)
+                entity_boost = 0.0
+                if s_entities and rep_entities:
+                    shared = len(s_entities & rep_entities)
+                    if shared:
+                        entity_boost = 0.15 * shared
+                similarity = min(1.0, jaccard + entity_boost)
+                if similarity >= 0.72:  # Use same threshold as dedup
+                    cluster.append(s)
+                    matched = True
+                    break
+
+            if not matched:
+                clusters.append([s])
+
+        # For each cluster, keep the highest-weight signal and apply corroboration boost
+        for cluster in clusters:
+            if len(cluster) == 1:
+                clustered.append(cluster[0])
+            else:
+                # Find the signal with the highest final weight
+                best = max(cluster, key=lambda s: max(0, s.final_weight))
+                # Count unique sources in this cluster
+                sources = {s.source_quality for s in cluster}
+                # Also consider source_name if available
+                source_names = {getattr(s, 'source_name', '') for s in cluster if getattr(s, 'source_name', '')}
+                independent_sources = len(sources | source_names)
+                # Apply corroboration boost
+                boost = corroboration_multiplier(independent_sources)
+                # Create a new signal with the boosted corroboration
+                new_signal = WeightedSignal(
+                    asset=best.asset,
+                    title=best.title,
+                    direction=best.direction,
+                    strength=best.strength,
+                    importance=best.importance,
+                    published_at=best.published_at,
+                    relevance=best.relevance,
+                    persistence=best.persistence,
+                    source_quality=best.source_quality,
+                    category=best.category,
+                    cluster_id=best.cluster_id,
+                    corroboration=max(best.corroboration, boost),
+                    session_multiplier=best.session_multiplier,
+                    is_primary=best.is_primary,
+                    event_key=best.event_key,
+                    reason=best.reason,
+                    transmission=best.transmission,
+                    report_kind=best.report_kind,
+                    mode=best.mode,
+                    surprise_weight=best.surprise_weight,
+                )
+                clustered.append(new_signal)
+
+    return clustered
+
+
 @dataclass
 class ClusterMatch:
     """Outcome of matching one headline against the live cluster index."""
@@ -97,7 +226,7 @@ class ClusterMatch:
     cluster_id: str
     canonical_title: str
     is_new_cluster: bool
-    matched_title: Optional[str] = None
+    matched_title: str | None = None
     similarity: float = 0.0
     independent_sources: int = 1
     corroboration: float = 1.0
@@ -137,8 +266,8 @@ class EventClusterer:
     and multiplies it by ``corroboration``.
     """
 
-    def __init__(self, threshold: Optional[float] = None,
-                 window_hours: Optional[int] = None) -> None:
+    def __init__(self, threshold: float | None = None,
+                 window_hours: int | None = None) -> None:
         self.threshold = (threshold if threshold is not None
                           else settings.dedup_similarity_threshold)
         self.window = timedelta(
@@ -151,13 +280,13 @@ class EventClusterer:
         self._clusters = [c for c in self._clusters if c.first_seen >= cutoff]
 
     def match(self, title: str, published_at: datetime, *, source: str = "",
-              now: Optional[datetime] = None) -> ClusterMatch:
+              now: datetime | None = None) -> ClusterMatch:
         now = now or published_at
         self._prune(now)
         tokens = normalise_tokens(title)
         entities = extract_entities(title)
 
-        best: Optional[_Cluster] = None
+        best: _Cluster | None = None
         best_score = 0.0
         for cluster in self._clusters:
             score = _blend(tokens, cluster.tokens)

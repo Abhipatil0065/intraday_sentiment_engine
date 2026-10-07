@@ -18,22 +18,18 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Optional
 
 from app.analysis import llm_client
-from app.analysis.asset_relevance import relevant_assets, relevance_for
+from app.analysis.asset_relevance import relevance_for, relevant_assets
 from app.analysis.cue_rules import (
-    BEARISH_CUES,
-    BULLISH_CUES,
     TRANSMISSION,
     detect_category,
-    detect_direction,
     detect_importance,
     detect_metal_character,
     detect_report_kind,
     detect_verification,
-    score_cues,
 )
+from app.config import settings
 from app.logging_conf import get_logger
 from app.models.enums import (
     Asset,
@@ -55,7 +51,7 @@ LLM_PER_ARTICLE_TIMEOUT = 30
 
 # Max concurrent LLM calls per tick. Keeps the event loop responsive and
 # respects provider rate limits.
-LLM_MAX_CONCURRENT = 4
+LLM_MAX_CONCURRENT = settings.llm_max_concurrent
 
 _LLM_SEMAPHORE: asyncio.Semaphore | None = None
 
@@ -77,7 +73,7 @@ class AssetAnalysis:
     persistence: float = 0.5
     reason: str = ""
     transmission: str = ""
-    metal_character: Optional[str] = None
+    metal_character: str | None = None
 
 
 @dataclass
@@ -136,7 +132,7 @@ def _persistence_from(category: NewsCategory) -> float:
 
 
 def _build_reason(asset: Asset, category: NewsCategory, direction: Direction,
-                  text: str, dominant: Optional[str] = None,
+                  text: str, dominant: str | None = None,
                   priced_in: bool = False) -> str:
     cat_label = category.value if category else "news"
     snippet = " ".join(text.split())[:110]
@@ -172,7 +168,6 @@ def _apply_release_surprise(result: ArticleAnalysis, text: str) -> None:
     from app.analysis.release_surprise import (
         combine_prints_for_asset,
         parse_all,
-        surprise_weight,
     )
 
     prints = parse_all(text)
@@ -399,7 +394,6 @@ async def llm_analyze(title: str, body: str = "") -> ArticleAnalysis:
     """
     from app.analysis.llm_schema import validate_llm_payload
     from app.config import settings
-    from app.analysis import llm_client
 
     body = (body or "")[:MAX_BODY_CHARS]
     user_prompt = (
@@ -480,8 +474,8 @@ async def analyze_article(title: str, body: str = "") -> tuple[ArticleAnalysis, 
     
     skip_reason is one of: "ok", "batch_cap", "circuit_breaker", "timeout", "error"
     """
-    from app.config import settings
     from app.analysis import llm_client
+    from app.config import settings
 
     if settings.has_llm:
         # Check circuit breaker before attempting LLM

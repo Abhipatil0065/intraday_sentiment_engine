@@ -25,6 +25,7 @@ surprise, EXPECTED mode uses published consensus and is labelled as such.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from app.config import settings
 

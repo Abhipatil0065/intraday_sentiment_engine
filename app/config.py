@@ -12,7 +12,7 @@ import re
 from datetime import timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import List, Literal
+from typing import Literal
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -73,7 +73,7 @@ class Settings(BaseSettings):
             "LLM_TIMEOUT_SECONDS", "DEEPSEEK_TIMEOUT_SECONDS")
     )
     llm_max_concurrent: int = Field(
-        default=4, validation_alias=AliasChoices(
+        default=2, validation_alias=AliasChoices(
             "LLM_MAX_CONCURRENT", "DEEPSEEK_MAX_CONCURRENT")
     )
     # Hard ceiling on outbound requests per rolling 60-second window.
@@ -451,7 +451,7 @@ class Settings(BaseSettings):
                 break
 
     @property
-    def supported_assets(self) -> List[str]:
+    def supported_assets(self) -> list[str]:
         return [a.strip().upper() for a in self.assets.split(",") if a.strip()]
 
     def parsed_table(self, raw: str) -> dict:
@@ -485,7 +485,7 @@ class Settings(BaseSettings):
         return self.parsed_table(self.surprise_std_table)
 
     @property
-    def calendar_provider_list(self) -> List[str]:
+    def calendar_provider_list(self) -> list[str]:
         """Provider names in PRIORITY order (first wins conflicts)."""
         return [p.strip().lower() for p in self.calendar_providers.split(",")
                 if p.strip()]

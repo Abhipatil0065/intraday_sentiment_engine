@@ -55,10 +55,10 @@ FINAL WEIGHT FORMULA (item 6 - one magnitude, one event weight)
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Optional, Sequence
 
 from app.logging_conf import get_logger
 from app.models.enums import (
@@ -71,6 +71,7 @@ from app.models.enums import (
     Verification,
 )
 from app.utils import timeutils as T
+from app.utils.timestamp_parse import age_hours
 
 log = get_logger(__name__)
 
@@ -169,7 +170,7 @@ def payload_score(raw_score: float, bias) -> float:
     return float(raw_score)
 
 # Task 8: stability (no whipsaw) constants.
-from app.config import FLIP_MARGIN, FLIP_HOLD_MINUTES
+from app.config import FLIP_HOLD_MINUTES, FLIP_MARGIN
 
 # Last published bias per state key: the asset symbol ("GOLD" ...) or
 # "EQUITY:<region>" for the session-aware equity card, so a signal-free poll
@@ -181,7 +182,7 @@ _LAST_FLIP_TIME: dict[str, datetime] = {}
 
 # Day key for the current trading day (market timezone date).
 # Used to auto-reset bias history at the start of each new trading day.
-_LAST_BIAS_DAY_KEY: Optional[str] = None
+_LAST_BIAS_DAY_KEY: str | None = None
 
 
 def remember_bias(key: str, bias: Bias) -> None:
@@ -189,12 +190,12 @@ def remember_bias(key: str, bias: Bias) -> None:
     _LAST_BIAS[key] = bias
 
 
-def recall_bias(key: str) -> Optional[Bias]:
+def recall_bias(key: str) -> Bias | None:
     """The last bias published under ``key``; None when there is no history."""
     return _LAST_BIAS.get(key)
 
 
-def _recall_flip_time(key: str) -> Optional[datetime]:
+def _recall_flip_time(key: str) -> datetime | None:
     """The last time a bias flip occurred for this key."""
     return _LAST_FLIP_TIME.get(key)
 
@@ -212,7 +213,7 @@ def clear_bias_history() -> None:
 
 def _has_fresh_tier1_opposite(relevant: Sequence[WeightedSignal],
                                current_bias: Bias,
-                               now: Optional[datetime]) -> bool:
+                               now: datetime | None) -> bool:
     """
     Check if there's a fresh Tier 1 signal pointing opposite to current bias.
     
@@ -235,7 +236,7 @@ def _has_fresh_tier1_opposite(relevant: Sequence[WeightedSignal],
 
 def _should_flip(bull: float, bear: float, current_bias: Bias,
                  relevant: Sequence[WeightedSignal],
-                 now: Optional[datetime],
+                 now: datetime | None,
                  key: str) -> tuple[bool, Bias]:
     """
     Determine if bias should flip based on stability rules.
@@ -284,7 +285,7 @@ class WeightedSignal:
     direction: Direction
     strength: ImpactStrength = ImpactStrength.MEDIUM
     importance: EconomicImportance = EconomicImportance.MEDIUM
-    published_at: Optional[datetime] = None
+    published_at: datetime | None = None
     relevance: float = 0.0
     persistence: float = 0.5
     source_quality: str = "TIER_2_MAJOR"
@@ -333,7 +334,7 @@ class SentimentResult:
     bias: Bias = Bias.BULLISH
     mode: str = "heuristic"
     drivers: list[Driver] = field(default_factory=list)
-    conflict: Optional[Driver] = None
+    conflict: Driver | None = None
     # Both sides, each capped at 3, for the dashboard's side-by-side boxes.
     # Additive only: `drivers` above still carries the single leading side and
     # `conflict` the single strongest opposing headline, so the decision log
@@ -351,8 +352,8 @@ class SentimentResult:
     note: str = ""
 
 
-def decay_weight(published_at: Optional[datetime], tier: str,
-                 now: Optional[datetime] = None) -> float:
+def decay_weight(published_at: datetime | None, tier: str,
+                 now: datetime | None = None) -> float:
     """
     Exponential decay with a per-event-tier half-life (Task 5a).
 
@@ -375,9 +376,8 @@ def decay_weight(published_at: Optional[datetime], tier: str,
     return max(0.0, min(1.0, 0.5 ** (hours / half_life)))
 
 
-def _age_hours(published_at: datetime, now: Optional[datetime] = None) -> float:
-    from app.utils import timeutils as T
-    return T.age_hours(published_at, now=now) or 0.0
+def _age_hours(published_at: datetime, now: datetime | None = None) -> float:
+    return age_hours(published_at, now=now) or 0.0
 
 
 def event_tier(s: WeightedSignal) -> str:
@@ -409,7 +409,7 @@ def event_tier(s: WeightedSignal) -> str:
     return "TIER_3"
 
 
-def _signal_weight(s: WeightedSignal, now: Optional[datetime]) -> float:
+def _signal_weight(s: WeightedSignal, now: datetime | None) -> float:
     """The single final weight for one signal.
 
     FINAL WEIGHT FORMULA (Task 4b + 5a):
@@ -424,9 +424,13 @@ def _signal_weight(s: WeightedSignal, now: Optional[datetime]) -> float:
     multiplied separately here. Source quality (QUALITY_MULT, 0.9..1.0)
     is an independent trust factor, never the tier.
     """
-    from app.config import settings, TIER_MULTIPLIERS, RUMOR_MULTIPLIER, CONFIRMED_BOOST, TIER_HALF_LIVES, TRADING_DAY_CUTOFF_HOURS
-    from app.analysis.release_surprise import MAX_SURPRISE_WEIGHT
     from app.analysis.cue_rules import detect_verification
+    from app.analysis.release_surprise import MAX_SURPRISE_WEIGHT
+    from app.config import (
+        CONFIRMED_BOOST,
+        RUMOR_MULTIPLIER,
+        TIER_MULTIPLIERS,
+    )
 
     # Task 5a: decay uses event tier half-life (TIER_1~6h, TIER_2~2h, TIER_3~1h),
     # with TRADING_DAY_CUTOFF_HOURS (16h) giving weight 0.
@@ -465,7 +469,7 @@ def _mode_for(signals: Sequence[WeightedSignal]) -> str:
 
 
 def _aggregate(signals: Sequence[WeightedSignal],
-               now: Optional[datetime] = None) -> dict:
+               now: datetime | None = None) -> dict:
     """Shared weighted-sum core. Returns raw totals and per-side items."""
     bull = bear = directionless = 0.0
     bull_items: list[tuple[float, WeightedSignal]] = []
@@ -542,7 +546,7 @@ def _confidence_from(bull: float, bear: float, directionless: float,
     return round(max(0.0, min(0.95, confidence)), 3)
 
 
-def _directional_bias(direction: Optional[Direction]) -> Optional[Bias]:
+def _directional_bias(direction: Direction | None) -> Bias | None:
     """BULLISH/BEARISH map to themselves; MIXED/NEUTRAL/None have no side."""
     if direction is Direction.BULLISH:
         return Bias.BULLISH
@@ -552,7 +556,7 @@ def _directional_bias(direction: Optional[Direction]) -> Optional[Bias]:
 
 
 def _tie_break_bias(signals: Sequence[WeightedSignal],
-                    now: Optional[datetime] = None) -> Bias:
+                    now: datetime | None = None) -> Bias:
     """
     The |score| < EPS tie-break: the side of the highest-weight, NEWEST signal.
 
@@ -561,8 +565,8 @@ def _tie_break_bias(signals: Sequence[WeightedSignal],
     in favour of the fresher headline. With no directional signal at all the
     answer is DEFAULT_BIAS; this function never returns NO_BIAS.
     """
-    best: Optional[WeightedSignal] = None
-    best_key: Optional[tuple[float, float]] = None
+    best: WeightedSignal | None = None
+    best_key: tuple[float, float] | None = None
     for s in signals:
         if _directional_bias(s.direction) is None:
             continue
@@ -590,7 +594,7 @@ def _carry_forward_bias(signals: Sequence[WeightedSignal],
         return (last,
                 "No news in the window; carrying forward the last published "
                 "bias (stale).")
-    newest: Optional[WeightedSignal] = None
+    newest: WeightedSignal | None = None
     newest_ts = 0.0
     for s in signals:
         if _directional_bias(s.direction) is None:
@@ -617,7 +621,7 @@ def _top_drivers(items: Sequence[tuple[float, WeightedSignal]],
 
 
 def _strongest_conflict(bull_items: Sequence[tuple[float, WeightedSignal]],
-                        bear_items: Sequence[tuple[float, WeightedSignal]]) -> Optional[Driver]:
+                        bear_items: Sequence[tuple[float, WeightedSignal]]) -> Driver | None:
     """The single opposing headline the trader most needs to know about."""
     if not bull_items or not bear_items:
         return None
@@ -634,7 +638,7 @@ def _strongest_conflict(bull_items: Sequence[tuple[float, WeightedSignal]],
 
 
 def _delta_60m(signals: Sequence[WeightedSignal], asset: Asset,
-               now: Optional[datetime]) -> float:
+               now: datetime | None) -> float:
     """
     How much the score MOVED because of the last hour of news (item 10).
 
@@ -664,10 +668,10 @@ def _delta_60m(signals: Sequence[WeightedSignal], asset: Asset,
 
 
 def compute(signals: Sequence[WeightedSignal], asset: Asset,
-            now: Optional[datetime] = None,
+            now: datetime | None = None,
             event_risk: bool = False,
             event_risk_note: str = "",
-            history_key: Optional[str] = None) -> SentimentResult:
+            history_key: str | None = None) -> SentimentResult:
     """
     Aggregate every weighted signal for one asset into a verdict.
 
@@ -785,6 +789,6 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
 
 
 def score_from_signals(signals: Sequence[WeightedSignal], asset: Asset,
-                       now: Optional[datetime] = None) -> float:
+                       now: datetime | None = None) -> float:
     """Convenience wrapper returning only the signed score."""
     return compute(signals, asset, now=now).score
