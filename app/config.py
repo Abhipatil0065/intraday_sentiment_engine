@@ -86,8 +86,7 @@ class Settings(BaseSettings):
             "LLM_REQUESTS_PER_MINUTE", "DEEPSEEK_REQUESTS_PER_MINUTE")
     )
     llm_max_tokens: int = Field(
-        default=1800, validation_alias=AliasChoices(
-
+        default=1024, validation_alias=AliasChoices(
             "LLM_MAX_TOKENS", "DEEPSEEK_MAX_TOKENS")
     )
     # Some OpenAI-compatible servers reject response_format={"type":"json_object"}.

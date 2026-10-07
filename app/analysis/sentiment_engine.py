@@ -70,8 +70,29 @@ from app.models.enums import (
     ReportKind,
     Verification,
 )
+from app.utils import timeutils as T
 
 log = get_logger(__name__)
+
+
+def _current_market_day_key() -> str:
+    """Return the current trading day as a string key (e.g., '2026-10-07')."""
+    return T.market_today().isoformat()
+
+
+def _maybe_reset_bias_history() -> None:
+    """Reset _LAST_BIAS and _LAST_FLIP_TIME if the trading day has changed."""
+    global _LAST_BIAS_DAY_KEY
+    current_day = _current_market_day_key()
+    if _LAST_BIAS_DAY_KEY is None:
+        _LAST_BIAS_DAY_KEY = current_day
+        return
+    if _LAST_BIAS_DAY_KEY != current_day:
+        log.info("Trading day changed from %s to %s - resetting bias history",
+                 _LAST_BIAS_DAY_KEY, current_day)
+        _LAST_BIAS.clear()
+        _LAST_FLIP_TIME.clear()
+        _LAST_BIAS_DAY_KEY = current_day
 
 
 class Bias(str, Enum):
@@ -158,6 +179,10 @@ _LAST_BIAS: dict[str, Bias] = {}
 # Last flip timestamp per state key (for FLIP_HOLD_MINUTES enforcement).
 _LAST_FLIP_TIME: dict[str, datetime] = {}
 
+# Day key for the current trading day (market timezone date).
+# Used to auto-reset bias history at the start of each new trading day.
+_LAST_BIAS_DAY_KEY: Optional[str] = None
+
 
 def remember_bias(key: str, bias: Bias) -> None:
     """Record a published bias under ``key`` for later carry-forward."""
@@ -221,9 +246,11 @@ def _should_flip(bull: float, bear: float, current_bias: Bias,
     if current_bias is None:
         return True, Bias.BULLISH if bull > bear else Bias.BEARISH
     
-    # Compute the net weight on each side
-    current_side_weight = bull if current_bias is Bias.BULLISH else bear
-    opposite_side_weight = bear if current_bias is Bias.BULLISH else bull
+    # Compute the score from current bull/bear weights
+    total = bull + bear
+    if total <= 0:
+        return False, current_bias
+    current_score = 100.0 * (bull - bear) / total
     
     # Check for fresh Tier 1 opposite signal (forces flip regardless of margin/hold)
     if _has_fresh_tier1_opposite(relevant, current_bias, now):
@@ -236,11 +263,14 @@ def _should_flip(bull: float, bear: float, current_bias: Bias,
         if hold_elapsed < FLIP_HOLD_MINUTES:
             return False, current_bias
     
-    # Check margin: opposite side must exceed current side by FLIP_MARGIN
-    # The score is -100..+100, so we check if the opposite side's net weight
-    # exceeds the current side's by the margin threshold.
-    if opposite_side_weight > current_side_weight + FLIP_MARGIN:
-        return True, Bias.BEARISH if current_bias is Bias.BULLISH else Bias.BULLISH
+    # Check margin: score must have crossed zero by at least FLIP_MARGIN
+    # FLIP_MARGIN is on the score scale (-100..+100)
+    if current_bias is Bias.BULLISH:
+        if current_score <= -FLIP_MARGIN:
+            return True, Bias.BEARISH
+    else:
+        if current_score >= FLIP_MARGIN:
+            return True, Bias.BULLISH
     
     return False, current_bias
 
@@ -657,6 +687,7 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
     asset symbol and is set to "EQUITY:<region>" by the equity card so a
     proxy scoring run cannot pollute an asset's own history.
     """
+    _maybe_reset_bias_history()
     key = history_key or asset.value
     relevant = [s for s in signals if s.asset is asset]
     mode = _mode_for(relevant)

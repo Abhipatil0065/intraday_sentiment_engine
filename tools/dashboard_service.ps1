@@ -35,7 +35,10 @@ param(
     [int]$Port = 8000,
 
     # How long Start waits for /api/health before reporting failure.
-    [int]$StartupTimeoutSeconds = 90,
+    # 300s because the first pipeline tick primes the database with a full
+    # news fetch + calendar render + sentiment recompute, which can take
+    # 1-2 minutes when the LLM endpoint is degraded.
+    [int]$StartupTimeoutSeconds = 300,
 
     # Seconds between health checks while supervising.
     [int]$WatchIntervalSeconds = 30,
@@ -107,15 +110,37 @@ function Get-PythonInterpreter {
 }
 
 function Test-DashboardHealthy {
-    <#  Liveness probe against the app's own /api/health endpoint. #>
-    param([int]$TimeoutSec = 3)
+    <#  Liveness probe against the app's own /api/health endpoint.
+
+          Returns $true when the server answers - even with HTTP 503 "degraded"
+          - because that means the process is alive and the pipeline simply has
+          no successful tick yet (e.g. still priming on startup). The watchdog
+          only restarts when the server CANNOT answer at all (connection
+          refused), never when the pipeline is merely slow.
+
+          Pass -Strict to also require status:ok (used by Status reporting). #>
+    param(
+        [int]$TimeoutSec = 3,
+        [switch]$Strict
+    )
     try {
         $response = Invoke-WebRequest -Uri $HealthUrl -UseBasicParsing `
                                      -TimeoutSec $TimeoutSec -ErrorAction Stop
-        return ($response.StatusCode -eq 200 -and $response.Content -match '"status"\s*:\s*"ok"')
+        if ($Strict) {
+            return ($response.StatusCode -eq 200 -and
+                    $response.Content -match '"status"\s*:\s*"ok"')
+        }
+        # Any HTTP response means the server is alive.
+        return $true
     } catch {
         return $false
     }
+}
+
+function Test-DashboardHealthyStrict {
+    <#  True only when /api/health returns 200 with status:ok. #>
+    param([int]$TimeoutSec = 3)
+    return Test-DashboardHealthy -TimeoutSec $TimeoutSec -Strict
 }
 
 function Get-PortOwner {
@@ -160,10 +185,13 @@ function Test-IsEngineProcess {
 }
 
 function Wait-DashboardHealthy {
-    param([int]$TimeoutSeconds = 90)
+    param([int]$TimeoutSeconds = 300)
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
-        if (Test-DashboardHealthy -TimeoutSec 2) { return $true }
+        # During startup the pipeline is priming, so /api/health may return
+        # 503 "degraded" for the first minute or two. Any HTTP response means
+        # the server is up and serving; only a connection failure blocks.
+        if (Test-DashboardHealthy -TimeoutSec 3) { return $true }
         Start-Sleep -Milliseconds 750
     }
     return $false
@@ -285,14 +313,19 @@ function Stop-Dashboard {
     Write-Log "Port $Port is still in use after stopping the server." 'WARN'
 }
 function Show-Status {
-    $healthy = Test-DashboardHealthy -TimeoutSec 3
+    $alive = Test-DashboardHealthy -TimeoutSec 3
+    $healthy = Test-DashboardHealthyStrict -TimeoutSec 3
     $owner = Get-PortOwner
     $recorded = Get-RecordedPid
 
-    if ($healthy) {
-        Write-Host "Dashboard : UP" -ForegroundColor Green
+    if ($alive) {
+        if ($healthy) {
+            Write-Host "Dashboard : UP" -ForegroundColor Green
+        } else {
+            Write-Host "Dashboard : UP (degraded - pipeline priming or stale)" -ForegroundColor Yellow
+        }
     } elseif ($owner) {
-        Write-Host "Dashboard : port $Port held by PID $owner but /api/health is not answering" -ForegroundColor Yellow
+        Write-Host "Dashboard : port $Port held by PID $owner but /api/health is not responding" -ForegroundColor Yellow
     } else {
         Write-Host "Dashboard : STOPPED (nothing listening on port $Port)" -ForegroundColor Red
     }
@@ -307,15 +340,19 @@ function Show-Status {
     Write-Host "             $StdOutLog"
     Write-Host "             $StdErrLog"
 
-    if ($healthy) {
+    if ($alive) {
         try {
             $health = Invoke-RestMethod -Uri $HealthUrl -TimeoutSec 5 -ErrorAction Stop
-            Write-Host ("Mode      : {0} (llm_enabled={1})" -f $health.analysis_mode, $health.llm_enabled)
+            $mode = $health.analysis_mode
+            $llm = $health.llm_enabled
+            $last = $health.last_poll_ok
+            $stale = if ($health.PSObject -and $health.stale) { " [STALE]" } else { "" }
+            Write-Host ("Mode      : {0} (llm_enabled={1}) last_poll={2}{3}" -f $mode, $llm, $last, $stale)
         } catch {
             Write-Host 'Mode      : unknown (health payload unreadable)'
         }
     }
-    return $healthy
+    return $alive
 }
 
 function Watch-Dashboard {
@@ -330,7 +367,9 @@ function Watch-Dashboard {
 
     while ($true) {
         try {
-            if (Test-DashboardHealthy -TimeoutSec 5) {
+            # Non-strict: any HTTP response (even 503 degraded) means the
+            # process is alive. Only a connection failure triggers a restart.
+            if (Test-DashboardHealthy -TimeoutSec 10) {
                 if ($reportedDown) {
                     Write-Log 'Dashboard is healthy again.' 'OK'
                     $reportedDown = $false

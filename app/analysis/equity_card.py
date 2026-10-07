@@ -42,6 +42,8 @@ from app.analysis.release_surprise import (
     parse_all,
     equity_direction,
 )
+from app.analysis.cue_rules import detect_direction
+from app.analysis.display import to_display
 from app.logging_conf import get_logger
 from app.market.session_detector import (
     EQUITY_SESSION_MAP,
@@ -204,7 +206,6 @@ def build_equity_card(all_signals: Sequence[WeightedSignal],
         # card's OWN direction column (equity_direction) - hot inflation/yields
         # bearish, strong growth/jobs/PMI bullish, higher unemployment/claims
         # bearish - never with the metals/bitcoin column the asset cards use.
-        direction = s.direction
         if s.report_kind is ReportKind.ACTUAL:
             text = f"{s.title} {s.reason or ''}"
             prints = parse_all(text)
@@ -212,6 +213,21 @@ def build_equity_card(all_signals: Sequence[WeightedSignal],
                 direction, _ = combine_prints_for_asset(
                     Asset.BITCOIN, prints, s.direction,
                     use_equity_column=True, text=text)
+            else:
+                direction = s.direction
+        else:
+            # For non-ACTUAL signals, re-derive an equity-specific direction
+            # from headline cues: metals and equities can disagree (e.g.
+            # geopolitical safe-haven is bullish for gold but bearish for
+            # equities; strong NFP is bearish for gold but bullish for
+            # equities). If the cues return NEUTRAL or MIXED (no clear
+            # directional signal in the headline), fall back to the signal's
+            # own direction as a sensible default.
+            equity_dir = detect_direction(s.title, equity=True)
+            if equity_dir in (Direction.NEUTRAL, Direction.MIXED):
+                direction = s.direction
+            else:
+                direction = equity_dir
         proxy.append(WeightedSignal(
             asset=Asset.BITCOIN, title=s.title, direction=direction,
             strength=s.strength, importance=s.importance,
@@ -265,7 +281,7 @@ def build_equity_card(all_signals: Sequence[WeightedSignal],
 
 def to_payload(card: EquityCardResult) -> dict:
     """Plain dict for /api/dashboard (matches schemas.EquityCard)."""
-    return {
+    result = {
         "region": card.region,
         "title": card.title,
         "symbol": card.symbol,
@@ -280,3 +296,5 @@ def to_payload(card: EquityCardResult) -> dict:
         "note": card.note,
         "last_updated": card.last_updated,
     }
+    result["display"] = to_display(card.score, card.bias)
+    return result

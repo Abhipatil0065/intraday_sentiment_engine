@@ -183,7 +183,7 @@ def test_known_asymmetric_cues_are_documented():
     needs a decision: add a mirror, or accept the asymmetry in writing.
     """
     known_gaps = ("approval", "boost", "record", "support", "declined",
-                  "eased", "jumped")
+                  "ease", "jumped")
     for cue in known_gaps:
         assert cue in BULL_STEMS, (
             f"{cue!r} was documented as an asymmetric bullish cue but has been "
@@ -225,7 +225,7 @@ def test_antonym_table_has_no_bogus_entries():
             # Allowed only if documented as a known gap.
             if cue not in ("boost", "record", "support", "approval",
                            "gained", "plunge", "tumble", "declined",
-                           "eased", "jumped", "lower"):
+                           "ease", "jumped", "lower"):
                 pytest.fail(
                     f"antonym claims {cue!r} -> {mirror!r} but {mirror!r} "
                     f"is not a cue in either table")

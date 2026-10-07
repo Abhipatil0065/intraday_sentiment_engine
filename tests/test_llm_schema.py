@@ -122,6 +122,10 @@ async def test_analyze_retries_once_then_falls_back(monkeypatch):
     import asyncio
 
     from app.analysis import news_classifier
+    from app.analysis.llm_client import circuit_breaker
+
+    # Reset circuit breaker before test
+    await circuit_breaker().reset()
 
     calls = {"n": 0}
 
@@ -133,21 +137,27 @@ async def test_analyze_retries_once_then_falls_back(monkeypatch):
 
     monkeypatch.setattr(news_classifier, "_llm_call", flaky, raising=False)
 
-    analysis, llm_ok = await news_classifier.analyze_article(
+    analysis, llm_ok, skip_reason = await news_classifier.analyze_article(
         "Fed signals dovish pivot and rate cut")
     assert llm_ok is False
+    assert skip_reason == "error"
     assert analysis.mode == "heuristic"
 
 
 async def test_analyze_never_raises_on_llm_failure(monkeypatch):
     from app.analysis import news_classifier
+    from app.analysis.llm_client import circuit_breaker
+
+    # Reset circuit breaker before test
+    await circuit_breaker().reset()
 
     async def boom(*_args, **_kwargs):
         raise RuntimeError("provider exploded")
 
     monkeypatch.setattr(news_classifier, "_llm_call", boom, raising=False)
-    analysis, llm_ok = await news_classifier.analyze_article(
+    analysis, llm_ok, skip_reason = await news_classifier.analyze_article(
         "Gold rallies as haven demand returns")
     assert llm_ok is False
+    assert skip_reason == "error"
     assert analysis.mode == "heuristic"
     assert isinstance(analysis.assets, list)

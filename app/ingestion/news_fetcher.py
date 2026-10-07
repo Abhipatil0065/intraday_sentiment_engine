@@ -35,6 +35,8 @@ class FetchReport:
     sources_polled: int = 0
     sources_ok: int = 0
     errors: list[str] = field(default_factory=list)
+    # name -> {"items": n, "newest": iso-or-None, "error": str-or-None}
+    source_stats: dict[str, dict] = field(default_factory=dict)
 
 
 def build_sources() -> list:
@@ -97,6 +99,17 @@ async def fetch_all_news() -> FetchReport:
 
     seen_guids: set[str] = set()
     for (articles, error), source in zip(results, sources):
+        name = getattr(source, "name", "?")
+        newest = None
+        if articles:
+            ts = [a.published_raw for a in articles if a.published_raw]
+            if ts:
+                newest = max(ts)
+        report.source_stats[name] = {
+            "items": len(articles) if articles else 0,
+            "newest": newest,
+            "error": error,
+        }
         if error:
             report.errors.append(error)
             continue

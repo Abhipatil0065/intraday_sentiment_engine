@@ -26,6 +26,11 @@ from app.logging_conf import get_logger
 
 log = get_logger(__name__)
 
+# Per-call timeout for a single LLM classification request. 30s ceiling so a
+# single failing article cannot stall the tick. The circuit breaker will
+# skip LLM entirely after 3 consecutive 503s/timeouts.
+LLM_CALL_TIMEOUT_SECONDS: int = 30
+
 _SEMAPHORE: Optional[asyncio.Semaphore] = None
 _CLIENT: Optional[httpx.AsyncClient] = None
 
@@ -129,6 +134,87 @@ def requests_in_window() -> int:
     return _LIMITER.used() if _LIMITER is not None else 0
 
 
+# ==========================================================================
+# Circuit breaker - disables LLM for this tick after 3 consecutive failures
+# ==========================================================================
+class CircuitBreaker:
+    """
+    Tracks consecutive LLM failures (503, timeout). After 3 consecutive failures,
+    the breaker opens and LLM calls fail fast for the remainder of the tick.
+    The breaker resets automatically at the start of the next tick.
+    """
+
+    def __init__(self, threshold: int = 3):
+        self.threshold = threshold
+        self._consecutive_failures = 0
+        self._open = False
+        self._lock = asyncio.Lock()
+
+    @property
+    def is_open(self) -> bool:
+        return self._open
+
+    async def record_success(self) -> None:
+        """Reset failure counter on success."""
+        async with self._lock:
+            if self._consecutive_failures > 0:
+                log.debug("LLM circuit breaker: reset after success")
+                self._consecutive_failures = 0
+
+    async def record_failure(self) -> None:
+        """Increment failure counter; open breaker if threshold reached."""
+        async with self._lock:
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= self.threshold:
+                self._open = True
+                log.warning(
+                    "LLM circuit breaker OPEN after %d consecutive failures - "
+                    "skipping LLM for remainder of tick",
+                    self._consecutive_failures,
+                )
+
+    async def reset(self) -> None:
+        """Reset breaker state (called at tick start)."""
+        async with self._lock:
+            self._consecutive_failures = 0
+            self._open = False
+
+
+_CIRCUIT_BREAKER: Optional[CircuitBreaker] = None
+
+
+def circuit_breaker() -> CircuitBreaker:
+    """Get the singleton circuit breaker (created inside running loop)."""
+    global _CIRCUIT_BREAKER
+    if _CIRCUIT_BREAKER is None:
+        _CIRCUIT_BREAKER = CircuitBreaker()
+    return _CIRCUIT_BREAKER
+
+
+async def reset_circuit_breaker() -> None:
+    """Reset the circuit breaker at the start of each tick."""
+    global _CIRCUIT_BREAKER
+    if _CIRCUIT_BREAKER is not None:
+        await _CIRCUIT_BREAKER.reset()
+
+
+def llm_status() -> str:
+    """
+    Return LLM status for health checks.
+
+    Returns:
+        "ok" - LLM enabled and circuit breaker closed
+        "degraded" - LLM enabled but circuit breaker open
+        "disabled" - LLM not configured
+    """
+    if not settings.has_llm:
+        return "disabled"
+    cb = _CIRCUIT_BREAKER
+    if cb is not None and cb.is_open:
+        return "degraded"
+    return "ok"
+
+
 async def get_client() -> httpx.AsyncClient:
     global _CLIENT
     if _CLIENT is None or _CLIENT.is_closed:
@@ -190,12 +276,19 @@ async def chat_json(
 
     Retries transient errors with exponential backoff, then raises. Callers
     are expected to catch and fall back to heuristics.
+
+    Circuit breaker: if open, fails fast without attempting the call.
     """
     if not settings.has_llm:
         raise RuntimeError(
             f"No LLM API key configured for {settings.llm_base_url} "
             f"(set LLM_API_KEY in .env)"
         )
+
+    # Check circuit breaker before attempting
+    cb = circuit_breaker()
+    if cb.is_open:
+        raise RuntimeError("LLM circuit breaker open - falling back to heuristics")
 
     client = await get_client()
 
@@ -226,7 +319,23 @@ async def chat_json(
             # including retries, before it leaves the process.
             await _limiter_fixed().acquire()
             async with _semaphore_fixed():
-                resp = await client.post("/chat/completions", json=payload)
+                # Per-call wall-clock timeout so a single dead endpoint cannot
+                # monopolise the event loop for minutes. asyncio.wait_for
+                # cancels the underlying httpx request on timeout.
+                resp = await asyncio.wait_for(
+                    client.post("/chat/completions", json=payload),
+                    timeout=LLM_CALL_TIMEOUT_SECONDS,
+                )
+
+            # 503 = provider overloaded. Retrying burns the per-minute budget
+            # and the backoff sleep blocks the event loop, so bail out
+            # immediately and let the classifier fall back to heuristics.
+            if resp.status_code == 503:
+                await cb.record_failure()
+                raise RuntimeError(
+                    f"provider returned 503 (overloaded) - "
+                    f"falling back to heuristics"
+                )
 
             # Some providers reject response_format - degrade once, loudly.
             if resp.status_code == 400 and "response_format" in payload:
@@ -282,19 +391,26 @@ async def chat_json(
                     "empty model response - the model returned no content "
                     "(reasoning model with an exhausted token budget?)"
                 )
+            await cb.record_success()
             return extract_json(content)
 
-        except RuntimeError:
-            raise  # auth failures are terminal - do not retry
+        except RuntimeError as exc:
+            if "circuit breaker" in str(exc) or "503" in str(exc) or "auth rejected" in str(exc):
+                raise  # auth failures, 503, and open breaker are terminal - do not retry
+            raise
+        except asyncio.TimeoutError:
+            await cb.record_failure()
+            raise
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
-            wait = 1.5 * (2**attempt)
+            wait = 0.5 * (2**attempt)
             log.warning(
                 "LLM call failed (attempt %d/3): %s - retrying in %.1fs",
                 attempt + 1, exc, wait,
             )
             await asyncio.sleep(wait)
 
+    await cb.record_failure()
     raise RuntimeError(f"LLM call failed after 3 attempts: {last_exc}")
 
 

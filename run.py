@@ -149,6 +149,9 @@ def check_llm() -> None:
         print("RESULT: heuristic mode (no key). Engine works, LLM analysis off.")
         raise SystemExit(0)
 
+    # Reset circuit breaker so a previous failure doesn't block the check
+    asyncio.run(llm_client.reset_circuit_breaker())
+
     try:
         result = asyncio.run(llm_client.health_check())
     except KeyboardInterrupt:

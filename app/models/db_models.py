@@ -47,6 +47,7 @@ class NewsArticle(Base):
     relevance_score: Mapped[float] = mapped_column(Float, default=0.0)
     analysis_mode: Mapped[str] = mapped_column(String(24), default="heuristic")
     analysis_note: Mapped[str] = mapped_column(Text, default="")
+    llm_used: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

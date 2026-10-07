@@ -16,6 +16,7 @@ present heuristic output as if it were model-derived.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -47,6 +48,24 @@ from app.models.enums import (
 log = get_logger(__name__)
 
 MAX_BODY_CHARS = 2000
+
+# Per-article LLM wall-clock budget. One article that hangs cannot stall the
+# entire tick: after this many seconds the classifier falls back to heuristics.
+LLM_PER_ARTICLE_TIMEOUT = 30
+
+# Max concurrent LLM calls per tick. Keeps the event loop responsive and
+# respects provider rate limits.
+LLM_MAX_CONCURRENT = 4
+
+_LLM_SEMAPHORE: asyncio.Semaphore | None = None
+
+
+def _llm_semaphore() -> asyncio.Semaphore:
+    """Lazily created concurrency limiter for LLM classify calls."""
+    global _LLM_SEMAPHORE
+    if _LLM_SEMAPHORE is None:
+        _LLM_SEMAPHORE = asyncio.Semaphore(LLM_MAX_CONCURRENT)
+    return _LLM_SEMAPHORE
 
 
 @dataclass
@@ -375,9 +394,12 @@ async def llm_analyze(title: str, body: str = "") -> ArticleAnalysis:
     Raises on persistent failure so :func:`analyze_article` can fall back to the
     deterministic heuristic engine. A malformed response is never partially
     trusted: it is either fully valid or it is discarded.
+
+    Concurrency is limited by LLM_MAX_CONCURRENT.
     """
     from app.analysis.llm_schema import validate_llm_payload
     from app.config import settings
+    from app.analysis import llm_client
 
     body = (body or "")[:MAX_BODY_CHARS]
     user_prompt = (
@@ -388,7 +410,8 @@ async def llm_analyze(title: str, body: str = "") -> ArticleAnalysis:
     last_error: Exception | None = None
     for attempt in range(2):   # item 9: exactly one retry
         try:
-            raw = await _llm_call(SYSTEM_PROMPT, user_prompt)
+            async with _llm_semaphore():
+                raw = await _llm_call(SYSTEM_PROMPT, user_prompt)
             # Models occasionally key the map by asset instead of using a list.
             if isinstance(raw, dict) and isinstance(raw.get("assets"), dict):
                 raw = {**raw, "assets": [
@@ -452,19 +475,45 @@ async def llm_analyze(title: str, body: str = "") -> ArticleAnalysis:
     raise RuntimeError(f"LLM classification failed after 2 attempts: {last_error}")
 
 
-async def analyze_article(title: str, body: str = "") -> tuple[ArticleAnalysis, bool]:
-    """Public entry point. Returns (analysis, llm_ok). Never raises."""
+async def analyze_article(title: str, body: str = "") -> tuple[ArticleAnalysis, bool, str]:
+    """Public entry point. Returns (analysis, llm_ok, skip_reason). Never raises.
+    
+    skip_reason is one of: "ok", "batch_cap", "circuit_breaker", "timeout", "error"
+    """
     from app.config import settings
+    from app.analysis import llm_client
 
     if settings.has_llm:
+        # Check circuit breaker before attempting LLM
+        cb = llm_client.circuit_breaker()
+        if cb.is_open:
+            log.debug("LLM circuit breaker open - using heuristic for %r", title[:80])
+            analysis = heuristic_analyze(title, body)
+            analysis.note = "LLM circuit breaker open; heuristic fallback used."
+            return analysis, False, "circuit_breaker"
+
         try:
-            return await llm_analyze(title, body), True
+            return await asyncio.wait_for(
+                llm_analyze(title, body),
+                timeout=LLM_PER_ARTICLE_TIMEOUT,
+            ), True, "ok"
+        except asyncio.TimeoutError:
+            log.warning(
+                "LLM analysis timed out after %.0fs for %r - "
+                "using heuristic fallback",
+                LLM_PER_ARTICLE_TIMEOUT, title[:80],
+            )
+            analysis = heuristic_analyze(title, body)
+            analysis.note = (
+                f"LLM timed out (>{LLM_PER_ARTICLE_TIMEOUT}s); heuristic fallback used."
+            )
+            return analysis, False, "timeout"
         except Exception as exc:  # noqa: BLE001 - fallback is mandatory
             log.warning("LLM analysis failed, using heuristic: %s", exc)
             analysis = heuristic_analyze(title, body)
             analysis.note = (
                 f"LLM unavailable ({type(exc).__name__}); heuristic fallback used."
             )
-            return analysis, False
+            return analysis, False, "error"
 
-    return heuristic_analyze(title, body), False
+    return heuristic_analyze(title, body), False, "no_llm_key"

@@ -115,6 +115,8 @@ def render_block(b: dict) -> None:
                         f"{d_.get('title', '')}")
         if b.get("conflict"):
             st.markdown(f"⚠️ Conflict: {b['conflict'].get('title', '')}")
+
+
 data = fetch()
 
 if "_error" in data:
@@ -128,6 +130,13 @@ st.title("Intraday News Sentiment & Market Impact Engine")
 st.caption("NEWS-BASED SENTIMENT — not a price prediction, not financial advice.")
 
 status = data["status"]
+if status.get("stale"):
+    st.error(
+        f"STALE: no successful pipeline tick in the last "
+        f"{status.get('stale_after_minutes', 15)} minutes. "
+        "Showing carried-forward data.",
+        icon="⚠️",
+    )
 m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("Date", data["date"])
 m2.metric("Session", data["current_session"])
@@ -141,6 +150,51 @@ st.caption(
     f"Articles today: {status['articles_today']} · "
     f"Poll every {status['poll_interval_seconds']}s · Regime: {data['regime']}"
 )
+
+# ---------------- Asset Sentiment Blocks ----------------
+st.subheader("Asset Sentiment")
+
+equity = data.get("equity", {})
+
+for asset in data["assets"]:
+    asset_label = asset["label"]
+    asset_symbol = asset["symbol"]
+
+    with st.container(border=True):
+        st.markdown(f"**{asset_label} ({asset_symbol})**")
+
+        for scope_key, scope_label in [
+            ("current", "Current"),
+            ("market_prep", "Market Prep"),
+            ("market_wrap", "Market Wrap"),
+        ]:
+            block = asset[scope_key]
+            with st.expander(f"{scope_label}", expanded=(scope_key == "current")):
+                render_block(block)
+
+# ---------------- Equity Card ----------------
+st.subheader("Global Equity Card")
+
+equity_block = {
+    "score": float(equity.get("score", 0.0)),
+    "bias": equity.get("bias", "NO_BIAS"),
+    "mode": equity.get("mode", "heuristic"),
+    "drivers": equity.get("drivers", []),
+    "confidence": float(equity.get("confidence", 0.0)),
+    "delta_60m": 0.0,
+    "event_risk": False,
+    "event_risk_note": "",
+    "conflict": None,
+    "contributing_articles": equity.get("contributing_articles", 0),
+    "stale": equity.get("stale", False),
+}
+
+with st.container(border=True):
+    st.markdown(f"**{equity.get('title', 'Global Equity')}**")
+    st.caption(f"Region: {equity.get('region', 'N/A')} | Symbol: {equity.get('symbol', 'N/A')}")
+    render_block(equity_block)
+    if equity.get("note"):
+        st.info(equity["note"])
 
 # ---------------- Alerts ----------------
 if data["alerts"]:
@@ -203,11 +257,3 @@ st.caption(data["disclaimer"])
 if st.button("🔄 Refresh now"):
     st.cache_data.clear()
     st.rerun()
-
-    for d in (b.get("drivers") or [])[:3]:
-        st.markdown(f"🟢 {d}")
-    for d in (b.get("risks") or [])[:3]:
-        st.markdown(f"🔴 {d}")
-    for c in (b.get("conflicts") or [])[:1]:
-        st.warning(f"Conflicting signals — {c['resolution']}")
-    st.caption(b.get("price_note", "Price-action confirmation unavailable."))

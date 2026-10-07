@@ -36,9 +36,9 @@ BULLISH_CUES: list[tuple[str, int]] = [
     ("rate cut", 3), ("cuts rates", 3), ("dovish", 3), ("easing", 2), ("pivot", 2),
     ("weaker than expected", 2), ("missed forecasts", 2), ("below expectations", 2),
     ("slowing", 2), ("cooling", 2), ("fell", 2), ("declined", 2), ("dropped", 2),
-    ("slipped", 2), ("eased", 2), ("safe haven", 2), ("inflow", 2), ("inflows", 2),
+    ("slipped", 2), ("ease", 2), ("safe haven", 2), ("inflow", 2), ("inflows", 2),
     ("surge", 2), ("jumped", 2), ("rally", 2), ("boost", 2), ("upbeat", 2),
-    ("beats expectations", 2), ("approval", 2), ("stimulus", 2), ("fall", 1),
+    ("beats expectations", 2), ("beat expectations", 2), ("beats forecast", 2), ("beat forecast", 2), ("approval", 2), ("stimulus", 2), ("fall", 1),
     ("lower", 1), ("down", 1), ("support", 1), ("record", 1),
 ]
 BEARISH_CUES: list[tuple[str, int]] = [
@@ -102,6 +102,19 @@ UP_VERBS: tuple[str, ...] = (
 )
 METAL_SUBJECTS: tuple[str, ...] = (
     "gold", "silver", "bitcoin", "btc", "xau", "xag",
+)
+# Equity subjects: when these are paired with up/down verbs, the metal-centric
+# cue polarity must be inverted (stocks rising is bullish for equities, not
+# bearish like yields rising is for metals).
+EQUITY_SUBJECTS: tuple[str, ...] = (
+    "stock", "stocks", "share", "shares", "s&p", "spx", "nasdaq", "ndx",
+    "dow", "russell", "nyse", "equity", "equities", "earnings", "profit",
+    "companies", "corporate",
+)
+# Context words that flip "lower" from bullish (lower yields -> good for metals)
+# to bearish for equities (lower earnings/guidance -> bad for equities).
+_EQUITY_LOWER_CONTEXT: tuple[str, ...] = (
+    "guidance", "guide", "forecast", "expectations",
 )
 DOWN_VERBS: tuple[str, ...] = (
     "fall", "falls", "fell", "drop", "drops", "dropped", "slump", "slumps",
@@ -174,7 +187,7 @@ def score_cues(text: str, cues: list[tuple[str, int]]) -> float:
     return total
 
 
-def detect_direction(text: str) -> Direction:
+def detect_direction(text: str, equity: bool = False) -> Direction:
     """
     Net directional read from weighted cue scores.
 
@@ -182,6 +195,11 @@ def detect_direction(text: str) -> Direction:
     though the verb "rise" is in the bullish-verb list, because the subject is
     a yield/currency. Proximity is measured in TOKENS (configurable), not
     characters, so long phrasing still inverts correctly.
+
+    When ``equity=True``, equity-specific subjects (stocks, S&P, earnings, etc.)
+    are also inverted: "stocks rise" is BULLISH for equities even though "rise"
+    is a metal-bearish cue, and "lower guidance" is BEARISH for equities even
+    though "lower yields" is bullish for metals.
 
     Negation and the text-quality multipliers are applied here so that a
     negated or hedged headline cannot produce a directional read at all.
@@ -209,6 +227,28 @@ def detect_direction(text: str) -> Direction:
     for subject in detect_inversion_subjects(scored, METAL_SUBJECTS, UP_VERBS):
         bull += _INVERSION_WEIGHT
         bear = max(0.0, bear - _INVERSION_WEIGHT)
+
+    if equity:
+        # Equity subjects: stocks/S&P rising is bullish for equities (not
+        # bearish like yields rising is for metals). Uses full-text contains_cue
+        # instead of detect_inversion_subjects because compound subjects like
+        # "s&p 500" survive the tokeniser's [a-z0-9']+ split and would be
+        # missed by the token-by-token match.
+        _equity_lower = scored.lower()
+        _has_equity = any(contains_cue(_equity_lower, s) for s in EQUITY_SUBJECTS)
+        if _has_equity:
+            if any(contains_cue(_equity_lower, v) for v in UP_VERBS):
+                bull += _INVERSION_WEIGHT
+                bear = max(0.0, bear - _INVERSION_WEIGHT)
+            if any(contains_cue(_equity_lower, v) for v in DOWN_VERBS):
+                bull = max(0.0, bull - _INVERSION_WEIGHT)
+                bear += _INVERSION_WEIGHT
+        # "lower" is bullish for metals (lower yields), but "guide lower" /
+        # "lower earnings guidance" is bearish for equities.
+        if (contains_cue(_equity_lower, "lower")
+                and any(contains_cue(_equity_lower, ctx) for ctx in _EQUITY_LOWER_CONTEXT)):
+            bull = max(0.0, bull - 1.0)
+            bear += 1.0
 
     if bull == 0 and bear == 0:
         return Direction.NEUTRAL

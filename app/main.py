@@ -31,7 +31,9 @@ from app.market.session_detector import (
     detect_session, equity_session, equity_title, next_session,
     previous_session,
 )
-from app.models.db_models import Alert, NewsArticle, NewsEvent, PipelineRun
+from app.models.db_models import (
+    Alert, NewsArticle, NewsEvent, PipelineRun, SentimentSnapshot,
+)
 from app.models.enums import (
     Asset, Direction, EconomicImportance, ImpactStrength, MarketRegime,
     NewsCategory, PriceConfirmation, ReportKind, SessionName, Verification,
@@ -49,26 +51,32 @@ _scheduler: AsyncIOScheduler | None = None
 _clients: set[WebSocket] = set()
 
 
-async def _broadcast(payload: dict) -> None:
-    if not _clients:
-        return
-    message = json.dumps(payload, default=str)
-    dead: list[WebSocket] = []
-    for ws in list(_clients):
-        try:
-            await ws.send_text(message)
-        except Exception:  # noqa: BLE001 - client vanished
-            dead.append(ws)
-    for ws in dead:
-        _clients.discard(ws)
+def _run_pipeline_sync() -> "pipeline.IngestStats":
+    """Run the pipeline in a separate thread with its own event loop."""
+    return asyncio.run(pipeline.run_once())
 
 
 async def _scheduled_tick() -> None:
-    """Background job: run the pipeline, then push an update."""
+    """Background job: run the pipeline in a worker thread, then push an update.
+
+    Running the pipeline in a thread pool prevents synchronous SQLite writes
+    from blocking the main event loop, so /api/health and /api/dashboard
+    remain responsive during a tick.
+    """
+    started = T.stamp()
     try:
-        stats = await pipeline.run_once()
-        await _broadcast({"type": "update", "new_news": stats.new_today,
-                          "at": T.stamp()})
+        stats = await asyncio.to_thread(_run_pipeline_sync)
+        log.info(
+            "Tick %s done: fetched=%d new=%d rejected=%d dup=%d "
+            "unroutable=%d llm_new_ok=%d llm_new_fail=%d llm_backlog_ok=%d llm_backlog_fail=%d errors=%d purged=%d",
+            started, stats.fetched, stats.new_today, stats.rejected,
+            stats.duplicates, stats.skipped_unroutable,
+            stats.llm_new_ok, stats.llm_new_failed,
+            stats.llm_backlog_ok, stats.llm_backlog_failed,
+            len(stats.errors), stats.purged.get("articles", 0),
+        )
+        if stats.errors:
+            log.warning("Tick %s errors: %s", started, stats.errors[:5])
     except Exception as exc:  # noqa: BLE001 - never kill the scheduler
         log.exception("Scheduled pipeline tick failed: %s", exc)
 
@@ -173,6 +181,9 @@ def _bias_since(session, asset: str, scope: str, score: float) -> Optional[str]:
 # more than a trading day at a 180s poll, so this only ever bites on a feed that
 # has held one side for days.
 _BIAS_LOOKBACK = 500
+
+# No successful tick in this many minutes => /api/health returns 503 "degraded".
+HEALTH_STALE_MINUTES = 15
 
 
 def _block(session, asset: str, scope: str) -> dict:
@@ -327,6 +338,21 @@ def _news_feed(session, limit: Optional[int] = None,
 def build_payload(session) -> dict:
     """Assemble the complete dashboard payload (section 20)."""
     state = pipeline.runtime_state()
+    health_metrics = pipeline.get_health_metrics()
+
+    # Staleness: no successful tick in the last HEALTH_STALE_MINUTES.
+    last_poll_ok = state.get("last_successful_tick")
+    stale = False
+    if not last_poll_ok:
+        stale = True
+    else:
+        try:
+            from datetime import datetime as _dt, timedelta, timezone as _tz
+            last_dt = _dt.fromisoformat(last_poll_ok)
+            age = _dt.now(_tz.utc) - last_dt
+            stale = age > timedelta(minutes=HEALTH_STALE_MINUTES)
+        except (ValueError, TypeError):
+            stale = True
 
     assets_out = []
     for asset in Asset:
@@ -392,6 +418,9 @@ def build_payload(session) -> dict:
         "status": {
             "running": state["running"],
             "last_updated": state["last_updated"] or "",
+            "last_poll_ok": state.get("last_successful_tick") or "",
+            "stale": stale,
+            "stale_after_minutes": HEALTH_STALE_MINUTES,
             "new_news_since_last_update": state["new_news_since_last_update"],
             "articles_today": articles_today,
             "events_today": events_today,
@@ -404,6 +433,12 @@ def build_payload(session) -> dict:
             "poll_interval_seconds": settings.poll_interval_seconds,
             "errors": detail.get("errors", []),
         },
+        "health": {
+            "status": "degraded" if stale else "ok",
+            "last_article_utc": health_metrics.get("last_article_utc"),
+            "last_snapshot_utc": health_metrics.get("last_snapshot_utc"),
+            "per_source": health_metrics.get("per_source", {}),
+        },
         "disclaimer": (
             "NEWS-BASED INTRADAY SENTIMENT. Not a price prediction, not a "
             "trading signal, and not financial advice."
@@ -415,18 +450,104 @@ def build_payload(session) -> dict:
 # API endpoints
 # ==========================================================================
 @app.get("/api/health")
-async def health():
-    """Liveness probe including engine mode."""
-    return {
-        "status": "ok",
-        "llm_enabled": settings.has_llm,
-        "analysis_mode": "llm" if settings.has_llm else "heuristic",
-        "llm_requests_per_minute": settings.llm_requests_per_minute,
-        "llm_requests_used_last_min": llm_client.requests_in_window(),
-        "market_timezone": settings.market_timezone,
-        "today": T.market_today().isoformat(),
-        "current_session": detect_session().value,
-    }
+def health():
+    """Liveness probe including engine mode and pipeline freshness.
+
+    Responds from in-memory pipeline state only - no database session
+    is opened and no SQLite lock is acquired, so the endpoint stays
+    sub-millisecond even while a pipeline tick holds a write
+    transaction.
+
+    This is a SYNC (non-async) endpoint on purpose: FastAPI runs sync
+    endpoints in a thread pool, so the probe still answers while the
+    main event loop is blocked by a tick's synchronous SQLite writes.
+    The previous ``async def`` version could not run until the tick
+    yielded, which made the watchdog see a timeout mid-tick and restart
+    a perfectly healthy engine.
+
+    Beyond the basic ``status: ok`` this reports the metrics that tell an
+    operator whether the engine is actually catching up:
+
+    * ``last_poll_ok`` - ISO timestamp of the most recent *successful* pipeline
+      tick (empty if no tick has ever completed). A clock that is not moving is
+      the failure mode this endpoint exists to surface.
+    * ``last_article_utc`` - ``published_at_utc`` of the newest article cached
+      from the last tick (no DB hit).
+    * ``last_snapshot_utc`` - ``computed_at`` of the newest sentiment snapshot
+      cached from the last tick.
+    * ``per_source`` - items fetched / errors for each configured source on the
+      most recent tick.
+
+    STALE / DEGRADED: when no successful tick has completed in the last
+    ``HEALTH_STALE_MINUTES`` (default 15) the endpoint returns HTTP 503 with
+    ``status: "degraded"`` so an external watchdog can detect a frozen pipeline
+    even though the process itself is technically alive.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    state = pipeline.runtime_state()
+    health_metrics = pipeline.get_health_metrics()
+
+    last_poll_ok = state.get("last_successful_tick")
+    tick_running = state.get("running", False)
+    tick_started = state.get("tick_started_at")
+    
+    stale = False
+    stale_reason = None
+    
+    # Check for hung tick (running > 10 minutes)
+    if tick_running and tick_started:
+        try:
+            tick_start_dt = datetime.fromisoformat(tick_started)
+            tick_age = datetime.now(timezone.utc) - tick_start_dt
+            if tick_age > timedelta(seconds=pipeline.MAX_TICK_DURATION_SECONDS):
+                stale = True
+                stale_reason = "tick_hung"
+        except (ValueError, TypeError):
+            pass
+    
+    # Check for stale pipeline (no successful tick in HEALTH_STALE_MINUTES)
+    if not stale and last_poll_ok:
+        try:
+            last_dt = datetime.fromisoformat(last_poll_ok)
+            age = datetime.now(timezone.utc) - last_dt
+            stale = age > timedelta(minutes=HEALTH_STALE_MINUTES)
+            if stale:
+                stale_reason = "no_successful_tick"
+        except (ValueError, TypeError):
+            stale = True
+            stale_reason = "parse_error"
+    elif not stale:
+        # No tick has ever completed yet.
+        # If a tick is currently running (and not hung), consider it healthy.
+        stale = not tick_running
+        if stale:
+            stale_reason = "no_tick_completed"
+
+    status_code = 503 if stale else 200
+    status_label = "degraded" if stale else "ok"
+
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "status": status_label,
+            "llm_enabled": settings.has_llm,
+            "llm_status": llm_client.llm_status(),
+            "analysis_mode": "llm" if settings.has_llm else "heuristic",
+            "llm_requests_per_minute": settings.llm_requests_per_minute,
+            "llm_requests_used_last_min": llm_client.requests_in_window(),
+            "market_timezone": settings.market_timezone,
+            "today": T.market_today().isoformat(),
+            "current_session": detect_session().value,
+            "last_poll_ok": last_poll_ok,
+            "last_article_utc": health_metrics.get("last_article_utc"),
+            "last_snapshot_utc": health_metrics.get("last_snapshot_utc"),
+            "per_source": health_metrics.get("per_source", {}),
+            "stale": stale,
+            "stale_reason": stale_reason,
+            "stale_after_minutes": HEALTH_STALE_MINUTES,
+        },
+    )
 
 
 @app.get("/api/dashboard")

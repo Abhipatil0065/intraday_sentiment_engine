@@ -11,6 +11,7 @@ This module owns the end-to-end control flow. The background scheduler calls
 from __future__ import annotations
 
 import asyncio
+import atexit
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
@@ -26,6 +27,7 @@ from app.analysis.economic_impact import (
 from app.analysis import release_surprise
 from app.analysis.event_deduplication import EventDeduplicator
 from app.analysis.fj_sessions import FINANCIAL_JUICE_SOURCE
+from app.analysis import llm_client
 from app.analysis.news_classifier import analyze_article
 from app.analysis.sentiment_engine import WeightedSignal, remember_bias
 from app.analysis.signal_factory import build_signal
@@ -68,6 +70,7 @@ log = get_logger(__name__)
 # Shared across runs so dedup survives within a process session.
 _dedup = EventDeduplicator()
 _last_update: Optional[datetime] = None
+_last_successful_tick: Optional[str] = None
 _news_since_update = 0
 _running = False
 _last_regime = None  # RegimeAssessment from the most recent recompute
@@ -76,14 +79,157 @@ _calendar_signals: list[CalendarSignal] = []
 # Session-aware global equity card from the most recent recompute (NOW-only).
 _last_equity_card: Optional[dict] = None
 
+# Cached health metrics - written by the pipeline, read by /api/health without
+# touching the database so the endpoint stays instant even while a tick runs.
+_health_metrics: dict = {
+    "last_article_utc": None,
+    "last_snapshot_utc": None,
+    "per_source": {},
+}
+
+# Tick start time for hung-tick detection
+_tick_started_at: Optional[datetime] = None
+
+# Maximum tick duration before considering it hung (10 minutes)
+MAX_TICK_DURATION_SECONDS = 600
+
+# Hard cap on LLM classifications started within a single tick. Beyond this the
+# classifier falls back to deterministic heuristics, keeping every tick under
+# the ~120s budget even when the LLM endpoint is degraded.
+LLM_BATCH_LIMIT = 15
+
+# Backlog re-classification: how many heuristic articles to re-process with
+# LLM per tick (low priority, only when circuit breaker is closed).
+LLM_BACKLOG_PER_TICK = 5
+
+
+async def _reclassify_backlog(session, stats, tick_start: datetime) -> int:
+    """
+    Re-classify up to LLM_BACKLOG_PER_TICK articles that were previously
+    processed with heuristics (llm_used=false), newest first.
+
+    Only runs when:
+    - LLM is configured (settings.has_llm)
+    - Circuit breaker is closed (llm_client.circuit_breaker().is_open == False)
+    - There are articles with llm_used=false and is_today=true
+    - Articles must have been created BEFORE this tick started (to avoid
+      re-processing articles that were just batch-capped in this tick).
+
+    Returns the number of articles successfully re-classified.
+    """
+    if not settings.has_llm:
+        return 0
+
+    cb = llm_client.circuit_breaker()
+    if cb.is_open:
+        log.debug("Circuit breaker open - skipping backlog re-classification")
+        return 0
+
+    # Find articles processed with heuristics today, newest first
+    # Exclude articles created in the current tick (batch-capped articles)
+    articles = session.execute(
+        select(NewsArticle)
+        .where(
+            and_(
+                NewsArticle.llm_used == False,
+                NewsArticle.is_today == True,
+                NewsArticle.created_at < tick_start,
+            )
+        )
+        .order_by(NewsArticle.published_at_utc.desc())
+        .limit(LLM_BACKLOG_PER_TICK)
+    ).scalars().all()
+
+    if not articles:
+        return 0
+
+    log.info("Re-classifying %d backlog articles with LLM", len(articles))
+    reclassified = 0
+
+    for article in articles:
+        try:
+            analysis, llm_ok, skip_reason = await analyze_article(article.title, article.body or "")
+            if llm_ok:
+                # Update the article with new LLM analysis
+                article.category = analysis.category.value
+                article.importance = analysis.importance.value
+                article.report_kind = analysis.report_kind.value
+                article.verification = analysis.verification.value
+                article.relevance_score = analysis.relevance_score
+                article.analysis_mode = analysis.mode
+                article.analysis_note = analysis.note
+                article.llm_used = True
+                reclassified += 1
+                stats.llm_backlog_ok += 1
+            else:
+                stats.llm_backlog_failed += 1
+        except Exception as exc:  # noqa: BLE001 - isolate per-article
+            log.warning("Backlog re-classification failed for %s: %s", article.guid[:8], exc)
+            stats.llm_backlog_failed += 1
+
+    if reclassified:
+        log.info("Successfully re-classified %d backlog articles", reclassified)
+
+    return reclassified
+
 
 def runtime_state() -> dict:
     return {
         "running": _running,
         "last_updated": T.stamp() if _last_update else None,
+        "last_successful_tick": _last_successful_tick,
         "new_news_since_last_update": _news_since_update,
         "regime": _last_regime,
+        "health_metrics": _health_metrics,
+        "tick_started_at": _tick_started_at.isoformat() if _tick_started_at else None,
     }
+
+
+def last_successful_tick() -> Optional[str]:
+    """ISO timestamp of the most recent tick that finished without raising."""
+    return _last_successful_tick
+
+
+def get_health_metrics() -> dict:
+    """Snapshot of cached health data (no DB hit required)."""
+    return dict(_health_metrics)
+
+
+def reset_running_flag() -> None:
+    """Unstick the pipeline if a previous process was killed mid-tick.
+
+    Called from atexit so a SIGTERM/SIGKILL from the watchdog does not leave
+    the in-process flag stuck on ``True`` for the NEXT process in the same
+    worktree (e.g. a long-running test worker).  Each fresh process starts with
+    ``_running`` already False, but the handler makes that invariant explicit
+    and visible to any in-process caller.
+    """
+    global _running
+    if _running:
+        log.info("Resetting _running flag on process exit")
+        _running = False
+
+
+def check_and_release_hung_tick() -> bool:
+    """
+    Check if the current tick has exceeded MAX_TICK_DURATION_SECONDS.
+    If so, release the running flag and return True.
+    Returns False if no tick is running or tick is within time limit.
+    """
+    global _running, _tick_started_at
+    if not _running or _tick_started_at is None:
+        return False
+    elapsed = (T.now_utc() - _tick_started_at).total_seconds()
+    if elapsed > MAX_TICK_DURATION_SECONDS:
+        log.warning("Tick hung for %.0fs (limit %ds) - releasing running flag",
+                    elapsed, MAX_TICK_DURATION_SECONDS)
+        _running = False
+        _tick_started_at = None
+        return True
+    return False
+
+
+atexit.register(reset_running_flag)
 
 
 def reset_counter() -> None:
@@ -117,12 +263,30 @@ class IngestStats:
     new_today: int = 0
     rejected: int = 0
     duplicates: int = 0
-    llm_ok: int = 0
-    llm_failed: int = 0
+    # New-article LLM outcomes (sum must equal new_today)
+    llm_new_ok: int = 0
+    llm_new_failed: int = 0
+    llm_new_skipped_batch: int = 0
+    llm_new_skipped_breaker: int = 0
+    # Backlog re-classification outcomes (separate from new articles)
+    llm_backlog_ok: int = 0
+    llm_backlog_failed: int = 0
+    llm_backlog_reclassified: int = 0
     calendar_events: int = 0
     calendar_signals: int = 0
+    skipped_unroutable: int = 0
     errors: list[str] = field(default_factory=list)
     purged: dict = field(default_factory=dict)
+
+    def verify_new_article_counters(self) -> bool:
+        """Assert that new-article LLM buckets sum to new_today.
+
+        llm_new_skipped_breaker is a subset of llm_new_failed (circuit breaker
+        failures), not a separate category.
+        """
+        total = (self.llm_new_ok + self.llm_new_failed +
+                 self.llm_new_skipped_batch)
+        return total == self.new_today
 
 
 def _importance_weight(importance: EconomicImportance) -> float:
@@ -180,7 +344,8 @@ def _fj_session_report_is_admissible(published: datetime,
     return 0 <= age_days <= 1
 
 
-async def _ingest_article(art: RawArticle, session, stats: IngestStats):
+async def _ingest_article(art: RawArticle, session, stats: IngestStats,
+                          use_llm: bool = True):
     """Apply the TODAY filter, classify, cluster and store one article."""
     published, updated, tz_label = _parse_article_time(art)
 
@@ -222,9 +387,25 @@ async def _ingest_article(art: RawArticle, session, stats: IngestStats):
     )
 
     # --- NLP / LLM ANALYSIS ---
-    analysis, llm_ok = await analyze_article(art.title, art.body)
-    stats.llm_ok += 1 if llm_ok else 0
-    stats.llm_failed += 0 if llm_ok else 1
+    if use_llm:
+        analysis, llm_ok, skip_reason = await analyze_article(art.title, art.body)
+    else:
+        from app.analysis.news_classifier import heuristic_analyze
+
+        analysis = heuristic_analyze(art.title, art.body)
+        analysis.note = "LLM batch cap reached; heuristic used for this article."
+        llm_ok = False
+        skip_reason = "batch_cap"
+    if use_llm:
+        if llm_ok:
+            stats.llm_new_ok += 1
+        else:
+            stats.llm_new_failed += 1
+            if skip_reason == "circuit_breaker":
+                stats.llm_new_skipped_breaker += 1
+    else:
+        # use_llm=False means batch cap reached
+        stats.llm_new_skipped_batch += 1
 
     row.category = analysis.category.value
     row.importance = analysis.importance.value
@@ -233,6 +414,7 @@ async def _ingest_article(art: RawArticle, session, stats: IngestStats):
     row.relevance_score = analysis.relevance_score
     row.analysis_mode = analysis.mode
     row.analysis_note = analysis.note
+    row.llm_used = llm_ok
 
     session.add(row)
     session.flush()
@@ -427,7 +609,7 @@ def current_calendar_signals() -> list[CalendarSignal]:
     return list(_calendar_signals)
 
 
-def _recompute_sentiment(session):
+def _recompute_sentiment(session, stats: IngestStats):
     """
     Rebuild every asset's CURRENT / PREP / WRAP sentiment from today's rows.
 
@@ -470,9 +652,26 @@ def _recompute_sentiment(session):
             # is the cluster identity - both were previously left at their
             # dataclass defaults, which pinned every article to the 6h "Other"
             # half-life and left corroboration at 1.0.
+            #
+            # HARDENING (2026-10-07): Asset() is no longer allowed to take the
+            # recompute down with it. A legacy row whose asset string is not a
+            # member of the Asset enum (e.g. "USOIL" after the OIL card was
+            # retired in commit 31bf524) is skipped and counted, instead of
+            # raising ValueError and killing the whole tick. The offending row
+            # stays in the DB (it is still readable by the feed) but stops
+            # poisoning every future sentiment computation.
+            try:
+                asset_enum = Asset(impact.asset)
+            except ValueError:
+                stats.skipped_unroutable += 1
+                log.debug(
+                    "Skipping unroutable impact asset %r on article %d (%s)",
+                    impact.asset, row.id, row.title[:80],
+                )
+                continue
             signals.append(
                 build_signal(
-                    asset=Asset(impact.asset),
+                    asset=asset_enum,
                     title=row.title,
                     direction=Direction(impact.direction),
                     strength=ImpactStrength(impact.strength),
@@ -779,6 +978,47 @@ def purge_old_news(session, *, keep_days: Optional[int] = None) -> dict:
     return result
 
 
+def _purge_unroutable_impacts(session) -> int:
+    """
+    Delete ``asset_impact`` rows whose asset string is not a member of the
+    ``Asset`` enum.
+
+    Hardening added 2026-10-07 after commit 31bf524 retired ``Asset.OIL`` while
+    399 legacy rows still carried ``asset='USOIL'``. ``_recompute_sentiment``
+    called ``Asset(impact.asset)`` on every one of them and raised
+    ``ValueError``, which killed every pipeline tick (the scheduler itself
+    never died - ``run_once`` catches and logs it).
+
+    The rows are dropped here, before the recompute, so the enum lookup can
+    never see them again. Deleting is safe: the parent ``news_article`` row is
+    unaffected (it is still served by the feed), and the article's impact on
+    the three supported assets is re-derived from its text on every recompute.
+
+    Also cleans stale ``sentiment_snapshot`` rows whose asset string is not a
+    member of the ``Asset`` enum (e.g. legacy ``asset='USOIL'`` snapshots left
+    behind by pre-fix pipeline runs). These are harmless but accumulate and
+    clutter the DB.
+    """
+    from sqlalchemy import delete
+
+    valid = tuple(a.value for a in Asset)
+    try:
+        res = session.execute(
+            delete(AssetImpact).where(~AssetImpact.asset.in_(valid))
+        )
+        session.flush()
+        impact_count = res.rowcount or 0
+        # Also clean stale snapshots for non-Asset strings.
+        snap_count = session.execute(
+            delete(SentimentSnapshot).where(~SentimentSnapshot.asset.in_(valid))
+        ).rowcount or 0
+        session.flush()
+        return impact_count
+    except Exception as exc:  # noqa: BLE001 - cleanup must not break a poll
+        log.warning("Unroutable impact cleanup skipped: %s", exc)
+        return 0
+
+
 async def run_once() -> IngestStats:
     """
     Execute one full pipeline pass.
@@ -786,15 +1026,20 @@ async def run_once() -> IngestStats:
     Never raises - errors are logged and returned in ``stats.errors`` so the
     scheduler keeps running.
     """
-    global _running, _last_update, _news_since_update, _calendar_signals
+    global _running, _last_update, _last_successful_tick, _news_since_update, _calendar_signals, _tick_started_at
 
     if _running:
         log.debug("Pipeline already running; skipping this tick")
         return IngestStats(errors=["pipeline already running"])
 
+    # Reset LLM circuit breaker at the start of each tick so a degraded
+    # endpoint gets a fresh chance on the next poll.
+    await llm_client.reset_circuit_breaker()
+
     _running = True
+    _tick_started_at = T.now_utc()
     stats = IngestStats()
-    started = T.now_utc()
+    started = _tick_started_at
 
     try:
         # 1) INGESTION ---------------------------------------------------
@@ -826,14 +1071,26 @@ async def run_once() -> IngestStats:
             existing = _load_existing_guids(session)
             new_articles: list[NewsArticle] = []
 
+            llm_calls = 0
             for art in report.articles:
                 if art.guid in existing:
                     continue
+                # Cap LLM classifications per tick. Once the batch limit is
+                # reached, remaining new articles get deterministic heuristics
+                # so a degraded endpoint cannot turn one tick into a 10-minute
+                # slog. Heuristics are always available and correct.
+                use_llm = settings.has_llm and llm_calls < LLM_BATCH_LIMIT
                 try:
-                    row = await _ingest_article(art, session, stats)
+                    row = await _ingest_article(art, session, stats, use_llm)
                     if row is not None:
                         existing.add(art.guid)
                         new_articles.append(row)
+                        if use_llm:
+                            llm_calls += 1
+                    elif use_llm and settings.has_llm:
+                        # Article was rejected (not new) but would have used LLM slot
+                        # Don't count this against the batch limit since it's not a new article
+                        pass
                 except Exception as exc:  # noqa: BLE001 - isolate per-article
                     log.exception("Failed to ingest: %s", art.title[:80])
                     stats.errors.append(f"ingest: {type(exc).__name__}: {exc}")
@@ -841,35 +1098,79 @@ async def run_once() -> IngestStats:
             _news_since_update += len(new_articles)
             stats.articles_new = len(new_articles)
 
-            # 1b) RETENTION -------------------------------------------------
+            # 1b) BACKLOG RE-CLASSIFICATION --------------------------------
+            # Re-classify up to 5 articles per tick that were previously
+            # processed with heuristics (llm_used=false), newest first.
+            # Only runs when LLM is configured and circuit breaker is closed.
+            stats.llm_backlog_reclassified = await _reclassify_backlog(session, stats, started)
+
+            # 1c) RETENTION -------------------------------------------------
             # Runs BEFORE alerts and the sentiment recompute so both work
             # against an already-trimmed database. Runs on every pass, not
             # just once a day: the window is date-based, so a machine that
             # was off overnight still self-corrects on its next tick.
             stats.purged = purge_old_news(session)
 
+            # 1c) CLEAN UNROUTABLE IMPACTS ---------------------------------
+            # Legacy rows whose asset string is not a member of the Asset
+            # enum (e.g. "USOIL" after the OIL card was retired) can never be
+            # re-scored. Drop their impact rows now so the recompute below
+            # never has to see them, and so the DB does not accumulate them.
+            unroutable = _purge_unroutable_impacts(session)
+            log.info(
+                "Removed %d unroutable asset_impact rows",
+                unroutable,
+            )
+
             # 2) ALERTS ----------------------------------------------------
             from app.services.alerts import evaluate_and_emit
             evaluate_and_emit(session, stats)
 
             # 3) SENTIMENT + PREP/WRAP ------------------------------------
-            _recompute_sentiment(session)
+            _recompute_sentiment(session, stats)
 
             run_row.articles_new = stats.new_today
             run_row.articles_rejected = stats.rejected
-            run_row.llm_errors = stats.llm_failed
+            run_row.llm_errors = stats.llm_new_failed + stats.llm_backlog_failed
             run_row.status = "ok"
             run_row.finished_at = T.now_utc()
 
+            # 4) HEALTH CACHE ------------------------------------------------
+            # Update the in-memory metrics that /api/health and /api/dashboard
+            # use to detect staleness without a DB query. Must stay inside the
+            # session so the queries below actually run.
+            global _health_metrics
+            try:
+                last_art = session.query(
+                    func.max(NewsArticle.published_at_utc)).scalar()
+                last_snap = session.query(
+                    func.max(SentimentSnapshot.computed_at)).scalar()
+                _health_metrics = {
+                    "last_article_utc": (
+                        last_art.isoformat() if last_art else None
+                    ),
+                    "last_snapshot_utc": (
+                        last_snap.isoformat() if last_snap else None
+                    ),
+                    "per_source": report.source_stats,
+                }
+            except Exception as exc:  # noqa: BLE001 - health cache must never break the tick
+                log.debug("health metrics cache update skipped: %s", exc)
+
         _last_update = T.now_utc()
+        _last_successful_tick = _last_update.isoformat()
         log.info(
             "Pipeline complete: fetched=%d new=%d rejected=%d dup=%d "
-            "llm_ok=%d llm_fail=%d purged=%d",
+            "llm_new_ok=%d llm_new_fail=%d llm_new_skip_batch=%d llm_new_skip_breaker=%d "
+            "llm_backlog_ok=%d llm_backlog_fail=%d llm_backlog_reclassified=%d purged=%d unroutable=%d",
             stats.fetched, stats.new_today, stats.rejected, stats.duplicates,
-            stats.llm_ok, stats.llm_failed, stats.purged.get("articles", 0),
+            stats.llm_new_ok, stats.llm_new_failed, stats.llm_new_skipped_batch,
+            stats.llm_new_skipped_breaker,
+            stats.llm_backlog_ok, stats.llm_backlog_failed, stats.llm_backlog_reclassified,
+            stats.purged.get("articles", 0),
+            stats.skipped_unroutable,
         )
         return stats
-
     except Exception as exc:  # noqa: BLE001 - scheduler must survive
         log.exception("Pipeline run failed")
         stats.errors.append(f"pipeline: {type(exc).__name__}: {exc}")
@@ -885,3 +1186,4 @@ async def run_once() -> IngestStats:
         return stats
     finally:
         _running = False
+        _tick_started_at = None

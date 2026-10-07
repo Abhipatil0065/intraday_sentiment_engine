@@ -41,7 +41,20 @@ class LLMAssetResult(BaseModel):
     priced_in: bool = False
     reason: str = Field(default="", max_length=400)
     transmission: str = Field(default="", max_length=400)
-    metal_character: Optional[Literal["PRECIOUS", "INDUSTRIAL", "BOTH"]] = None
+    metal_character: Optional[Literal["PRECIOUS", "INDUSTRIAL", "BOTH"]] = Field(
+        default=None,
+    )
+
+    @field_validator("metal_character", mode="before")
+    @classmethod
+    def _normalise_metal_character(cls, v):
+        """Accept the literal string "null" or "none" from the model and coerce
+        it to a real None so validation does not raise."""
+        if v is None:
+            return None
+        if isinstance(v, str) and v.strip().lower() in ("null", "none", ""):
+            return None
+        return v
 
     @field_validator("magnitude")
     @classmethod

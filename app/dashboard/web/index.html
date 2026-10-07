@@ -318,8 +318,13 @@
     .strip-cards{grid-template-columns:1fr}
     .fjgrid{grid-template-columns:1fr}
   }
-  footer{border-top:1px solid var(--line);color:#6e7681;font-size:10px;
-         text-align:center;padding:9px 18px;margin-top:20px}
+   footer{border-top:1px solid var(--line);color:#6e7681;font-size:10px;
+          text-align:center;padding:9px 18px;margin-top:20px}
+   .stale-banner{position:sticky;top:0;z-index:25;padding:8px 18px;
+     background:rgba(248,81,73,.92);color:#fff;font-size:12px;
+     font-weight:700;letter-spacing:1px;text-align:center;
+     box-shadow:0 2px 6px rgba(0,0,0,.4)}
+   .stale-banner.hidden{display:none}
   @media (max-width:1000px){
     .strip-cards{grid-template-columns:1fr}
   }
@@ -333,6 +338,7 @@
 </style>
 </head>
 <body>
+  <div class="stale-banner hidden" id="staleBanner"></div>
 <header>
   <h1>INTRADAY NEWS SENTIMENT &amp; MARKET IMPACT ENGINE</h1>
   <div class="meta" id="meta">Loading&hellip;</div>
@@ -927,7 +933,15 @@ function renderFinancialJuice(d){
 }
 function renderHeader(d){
   var st=d.status||{};
-  document.getElementById('meta').innerHTML=
+  var staleBanner=document.getElementById('staleBanner');
+  if(st.stale){
+    staleBanner.classList.remove('hidden');
+    staleBanner.textContent='STALE: no successful pipeline tick in the last '
+      +st.stale_after_minutes+' minutes. Dashboard showing carried-forward data.';
+  }else{
+    staleBanner.classList.add('hidden');
+  }
+  var box=document.getElementById('meta');
     '<span><span class="dot '+(st.running?'on':'')+'"></span>'
     +(st.running?'RUNNING':'IDLE')+'</span>'
     +'<span>DATE <b>'+esc(d.date)+'</b></span>'
