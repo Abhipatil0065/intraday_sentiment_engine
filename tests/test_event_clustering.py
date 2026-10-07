@@ -139,6 +139,45 @@ def test_seeding_from_titles_rebuilds_the_index():
 
 
 # --------------------------------------------------------------------------
+# Clustering edge cases (explicitly requested)
+# --------------------------------------------------------------------------
+# Similarity method: Jaccard on normalized tokens (stopwords removed, numbers
+# stripped) + entity boost (0.15 per shared macro entity: fed, fomc, cpi, nfp,
+# gold, silver, bitcoin, etc.). Threshold: 0.72 (from settings.dedup_similarity_threshold).
+# Time window: 30 minutes (0.5 hours) for cluster_signals, 12 hours for EventClusterer.
+
+def test_differently_worded_same_event_clusters_together():
+    """Fed holds rates - different wording, same event, same entities."""
+    c = EventClusterer()
+    a = c.match("Fed holds rates steady signals one cut in 2027", NOW, source="Reuters")
+    b = c.match("Fed holds rates steady and signals a single cut in 2027", NOW + timedelta(minutes=10), source="Bloomberg")
+    # Both contain 'fed' entity and share 'holds rates steady signals cut' tokens
+    assert b.is_new_cluster is False, f"Expected cluster match, got new cluster. Similarity: {b.similarity}"
+    assert b.cluster_id == a.cluster_id
+
+
+def test_different_events_within_30_min_do_not_merge():
+    """NFP and Unemployment Rate at same time - different events, should NOT merge."""
+    c = EventClusterer()
+    a = c.match("US Nonfarm Payrolls Rise 250K in September", NOW, source="Reuters")
+    b = c.match("Unemployment Rate Falls to 3.8 Percent", NOW + timedelta(minutes=15), source="Bloomberg")
+    # Both have employment entities but different core events (payrolls vs unemployment)
+    # Token overlap is low, entities differ (nonfarm/payrolls vs unemployment/rate)
+    assert b.is_new_cluster is True, f"Expected separate cluster, got match. Similarity: {b.similarity}"
+    assert b.cluster_id != a.cluster_id
+
+
+def test_same_title_over_30_min_apart_stays_separate():
+    """Identical headline 31 minutes apart - should be separate clusters (time window)."""
+    c = EventClusterer(window_hours=0.5)  # 30 min window
+    a = c.match("Fed Holds Rates Steady", NOW, source="Reuters")
+    b = c.match("Fed Holds Rates Steady", NOW + timedelta(minutes=31), source="CNBC")
+    # Outside the 30-minute window, even identical titles should not cluster
+    assert b.is_new_cluster is True
+    assert b.cluster_id != a.cluster_id
+
+
+# --------------------------------------------------------------------------
 # cluster_signals function tests (scoring-time clustering)
 # --------------------------------------------------------------------------
 def test_cluster_signals_collapses_duplicates():

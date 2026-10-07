@@ -90,7 +90,15 @@ def resolve_tz(raw: str | None) -> timezone | None:
     if upper in _TZ_ABBREV:
         candidate = _TZ_ABBREV[upper]
 # --- timestamp parsing / display helpers -----------------------------------
-# Implemented in the companion module to keep this file readable.
+# Re-exported from timestamp_parse to maintain a single public API in timeutils.
+from app.utils.timestamp_parse import (
+    parse_timestamp,
+    age_hours,
+    within_max_age,
+    within_rolling_window,
+    is_today,
+    is_within_market_day,
+)
 
 
 def describe_for_display(utc_dt: datetime | None) -> str:
