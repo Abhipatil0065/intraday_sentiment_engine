@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -31,9 +30,9 @@ class NewsItemIn(BaseModel):
     title: str
     body: str = ""
     summary: str = ""
-    published_at_utc: Optional[datetime] = None
-    published_tz_label: Optional[str] = None
-    updated_at_source: Optional[datetime] = None
+    published_at_utc: datetime | None = None
+    published_tz_label: str | None = None
+    updated_at_source: datetime | None = None
 
 
 class AssetImpactOut(BaseModel):
@@ -46,7 +45,7 @@ class AssetImpactOut(BaseModel):
     persistence: float = 0.5
     reason: str = ""
     transmission: str = ""
-    metal_character: Optional[str] = None
+    metal_character: str | None = None
     recency_weight: float = 0.0
     importance_weight: float = 0.0
     final_weight: float = 0.0
@@ -63,8 +62,8 @@ class NewsItemOut(BaseModel):
     url: str
     title: str
     summary: str = ""
-    published_at_utc: Optional[datetime] = None
-    published_tz_label: Optional[str] = None
+    published_at_utc: datetime | None = None
+    published_tz_label: str | None = None
     display_time: str = ""
     category: NewsCategory = NewsCategory.OTHER
     importance: EconomicImportance = EconomicImportance.LOW
@@ -75,7 +74,7 @@ class NewsItemOut(BaseModel):
     analysis_note: str = ""
     is_today: bool = True
     impacts: list[AssetImpactOut] = Field(default_factory=list)
-    event_key: Optional[str] = None
+    event_key: str | None = None
     event_article_count: int = 1
 
 
@@ -104,7 +103,7 @@ class SentimentBlock(BaseModel):
     bias: str = "BULLISH"         # BULLISH | BEARISH (binary, never NO_BIAS)
     mode: str = "heuristic"       # LLM/heuristic stamp on every result
     drivers: list[DriverOut] = Field(default_factory=list)
-    conflict: Optional[DriverOut] = None
+    conflict: DriverOut | None = None
     delta_60m: float = 0.0        # score movement in the last hour
     event_risk: bool = False
     event_risk_note: str = ""
@@ -127,10 +126,10 @@ class CalendarEventOut(BaseModel):
     direction: Direction = Direction.NEUTRAL
     strength: ImpactStrength = ImpactStrength.MEDIUM
     importance: EconomicImportance = EconomicImportance.MEDIUM
-    forecast: Optional[float] = None
-    previous: Optional[float] = None
-    actual: Optional[float] = None
-    surprise: Optional[float] = None
+    forecast: float | None = None
+    previous: float | None = None
+    actual: float | None = None
+    surprise: float | None = None
     reason: str = ""
     transmission: str = ""
 
@@ -187,7 +186,7 @@ class AlertOut(BaseModel):
 
 class PipelineStatus(BaseModel):
     running: bool = False
-    last_run: Optional[str] = None
+    last_run: str | None = None
     last_updated: str = ""
     new_news_since_last_update: int = 0
     articles_today: int = 0
@@ -212,7 +211,7 @@ class DashboardPayload(BaseModel):
     regime_confidence: float = 0.0
     regime_drivers: list[str] = Field(default_factory=list)
     assets: list[AssetView] = Field(default_factory=list)
-    equity: Optional[EquityCard] = None
+    equity: EquityCard | None = None
     equity_title: str = ""
     equity_region: str = ""
     news_feed: list[NewsItemOut] = Field(default_factory=list)

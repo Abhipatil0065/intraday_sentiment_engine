@@ -30,9 +30,8 @@ average of two published numbers is a number nobody published.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from typing import Iterable, Optional, Sequence
 
 from app.analysis.economic_impact import CalendarEvent
 from app.config import settings
@@ -113,8 +112,8 @@ def title_similarity(a: str, b: str) -> float:
 
 
 def same_release(a: CalendarEvent, b: CalendarEvent,
-                 similarity_threshold: Optional[float] = None,
-                 tolerance_minutes: Optional[int] = None) -> bool:
+                 similarity_threshold: float | None = None,
+                 tolerance_minutes: int | None = None) -> bool:
     """True when two rows describe the same scheduled release."""
     threshold = (similarity_threshold if similarity_threshold is not None
                  else float(settings.calendar_merge_similarity))
@@ -204,7 +203,7 @@ def _fill(target: CalendarEvent, other: CalendarEvent, stats: MergeStats,
 
 
 def merge_events(per_provider: Sequence[tuple[str, Iterable[CalendarEvent]]],
-                 stats: Optional[MergeStats] = None) -> list[CalendarEvent]:
+                 stats: MergeStats | None = None) -> list[CalendarEvent]:
     """
     Merge provider batches into one deduplicated list.
 

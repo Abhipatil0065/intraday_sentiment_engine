@@ -19,9 +19,9 @@ asset (e.g. "hot CPI -> higher real yields -> bearish gold").
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Sequence
 
 from app.config import settings
 from app.logging_conf import get_logger
@@ -256,9 +256,9 @@ class CalendarEvent:
     country: str
     when_utc: datetime
     impact: str = "Medium"          # High / Medium / Low / Holiday
-    forecast: Optional[float] = None
-    previous: Optional[float] = None
-    actual: Optional[float] = None   # None until the print is released
+    forecast: float | None = None
+    previous: float | None = None
+    actual: float | None = None   # None until the print is released
     provider: str = "forexfactory"
 
     @property
@@ -287,13 +287,13 @@ class CalendarSignal:
     mode: str                      # RELEASED / EXPECTED
     reason: str
     transmission: str
-    surprise: Optional[float] = None
+    surprise: float | None = None
 
 
 # --------------------------------------------------------------------------
 # Parsing + classification
 # --------------------------------------------------------------------------
-def to_float(raw) -> Optional[float]:
+def to_float(raw) -> float | None:
     """
     Parse a calendar value into a float, or None when it is not a number.
 
@@ -360,7 +360,7 @@ def to_float(raw) -> Optional[float]:
     return value
 
 
-def classify_event(event: CalendarEvent) -> Optional[EventProfile]:
+def classify_event(event: CalendarEvent) -> EventProfile | None:
     """Match a calendar title to a transmission profile, or None if unknown."""
     lowered = (event.title or "").lower()
     if not lowered:
@@ -459,7 +459,7 @@ def _opposite(direction: Direction) -> Direction:
 
 
 def _strength_for(impact: str, importance: EconomicImportance,
-                  surprise: Optional[float]) -> ImpactStrength:
+                  surprise: float | None) -> ImpactStrength:
     """
     Size the move by provider impact + importance + surprise magnitude.
 
@@ -489,7 +489,7 @@ def _strength_for(impact: str, importance: EconomicImportance,
 # Direction resolution
 # --------------------------------------------------------------------------
 def evaluate(event: CalendarEvent, asset: Asset,
-             profile: Optional[EventProfile] = None) -> Optional[CalendarSignal]:
+             profile: EventProfile | None = None) -> CalendarSignal | None:
     """
     Resolve one calendar event into a directional signal for one asset.
 
@@ -534,7 +534,8 @@ def evaluate(event: CalendarEvent, asset: Asset,
     # ---- RELEASED: direction from the STANDARDISED surprise ----
     if event.actual is not None and event.forecast is not None:
         from app.analysis.calendar_risk import (
-            standardised_surprise, surprise_band,
+            standardised_surprise,
+            surprise_band,
         )
 
         # Both operands must be REAL numbers. A provider placeholder ('-',
@@ -706,7 +707,7 @@ def dedupe_frequency_variants(
 # Phase 6: awaiting-release dampening + composite release cap
 # --------------------------------------------------------------------------
 def apply_awaiting_release(signals: Sequence[CalendarSignal],
-                           now: Optional[datetime] = None
+                           now: datetime | None = None
                            ) -> list[CalendarSignal]:
     """
     Damp or drop an EXPECTED signal whose scheduled time has already passed
@@ -774,7 +775,7 @@ def _ago(delta: timedelta) -> str:
 
 def cap_composite_release(
         signals: Sequence[CalendarSignal],
-        max_weight: Optional[float] = None,
+        max_weight: float | None = None,
 ) -> list[CalendarSignal]:
     """
     Cap the weight a SINGLE macro moment can contribute.
@@ -881,7 +882,7 @@ def cap_composite_release(
 
 def resolve_calendar_signals(events: Sequence[CalendarEvent],
                              horizon_hours: int = 48,
-                             now: Optional[datetime] = None,
+                             now: datetime | None = None,
                              ) -> list[CalendarSignal]:
     """
     The full calendar pipeline, in the order the phases depend on each other:

@@ -9,11 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Iterable, Optional, Protocol
+from dataclasses import dataclass
+from typing import Protocol
 
-from app.config import settings
 from app.logging_conf import get_logger
 
 log = get_logger(__name__)
@@ -30,14 +28,14 @@ class RawArticle:
     title: str
     body: str = ""
     summary: str = ""
-    published_raw: Optional[str] = None
-    updated_raw: Optional[str] = None
+    published_raw: str | None = None
+    updated_raw: str | None = None
 
     def compute_guid(self) -> str:
         key = (self.url or self.title).strip().lower()
         return hashlib.sha256(key.encode("utf-8")).hexdigest()[:32]
 
-    def ensure_guid(self) -> "RawArticle":
+    def ensure_guid(self) -> RawArticle:
         if not self.guid:
             self.guid = self.compute_guid()
         return self
@@ -83,7 +81,7 @@ def strip_html(text: str) -> str:
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
-def parse_source_config(raw: Optional[str]) -> list[SourceSpec]:
+def parse_source_config(raw: str | None) -> list[SourceSpec]:
     """
     Parse ``Name|type|url|weight|quality`` entries.
 

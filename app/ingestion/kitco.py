@@ -34,7 +34,6 @@ from __future__ import annotations
 import asyncio
 import re
 from datetime import datetime, timezone
-from typing import Optional
 from urllib.parse import urljoin
 
 import httpx
@@ -58,7 +57,7 @@ _TEASER_MIN_CHARS = 40
 _TEASER_LOOKUP_DEPTH = 3
 
 
-def _date_to_stamp(date_text: str) -> Optional[str]:
+def _date_to_stamp(date_text: str) -> str | None:
     """``'2026-10-01'`` -> ``'2026-10-01T12:00:00+00:00'``.
 
     Noon UTC, not midnight - see the TIMESTAMP CAVEAT in the module docstring.

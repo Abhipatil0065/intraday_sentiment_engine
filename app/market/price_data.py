@@ -12,9 +12,7 @@ intraday feed exists for XAUUSD/XAGUSD, so the default posture is to say
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
-from typing import Optional
 
 import httpx
 
@@ -35,11 +33,11 @@ class PriceReading:
     available: bool
     confirmation: PriceConfirmation = PriceConfirmation.UNAVAILABLE
     note: str = UNAVAILABLE_NOTE
-    change_pct: Optional[float] = None
-    last_price: Optional[float] = None
+    change_pct: float | None = None
+    last_price: float | None = None
 
 
-async def _fetch_spot(client: httpx.AsyncClient, product: str) -> Optional[dict]:
+async def _fetch_spot(client: httpx.AsyncClient, product: str) -> dict | None:
     """24h ticker from a public exchange endpoint."""
     url = f"{settings.price_api_base_url.rstrip('/')}/products/{product}/stats"
     try:
@@ -51,7 +49,7 @@ async def _fetch_spot(client: httpx.AsyncClient, product: str) -> Optional[dict]
         return None
 
 
-def classify(news_direction: Direction, change_pct: Optional[float]) -> PriceConfirmation:
+def classify(news_direction: Direction, change_pct: float | None) -> PriceConfirmation:
     """
     Compare news direction with the realised move.
 

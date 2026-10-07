@@ -15,9 +15,6 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Optional
-
-import httpx
 
 import httpx
 
@@ -29,7 +26,6 @@ from app.analysis.economic_impact import (
 )
 from app.config import settings
 from app.logging_conf import get_logger
-from app.models.enums import EconomicImportance
 
 log = get_logger(__name__)
 
@@ -40,7 +36,7 @@ _ETAGS: dict[str, str] = {}
 _LAST_ROWS: dict[str, list] = {}
 
 
-def get_etag(url: str) -> Optional[str]:
+def get_etag(url: str) -> str | None:
     return _ETAGS.get(url)
 
 
@@ -88,7 +84,7 @@ _IMPORTANCE_FLOOR = {
 }
 
 
-def _parse_when(raw: str) -> Optional[datetime]:
+def _parse_when(raw: str) -> datetime | None:
     """ISO-8601 with offset -> aware UTC datetime, or None."""
     if not raw:
         return None
@@ -101,7 +97,7 @@ def _parse_when(raw: str) -> Optional[datetime]:
     return dt.astimezone(timezone.utc)
 
 
-def _normalise(row: dict) -> Optional[CalendarEvent]:
+def _normalise(row: dict) -> CalendarEvent | None:
     """One provider row -> CalendarEvent, or None if unusable."""
     if not isinstance(row, dict):
         return None
@@ -165,7 +161,6 @@ async def _fetch_one(url: str) -> list[CalendarEvent]:
 
 def _parse_feed(body: str) -> list[CalendarEvent]:
     """Provider JSON -> normalised, de-duplicated event list."""
-    import json
 
     try:
         rows = json.loads(body)
@@ -340,18 +335,18 @@ async def _fetch_faireconomy() -> tuple[list[CalendarEvent], list[str]]:
 # --------------------------------------------------------------------------
 # 429 cooldown state (module-level, per process)
 # --------------------------------------------------------------------------
-_fe_backoff_until: Optional[datetime] = None
+_fe_backoff_until: datetime | None = None
 _fe_failure_logged = False
 
 
-def faireconomy_in_backoff(now: Optional[datetime] = None) -> bool:
+def faireconomy_in_backoff(now: datetime | None = None) -> bool:
     """True while faireconomy is cooling off after a 429."""
     if _fe_backoff_until is None:
         return False
     return (now or datetime.now(timezone.utc)) < _fe_backoff_until
 
 
-def note_rate_limit(retry_after: Optional[str] = None) -> int:
+def note_rate_limit(retry_after: str | None = None) -> int:
     """
     Start the cooldown and return the number of minutes chosen.
 

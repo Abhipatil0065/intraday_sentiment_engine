@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 from app.analysis.heuristics import (
+    CATEGORY_KEYWORDS,
     HIGH_TRIGGERS,
     LOW_TRIGGERS,
     PLURAL_EXEMPT_KEYWORDS,
@@ -14,7 +14,6 @@ from app.analysis.heuristics import (
     STEM_KEYWORDS,
     VERY_HIGH_TRIGGERS,
     WRAP_CUES,
-    CATEGORY_KEYWORDS,
 )
 from app.analysis.text_match import (
     contains_cue,
@@ -134,7 +133,7 @@ def detect_inversion_subjects(
     text: str,
     subjects: tuple[str, ...] = YIELD_SUBJECTS,
     verbs: tuple[str, ...] = UP_VERBS,
-    max_tokens: Optional[int] = None,
+    max_tokens: int | None = None,
 ) -> list[str]:
     """
     Subjects that are followed closely by one of `verbs`.
@@ -305,7 +304,7 @@ def detect_importance(text: str, category: NewsCategory) -> EconomicImportance:
     # Whole-word matching throughout, using the SAME keyword policy as category
     # detection: "war" must not fire on "warn"/"toward", "credit" must not fire
     # on "credits", but "sanctions" and "strikes" must still be recognised.
-    pos = lambda k: keyword_position(  # noqa: E731 - tiny local shorthand
+    pos = lambda k: keyword_position(
         lowered, k, stems=STEM_KEYWORDS, plural_exempt=PLURAL_EXEMPT_KEYWORDS)
     if any(pos(t) != -1 for t in VERY_HIGH_TRIGGERS):
         return EconomicImportance.VERY_HIGH
@@ -359,7 +358,7 @@ def detect_verification(text: str) -> Verification:
     return Verification.CONFIRMED
 
 
-def detect_metal_character(text: str) -> Optional[str]:
+def detect_metal_character(text: str) -> str | None:
     """Which side of silver's dual nature is driving the move (section 7)."""
     lowered = text.lower()
     precious = sum(1 for c in PRECIOUS_CUES if contains_cue(lowered, c))

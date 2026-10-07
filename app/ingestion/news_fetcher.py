@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Optional
 
 import httpx
 
@@ -17,7 +16,6 @@ from app.config import settings
 from app.ingestion.base import (
     QUALITY_MULTIPLIER,
     RawArticle,
-    SourceSpec,
     parse_source_config,
 )
 from app.ingestion.kitco import KitcoSource
@@ -73,14 +71,14 @@ def build_sources() -> list:
     return sources
 
 
-async def _fetch_one(source) -> tuple[Optional[list[RawArticle]], Optional[str]]:
+async def _fetch_one(source) -> tuple[list[RawArticle] | None, str | None]:
     try:
         return await source.fetch(), None
     except asyncio.TimeoutError:
         return None, f"{source.name}: timeout"
     except httpx.HTTPStatusError as exc:
         return None, f"{source.name}: HTTP {exc.response.status_code}"
-    except Exception as exc:  # noqa: BLE001 - isolate per-source failures
+    except Exception as exc:
         log.exception("Source %s failed", getattr(source, "name", "?"))
         return None, f"{source.name}: {type(exc).__name__}: {exc}"
 

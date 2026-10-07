@@ -5,8 +5,15 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text,
-    UniqueConstraint,
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -51,9 +58,9 @@ class NewsArticle(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
-    impacts: Mapped[list["AssetImpact"]] = relationship(
+    impacts: Mapped[list[AssetImpact]] = relationship(
         back_populates="article", cascade="all, delete-orphan")
-    event_links: Mapped[list["ArticleEvent"]] = relationship(
+    event_links: Mapped[list[ArticleEvent]] = relationship(
         back_populates="article", cascade="all, delete-orphan")
 
     __table_args__ = (Index("ix_article_pub_today", "published_at_utc", "is_today"),)
@@ -80,7 +87,7 @@ class NewsEvent(Base):
         DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     confirmed_by_followup: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    links: Mapped[list["ArticleEvent"]] = relationship(
+    links: Mapped[list[ArticleEvent]] = relationship(
         back_populates="event", cascade="all, delete-orphan")
 
 

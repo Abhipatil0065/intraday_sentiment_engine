@@ -11,10 +11,9 @@ from __future__ import annotations
 from sqlalchemy import select
 
 from app.config import settings
-from app.database import session_scope
 from app.logging_conf import get_logger
 from app.models.db_models import Alert, AssetImpact, NewsArticle
-from app.models.enums import Asset, Direction, EconomicImportance, ImpactStrength
+from app.models.enums import Direction, EconomicImportance, ImpactStrength
 
 log = get_logger(__name__)
 

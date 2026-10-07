@@ -10,7 +10,6 @@ Unified entry point.
 from __future__ import annotations
 
 import argparse
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -18,7 +17,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
 
-from app.logging_conf import get_logger, setup_logging  # noqa: E402
+from app.logging_conf import get_logger, setup_logging
 
 log = get_logger(__name__)
 

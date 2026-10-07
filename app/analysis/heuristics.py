@@ -2,13 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 from app.models.enums import (
-    EconomicImportance,
     NewsCategory,
-    ReportKind,
-    Verification,
 )
 
 CATEGORY_KEYWORDS: dict[NewsCategory, list[str]] = {

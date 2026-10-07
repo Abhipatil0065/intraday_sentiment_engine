@@ -12,13 +12,15 @@ unless explicitly enabled.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Sequence
 
 from app.analysis.recency_engine import recency_weight
 from app.analysis.sentiment_engine import (
     SentimentResult,
     WeightedSignal,
+)
+from app.analysis.sentiment_engine import (
     compute as compute_sentiment,
 )
 from app.logging_conf import get_logger

@@ -42,9 +42,8 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
-from typing import Optional
 
-from app.analysis.economic_impact import CalendarEvent, classify_event, to_float
+from app.analysis.economic_impact import CalendarEvent, to_float
 from app.config import settings
 from app.ingestion.chromium_lock import chromium_slot
 
@@ -176,7 +175,7 @@ def guess_country(title: str) -> str:
     return ""
 
 
-def parse_page_date(heading: str, reference: datetime) -> Optional[date]:
+def parse_page_date(heading: str, reference: datetime) -> date | None:
     """'October 05' -> a real date, resolved against ``reference``'s year."""
     match = _DATE_HEADING.match((heading or "").strip())
     if not match:
@@ -208,9 +207,9 @@ def parse_page_date(heading: str, reference: datetime) -> Optional[date]:
                key=lambda d: abs((d - reference.date()).days))
 
 
-def resolve_when(clock: str, day: Optional[date],
+def resolve_when(clock: str, day: date | None,
                  render_tz: timezone,
-                 reference: datetime) -> Optional[datetime]:
+                 reference: datetime) -> datetime | None:
     """
     '13:15' + a page date -> an aware UTC datetime.
 
@@ -239,15 +238,15 @@ def resolve_when(clock: str, day: Optional[date],
 IMPACT_RANK = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "HOLIDAY": 0}
 
 
-def impact_from_class(code: Optional[str]) -> str:
+def impact_from_class(code: str | None) -> str:
     """'3' -> 'High'. Unknown or absent falls back to Medium, never 'High'."""
     if not code:
         return "Medium"
     return IMPACT_BY_CODE.get(str(code).strip(), "Medium")
 
 
-def parse_rows(raw_rows: list[dict], reference: Optional[datetime] = None,
-               render_tz: Optional[timezone] = None,
+def parse_rows(raw_rows: list[dict], reference: datetime | None = None,
+               render_tz: timezone | None = None,
                min_importance: str = "MEDIUM") -> tuple[list[CalendarEvent], int]:
     """
     Turn the page's raw row dicts into ``CalendarEvent`` records.
@@ -342,7 +341,7 @@ class ProviderResult:
     skipped: int = 0
     seconds: float = 0.0
     challenge: bool = False
-    memory_mb: Optional[float] = None
+    memory_mb: float | None = None
     # True when the poll was skipped because another render held the shared
     # Chromium slot. Distinct from a failure: the provider is healthy, the
     # poll simply did not run and will run on the next cycle.
@@ -430,7 +429,7 @@ SKIP_REASONS = (
 )
 
 
-async def summarise_skips(reason_counts: Optional[Counter] = None
+async def summarise_skips(reason_counts: Counter | None = None
                           ) -> tuple:
     """
     Render the page and tally WHY rows were dropped, with sample titles.
@@ -470,7 +469,7 @@ async def summarise_skips(reason_counts: Optional[Counter] = None
     return counts, samples
 
 
-def _tally(counts: "Counter", samples: dict, reason: str, title: str) -> None:
+def _tally(counts: Counter, samples: dict, reason: str, title: str) -> None:
     counts[reason] += 1
     bucket = samples.setdefault(reason, [])
     if title and len(bucket) < 10:
@@ -480,12 +479,12 @@ def _tally(counts: "Counter", samples: dict, reason: str, title: str) -> None:
 # --------------------------------------------------------------------------
 # Backoff state (module-level, per process)
 # --------------------------------------------------------------------------
-_backoff_until: Optional[datetime] = None
+_backoff_until: datetime | None = None
 _failure_logged = False
 _health: dict = {}
 
 
-def in_backoff(now: Optional[datetime] = None) -> bool:
+def in_backoff(now: datetime | None = None) -> bool:
     """True while a detected challenge/block is still cooling off."""
     if _backoff_until is None:
         return False

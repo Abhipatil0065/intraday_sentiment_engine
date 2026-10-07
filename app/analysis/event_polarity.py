@@ -37,7 +37,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Optional
 
 from app.analysis.text_match import contains_cue, contains_plural
 
@@ -55,7 +54,7 @@ CLAUSE_BOUNDARIES: frozenset = frozenset({
     "once", "if", "because", "that", "which", "who", "whom", "whose",
     "with", "on", "in", "at", "by", "for", "to", "from", "over", "under",
     "into", "onto", "against", "toward", "towards", "than", "during",
-    "following", "despite", "except", "whether", "amid",
+    "following", "despite", "except", "whether",
 })
 
 _TOKEN_RE = re.compile(r"[a-z0-9']+")
@@ -202,7 +201,7 @@ def _tokens(text: str) -> list:
     return _TOKEN_RE.findall((text or "").lower())
 
 
-def _find_subject_index(tokens: list, subject: str) -> Optional[int]:
+def _find_subject_index(tokens: list, subject: str) -> int | None:
     """Index of the token where a multi-word subject starts, or None."""
     words = subject.split()
     if len(words) == 1:
@@ -248,7 +247,7 @@ def _scan_verbs(tokens: list, start: int, length: int, verbs) -> int:
     return hits
 
 
-def resolve_pair(lowered: str, pair: PolarityPair) -> Optional[str]:
+def resolve_pair(lowered: str, pair: PolarityPair) -> str | None:
     """
     Return the EventType name this pair implies, or None if ambiguous.
 

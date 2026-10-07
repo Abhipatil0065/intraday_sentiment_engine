@@ -8,8 +8,7 @@ real provider difference or a matching bug.
 
 from __future__ import annotations
 
-from datetime import timedelta
-from typing import Sequence
+from collections.abc import Sequence
 
 from app.analysis.calendar_merge import same_release, title_similarity
 from app.analysis.economic_impact import CalendarEvent

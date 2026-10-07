@@ -10,9 +10,7 @@ engine funnels through this module so there is exactly one definition of
 from __future__ import annotations
 
 import logging
-import re
-from datetime import date, datetime, timedelta, timezone
-from typing import Optional
+from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
 from app.config import settings
@@ -59,7 +57,7 @@ def market_today() -> date:
     return now_market().date()
 
 
-def market_day_start_utc(now: Optional[datetime] = None) -> datetime:
+def market_day_start_utc(now: datetime | None = None) -> datetime:
     """
     The UTC instant at which today's market session began.
 
@@ -77,7 +75,7 @@ def market_day_start_utc(now: Optional[datetime] = None) -> datetime:
     return start.astimezone(timezone.utc)
 
 
-def resolve_tz(raw: Optional[str]) -> Optional[timezone]:
+def resolve_tz(raw: str | None) -> timezone | None:
     """
     Resolve an arbitrary timezone string.
 
@@ -93,23 +91,15 @@ def resolve_tz(raw: Optional[str]) -> Optional[timezone]:
         candidate = _TZ_ABBREV[upper]
 # --- timestamp parsing / display helpers -----------------------------------
 # Implemented in the companion module to keep this file readable.
-from app.utils.timestamp_parse import (  # noqa: E402
-    age_hours,
-    is_today,
-    is_within_market_day,
-    parse_timestamp,
-    within_max_age,
-    within_rolling_window,
-)
 
 
-def describe_for_display(utc_dt: Optional[datetime]) -> str:
+def describe_for_display(utc_dt: datetime | None) -> str:
     if utc_dt is None:
         return "Data unavailable."
     return utc_dt.astimezone(display_tz()).strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
-def local_clock(utc_dt: Optional[datetime]) -> str:
+def local_clock(utc_dt: datetime | None) -> str:
     """HH:MM in the display timezone - used heavily by the news feed."""
     if utc_dt is None:
         return "--:--"

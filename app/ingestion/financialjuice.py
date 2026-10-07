@@ -21,13 +21,12 @@ by adding this entry to NEWS_SOURCES in .env:
 from __future__ import annotations
 
 import re
-from hashlib import sha1 as key_hash
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from hashlib import sha1 as key_hash
 from zoneinfo import ZoneInfo
 
 from app.config import settings
-from app.ingestion.base import RawArticle, SourceSpec, strip_html
+from app.ingestion.base import RawArticle, strip_html
 from app.ingestion.chromium_lock import chromium_slot
 from app.logging_conf import get_logger
 

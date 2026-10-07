@@ -21,7 +21,6 @@ changes no existing name: it only fills in fields that already existed.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from app.analysis.event_clustering import corroboration_multiplier
 from app.config import settings
@@ -54,7 +53,7 @@ def build_signal(
     direction: Direction,
     strength: ImpactStrength = ImpactStrength.MEDIUM,
     importance: EconomicImportance = EconomicImportance.MEDIUM,
-    published_at: Optional[datetime] = None,
+    published_at: datetime | None = None,
     relevance: float = 0.0,
     persistence: float = 0.5,
     source_quality: str = "TIER_2_MAJOR",
@@ -70,7 +69,7 @@ def build_signal(
     transmission: str = "",
     mode: str = "heuristic",
     surprise_weight: float = 1.0,
-) -> "object":
+) -> object:
     """
     Build one correctly-populated ``WeightedSignal``.
 

@@ -15,7 +15,7 @@ to corrupt the aggregate, so it is validated rather than trusted:
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -41,7 +41,7 @@ class LLMAssetResult(BaseModel):
     priced_in: bool = False
     reason: str = Field(default="", max_length=400)
     transmission: str = Field(default="", max_length=400)
-    metal_character: Optional[Literal["PRECIOUS", "INDUSTRIAL", "BOTH"]] = Field(
+    metal_character: Literal["PRECIOUS", "INDUSTRIAL", "BOTH"] | None = Field(
         default=None,
     )
 

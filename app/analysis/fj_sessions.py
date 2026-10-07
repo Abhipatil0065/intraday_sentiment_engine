@@ -32,9 +32,9 @@ Design rules enforced here:
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
-from typing import Iterable, Optional, Sequence
 from zoneinfo import ZoneInfo
 
 from app.analysis.cue_rules import BEARISH_CUES, BULLISH_CUES, score_cues
@@ -56,7 +56,7 @@ def india_tz() -> ZoneInfo:
     return IST
 
 
-def india_now(now: Optional[datetime] = None) -> datetime:
+def india_now(now: datetime | None = None) -> datetime:
     """Current wall-clock time in Asia/Kolkata."""
     ref = now or datetime.now(timezone.utc)
     if ref.tzinfo is None:
@@ -64,7 +64,7 @@ def india_now(now: Optional[datetime] = None) -> datetime:
     return ref.astimezone(IST)
 
 
-def india_today(now: Optional[datetime] = None) -> date:
+def india_today(now: datetime | None = None) -> date:
     """
     The Indian calendar date that defines "today" for all five boxes.
 
@@ -74,7 +74,7 @@ def india_today(now: Optional[datetime] = None) -> date:
     return india_now(now).date()
 
 
-def india_date_of(utc_dt) -> Optional[date]:
+def india_date_of(utc_dt) -> date | None:
     """
     Convert a stored UTC publication time into its Indian calendar date.
 
@@ -218,7 +218,7 @@ def _region_hits(candidate: str, regions: tuple) -> bool:
     return False
 
 
-def classify_fj_session(title: str, body: str = "") -> Optional[str]:
+def classify_fj_session(title: str, body: str = "") -> str | None:
     """
     Map a FinancialJuice headline to exactly one of :data:`SESSION_ORDER`.
 
@@ -725,7 +725,7 @@ def context_from_calendar(signals: Iterable) -> SessionContext:
     return ctx
 
 
-def merge_contexts(*contexts) -> Optional[SessionContext]:
+def merge_contexts(*contexts) -> SessionContext | None:
     """Combine news + calendar contexts; returns None when all are empty."""
     merged = SessionContext()
     found = False
@@ -755,9 +755,9 @@ class SessionReport:
     guid: str
     title: str
     body: str
-    published_at_utc: Optional[datetime]
+    published_at_utc: datetime | None
     session_key: str
-    india_date: Optional[date]
+    india_date: date | None
     #: 0 = published today in India, 1 = yesterday, ... Drives the box label.
     age_days: int = 0
 
@@ -766,7 +766,7 @@ class SessionReport:
         return india_stamp(self.published_at_utc)
 
 
-def is_financial_juice(source: Optional[str]) -> bool:
+def is_financial_juice(source: str | None) -> bool:
     """True only for the FinancialJuice source - the data-source restriction."""
     if not source:
         return False
@@ -777,7 +777,7 @@ def is_financial_juice(source: Optional[str]) -> bool:
 def filter_reports_for_today(
     rows: Iterable,
     *,
-    today: Optional[date] = None,
+    today: date | None = None,
     lookback_days: int = 1,
 ) -> list:
     """
@@ -911,8 +911,8 @@ def _empty_box(session_key: str) -> dict:
 def build_session_analysis(
     rows: Sequence,
     *,
-    now: Optional[datetime] = None,
-    lookback_days: Optional[int] = None,
+    now: datetime | None = None,
+    lookback_days: int | None = None,
     context=None,
 ) -> dict:
     """
@@ -1005,7 +1005,7 @@ def build_session_analysis(
     }
 
 
-def build_context_from_db(session, calendar_signals=None) -> Optional[SessionContext]:
+def build_context_from_db(session, calendar_signals=None) -> SessionContext | None:
     """
     Assemble the external context from data the engine has already produced.
 

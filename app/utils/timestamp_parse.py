@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Optional
 
 from app.config import settings
 
@@ -13,8 +12,8 @@ log = logging.getLogger(__name__)
 
 
 def parse_timestamp(
-    raw: Optional[str],
-) -> tuple[Optional[datetime], Optional[str]]:
+    raw: str | None,
+) -> tuple[datetime | None, str | None]:
     """
     Parse a publisher timestamp into an aware UTC datetime.
 
@@ -76,13 +75,13 @@ def _market_tz():
     return market_tz()
 
 
-def _market_day_start_utc(now: Optional[datetime] = None) -> datetime:
+def _market_day_start_utc(now: datetime | None = None) -> datetime:
     from app.utils.timeutils import market_day_start_utc
     return market_day_start_utc(now)
 
 
 def is_within_market_day(
-    utc_dt: Optional[datetime], *, now: Optional[datetime] = None
+    utc_dt: datetime | None, *, now: datetime | None = None
 ) -> bool:
     """
     True when a timestamp falls on or after today's market-day start.
@@ -100,7 +99,7 @@ def is_within_market_day(
     return utc_dt.astimezone(timezone.utc) >= _market_day_start_utc(now)
 
 
-def is_today(utc_dt: Optional[datetime], *, now: Optional[datetime] = None) -> bool:
+def is_today(utc_dt: datetime | None, *, now: datetime | None = None) -> bool:
     """
     Strict TODAY test in the market timezone.
 
@@ -117,8 +116,8 @@ def is_today(utc_dt: Optional[datetime], *, now: Optional[datetime] = None) -> b
     return utc_dt.astimezone(tz).date() == ref.astimezone(tz).date()
 
 
-def within_rolling_window(utc_dt: Optional[datetime], *,
-                          now: Optional[datetime] = None) -> bool:
+def within_rolling_window(utc_dt: datetime | None, *,
+                          now: datetime | None = None) -> bool:
     """
     Rolling-window admission test (improvement item 3).
 
@@ -155,7 +154,7 @@ def within_rolling_window(utc_dt: Optional[datetime], *,
     return hours <= window
 
 
-def age_hours(utc_dt: Optional[datetime], *, now: Optional[datetime] = None) -> Optional[float]:
+def age_hours(utc_dt: datetime | None, *, now: datetime | None = None) -> float | None:
     if utc_dt is None:
         return None
     ref = now or datetime.now(timezone.utc)
@@ -164,7 +163,7 @@ def age_hours(utc_dt: Optional[datetime], *, now: Optional[datetime] = None) -> 
     return (ref - utc_dt).total_seconds() / 3600.0
 
 
-def within_max_age(utc_dt: Optional[datetime], *, now: Optional[datetime] = None) -> bool:
+def within_max_age(utc_dt: datetime | None, *, now: datetime | None = None) -> bool:
     hours = age_hours(utc_dt, now=now)
     if hours is None or hours < -2:  # >2h in the future = bad clock/bad feed
         return False

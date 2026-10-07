@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-from datetime import datetime, timezone
-from typing import Optional
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -38,7 +36,7 @@ class WebsiteSource:
 
     kind = "html"
 
-    def __init__(self, spec: SourceSpec, *, article_selector: Optional[str] = None) -> None:
+    def __init__(self, spec: SourceSpec, *, article_selector: str | None = None) -> None:
         self.name = spec.name
         self.quality = spec.quality
         self.url = spec.url
@@ -75,10 +73,10 @@ class WebsiteSource:
 
         return articles
 
-    def _extract_links(self, soup: BeautifulSoup) -> list[tuple[str, str, Optional[str]]]:
+    def _extract_links(self, soup: BeautifulSoup) -> list[tuple[str, str, str | None]]:
         base = self.url
         domain = urlparse(base).netloc
-        seen: dict[str, tuple[str, str, Optional[str]]] = {}
+        seen: dict[str, tuple[str, str, str | None]] = {}
 
         for tag in soup.find_all(_HEADING_TAGS):
             anchor = tag.find("a", href=True)

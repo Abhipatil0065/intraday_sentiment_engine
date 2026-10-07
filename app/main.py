@@ -8,11 +8,9 @@ dashboard, and runs the ingestion pipeline on an APScheduler background job.
 from __future__ import annotations
 
 import asyncio
-import json
 from contextlib import asynccontextmanager
 from datetime import timezone
 from pathlib import Path
-from typing import Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -28,17 +26,23 @@ from app.database import init_db, session_scope
 from app.ingestion.base import parse_source_config
 from app.logging_conf import get_logger, setup_logging
 from app.market.session_detector import (
-    detect_session, equity_session, equity_title, next_session,
+    detect_session,
+    equity_session,
+    equity_title,
+    next_session,
     previous_session,
 )
 from app.models.db_models import (
-    Alert, NewsArticle, NewsEvent, PipelineRun, SentimentSnapshot,
+    Alert,
+    NewsArticle,
+    NewsEvent,
+    PipelineRun,
+    SentimentSnapshot,
 )
 from app.models.enums import (
-    Asset, Direction, EconomicImportance, ImpactStrength, MarketRegime,
-    NewsCategory, PriceConfirmation, ReportKind, SessionName, Verification,
+    Asset,
+    MarketRegime,
 )
-from app.models.schemas import DashboardPayload
 from app.services import pipeline
 from app.utils import timeutils as T
 
@@ -51,7 +55,7 @@ _scheduler: AsyncIOScheduler | None = None
 _clients: set[WebSocket] = set()
 
 
-def _run_pipeline_sync() -> "pipeline.IngestStats":
+def _run_pipeline_sync() -> pipeline.IngestStats:
     """Run the pipeline in a separate thread with its own event loop."""
     return asyncio.run(pipeline.run_once())
 
@@ -77,7 +81,7 @@ async def _scheduled_tick() -> None:
         )
         if stats.errors:
             log.warning("Tick %s errors: %s", started, stats.errors[:5])
-    except Exception as exc:  # noqa: BLE001 - never kill the scheduler
+    except Exception as exc:
         log.exception("Scheduled pipeline tick failed: %s", exc)
 
 
@@ -120,7 +124,6 @@ app = FastAPI(
 
 def _latest_snapshot(session, asset: str, scope: str):
     """Most recent snapshot for an asset+scope (snapshots are append-only)."""
-    from app.models.db_models import SentimentSnapshot
 
     return session.scalar(
         select(SentimentSnapshot)
@@ -131,7 +134,7 @@ def _latest_snapshot(session, asset: str, scope: str):
     )
 
 
-def _bias_since(session, asset: str, scope: str, score: float) -> Optional[str]:
+def _bias_since(session, asset: str, scope: str, score: float) -> str | None:
     """
     When the current dominant side began, as an ISO/UTC string (or None).
 
@@ -149,7 +152,6 @@ def _bias_since(session, asset: str, scope: str, score: float) -> Optional[str]:
     that many snapshots reports the oldest one it has, which is the earliest
     moment the engine can actually prove. It never invents a time.
     """
-    from app.models.db_models import SentimentSnapshot
 
     if not score:                      # even split -> no dominant side
         return None
@@ -250,7 +252,7 @@ def _block(session, asset: str, scope: str) -> dict:
     }
 
 
-def _news_feed(session, limit: Optional[int] = None,
+def _news_feed(session, limit: int | None = None,
                offset: int = 0) -> tuple[list[dict], int]:
     """
     Today's news, newest first, each with its full impact analysis.
@@ -347,7 +349,9 @@ def build_payload(session) -> dict:
         stale = True
     else:
         try:
-            from datetime import datetime as _dt, timedelta, timezone as _tz
+            from datetime import datetime as _dt
+            from datetime import timedelta
+            from datetime import timezone as _tz
             last_dt = _dt.fromisoformat(last_poll_ok)
             age = _dt.now(_tz.utc) - last_dt
             stale = age > timedelta(minutes=HEALTH_STALE_MINUTES)
@@ -599,7 +603,7 @@ async def financialjuice_sessions():
 
 
 @app.get("/api/news")
-async def news(limit: Optional[int] = None, offset: int = 0):
+async def news(limit: int | None = None, offset: int = 0):
     """
     Today's news feed only, one page at a time.
 

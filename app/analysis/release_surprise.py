@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Optional
 
 from app.analysis.calendar_risk import standardised_surprise
 from app.analysis.economic_impact import to_float
@@ -169,7 +168,7 @@ _REVISION = re.compile(
     r"\brevised\s+(?:up|down)?\s+to\b")
 
 
-def _labelled(lowered: str, kind: str) -> Optional[float]:
+def _labelled(lowered: str, kind: str) -> float | None:
     """First labelled number of one kind, or None (never a guess)."""
     for label in _LABELS[kind]:
         match = re.search(rf"\b{label}\b\s*[:=]?\s*({_NUM})", lowered)
@@ -180,7 +179,7 @@ def _labelled(lowered: str, kind: str) -> Optional[float]:
     return None
 
 
-def _labelled_raw(lowered: str, kind: str) -> tuple[Optional[float], str]:
+def _labelled_raw(lowered: str, kind: str) -> tuple[float | None, str]:
     """First labelled number of one kind, returning (value, raw_string) or (None, '')."""
     for label in _LABELS[kind]:
         match = re.search(rf"\b{label}\b\s*[:=]?\s*({_NUM})", lowered)
@@ -197,8 +196,8 @@ class ReleasePrint:
     """One actual scheduled-data print, as reported in article text."""
 
     actual: float
-    forecast: Optional[float] = None
-    previous: Optional[float] = None
+    forecast: float | None = None
+    previous: float | None = None
     title: str = ""          # used for the per-indicator std lookup
     family: str = ""         # indicator family this print belongs to
     # Raw strings for mixed-unit detection
@@ -276,7 +275,7 @@ def _extract_prints(text: str) -> list[ReleasePrint]:
     for ind_pos, ind_text, family in reversed(indicator_hits):
         # Find the closest number to this indicator that hasn't been assigned
         # Prefer numbers that come AFTER the indicator (typical English word order)
-        closest_num: Optional[tuple[int, float, str]] = None
+        closest_num: tuple[int, float, str] | None = None
         closest_dist = float('inf')
         for num_pos, value, raw in number_hits:
             if num_pos in revision_positions:
@@ -404,7 +403,7 @@ def _extract_prints(text: str) -> list[ReleasePrint]:
     return prints
 
 
-def parse(text: str) -> Optional[ReleasePrint]:
+def parse(text: str) -> ReleasePrint | None:
     """
     Extract the primary actual print from article text (backward compatible).
 
@@ -432,7 +431,7 @@ def parse_all(text: str) -> list[ReleasePrint]:
     return _extract_prints(text)
 
 
-def surprise_delta(p: ReleasePrint) -> Optional[float]:
+def surprise_delta(p: ReleasePrint) -> float | None:
     """
     actual minus forecast, falling back to actual minus previous.
 
@@ -462,7 +461,7 @@ def indicator_family(text: str) -> str:
     family is reported as UNKNOWN_FAMILY.
     """
     lowered = (text or "").lower()
-    best: Optional[tuple[int, str]] = None
+    best: tuple[int, str] | None = None
     for family, words in _FAMILIES:
         for word in words:
             hit = re.search(rf"(?<![a-z]){re.escape(word)}(?![a-z])", lowered)
@@ -471,7 +470,7 @@ def indicator_family(text: str) -> str:
     return best[1] if best else UNKNOWN_FAMILY
 
 
-def direction_for(asset: Asset, p: Optional[ReleasePrint],
+def direction_for(asset: Asset, p: ReleasePrint | None,
                   cue_direction: Direction) -> Direction:
     """
     Direction for one asset: the surprise SIGN, INDICATOR-AWARE.
@@ -505,7 +504,7 @@ def direction_for(asset: Asset, p: Optional[ReleasePrint],
     return hot if higher_is_cool else _opposite(hot)
 
 
-def equity_direction(p: Optional[ReleasePrint],
+def equity_direction(p: ReleasePrint | None,
                      cue_direction: Direction) -> Direction:
     """
     The EQUITY card's own column (Task 3b): the surprise SIGN read for
@@ -542,7 +541,7 @@ def _std_scale_for_unit(unit: str) -> float:
     return 1.0
 
 
-def surprise_weight(p: Optional[ReleasePrint], text: str = "") -> float:
+def surprise_weight(p: ReleasePrint | None, text: str = "") -> float:
     """
     Weight multiplier: small miss = low weight, large miss = high weight,
     capped by MAX_SURPRISE_WEIGHT.

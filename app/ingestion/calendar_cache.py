@@ -22,7 +22,6 @@ import os
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
 
 from app.analysis.economic_impact import CalendarEvent
 from app.config import settings
@@ -79,7 +78,7 @@ def save_cache(events: list[CalendarEvent]) -> bool:
         return False
 
 
-def load_cache(max_age_days: Optional[int] = None
+def load_cache(max_age_days: int | None = None
                ) -> list[CalendarEvent]:
     """Last good events, or [] when absent, unreadable, or too old."""
     if not settings.calendar_cache_enabled:

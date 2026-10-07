@@ -33,7 +33,6 @@ from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
 
 from app.analysis.text_match import contains_phrase, contains_plural
 from app.models.enums import Asset, Direction, NewsCategory
@@ -149,7 +148,7 @@ class ResolvedImpact:
     direction: Direction
     sign: int
     magnitude: float            # 0..1.5, the transmission magnitude
-    dominant: "EventType | None"
+    dominant: EventType | None
     evidence: float             # cue weight behind the dominant event type
     priced_in: bool = False
 
@@ -259,7 +258,7 @@ def _has_resolved_polarity(text: str) -> bool:
 
 # Mechanisms whose SIGN is fixed by the event itself rather than by tone.
 # Value = (EventType, cues that imply a BULLISH reading).
-_INTRINSIC_RULES: tuple[tuple["EventType", tuple[str, ...]], ...] = (
+_INTRINSIC_RULES: tuple[tuple[EventType, tuple[str, ...]], ...] = (
     (EventType.CRYPTO_REGULATION,
      ("approves", "approved", "clears", "cleared", "passes", "passed",
       "wins approval", "legalized", "adopts", "enacts", "institutionalises")),
@@ -529,7 +528,7 @@ def detect_event_types(text: str, category: NewsCategory) -> list:
 
 
 def resolve(text: str, category: NewsCategory,
-            cue_magnitude: Optional[float] = None) -> dict:
+            cue_magnitude: float | None = None) -> dict:
     """
     Resolve one headline into a PER-ASSET transmission verdict.
 
@@ -547,7 +546,6 @@ def resolve(text: str, category: NewsCategory,
     DRIVER_RANKINGS in config) scales the contribution - top driver = 1.0,
     second = 0.9, etc. Applied ONCE in the weight path.
     """
-    from app.analysis import text_quality as tq
     from app.analysis.event_polarity import direct_asset_moves
     from app.analysis.text_quality import neutralise_on_negation
     from app.config import DRIVER_RANKINGS

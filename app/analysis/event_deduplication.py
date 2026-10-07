@@ -12,9 +12,9 @@ to articles inside a rolling time window. No external service required.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Iterable, Optional
 
 from app.config import settings
 from app.logging_conf import get_logger
@@ -25,7 +25,7 @@ _STOPWORDS = {
     "the", "a", "an", "and", "or", "but", "for", "to", "of", "in", "on", "at", "by",
     "with", "from", "as", "is", "are", "was", "were", "be", "been", "it", "its",
     "this", "that", "these", "those", "will", "would", "could", "should", "has",
-    "have", "had", "not", "but", "than", "then", "so", "if", "up", "down", "out",
+    "have", "had", "not", "than", "then", "so", "if", "up", "down", "out",
     "says", "say", "said", "new", "after", "over", "into", "more", "most", "other",
     "amid", "about", "may", "his", "her", "their", "our", "us", "he", "she", "they",
 }
@@ -64,7 +64,7 @@ class DedupeResult:
     event_key: str
     canonical_title: str
     is_new_event: bool
-    matched_title: Optional[str] = None
+    matched_title: str | None = None
     score: float = 0.0
 
 
@@ -77,8 +77,8 @@ class EventDeduplicator:
     event carries weight in the sentiment aggregate.
     """
 
-    def __init__(self, threshold: Optional[float] = None,
-                 window_hours: Optional[int] = None) -> None:
+    def __init__(self, threshold: float | None = None,
+                 window_hours: int | None = None) -> None:
         self.threshold = threshold if threshold is not None else settings.dedup_similarity_threshold
         self.window = timedelta(
             hours=window_hours if window_hours is not None else settings.dedup_time_window_hours
@@ -90,7 +90,7 @@ class EventDeduplicator:
         self._events = [e for e in self._events if e[3] >= cutoff]
 
     def match(self, title: str, published_at: datetime,
-              now: Optional[datetime] = None) -> DedupeResult:
+              now: datetime | None = None) -> DedupeResult:
         now = now or published_at
         self._prune(now)
         tokens = normalise_tokens(title)

@@ -25,25 +25,27 @@ tasks apply.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, Sequence
 
+from app.analysis.cue_rules import detect_direction
+from app.analysis.display import to_display
+from app.analysis.release_surprise import (
+    combine_prints_for_asset,
+    parse_all,
+)
 from app.analysis.sentiment_engine import (
     DEFAULT_BIAS,
     Bias,
     WeightedSignal,
-    compute as compute_sentiment,
     payload_score,
     recall_bias,
 )
-from app.analysis.release_surprise import (
-    combine_prints_for_asset,
-    parse_all,
-    equity_direction,
+from app.analysis.sentiment_engine import (
+    compute as compute_sentiment,
 )
-from app.analysis.cue_rules import detect_direction
-from app.analysis.display import to_display
+from app.config import EQUITY_RELEVANCE
 from app.logging_conf import get_logger
 from app.market.session_detector import (
     EQUITY_SESSION_MAP,
@@ -53,7 +55,6 @@ from app.market.session_detector import (
     equity_title,
 )
 from app.models.enums import Asset, Direction, NewsCategory, ReportKind
-from app.config import EQUITY_RELEVANCE
 from app.utils import timeutils as T
 
 log = get_logger(__name__)
@@ -190,8 +191,8 @@ def neutral_card(session: SessionName, reason: str = "") -> EquityCardResult:
 
 
 def build_equity_card(all_signals: Sequence[WeightedSignal],
-                      now: Optional[datetime] = None,
-                      session: Optional[SessionName] = None) -> EquityCardResult:
+                      now: datetime | None = None,
+                      session: SessionName | None = None) -> EquityCardResult:
     """Score the active region's equity-relevant signals into one card verdict."""
     active = session or equity_session()
     if active is SessionName.OFF_HOURS:

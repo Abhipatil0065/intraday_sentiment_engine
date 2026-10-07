@@ -22,9 +22,9 @@ influence a bias.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Optional, Sequence
+from datetime import datetime
 
 from app.analysis.display import to_display
 from app.config import settings
@@ -47,7 +47,7 @@ class AssetVerdict:
     confidence: float
     bias: str
     article_count: int = 0
-    last_signal_age_min: Optional[float] = None
+    last_signal_age_min: float | None = None
     bull_drivers: list = field(default_factory=list)
     bear_drivers: list = field(default_factory=list)
 
@@ -68,7 +68,7 @@ def ist_stamp(utc_dt: datetime) -> str:
 
 
 def build_rows(verdicts: Sequence[AssetVerdict],
-               now: Optional[datetime] = None) -> list[dict]:
+               now: datetime | None = None) -> list[dict]:
     """
     Turn verdicts into plain dicts, capturing the DISPLAY split verbatim.
 

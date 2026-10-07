@@ -17,7 +17,6 @@ import json
 import re
 import time
 from collections import deque
-from typing import Optional
 
 import httpx
 
@@ -31,8 +30,8 @@ log = get_logger(__name__)
 # skip LLM entirely after 3 consecutive 503s/timeouts.
 LLM_CALL_TIMEOUT_SECONDS: int = 30
 
-_SEMAPHORE: Optional[asyncio.Semaphore] = None
-_CLIENT: Optional[httpx.AsyncClient] = None
+_SEMAPHORE: asyncio.Semaphore | None = None
+_CLIENT: httpx.AsyncClient | None = None
 
 
 def _semaphore_fixed() -> asyncio.Semaphore:
@@ -73,7 +72,7 @@ class RateLimiter:
         self._prune(time.monotonic())
         return len(self._stamps)
 
-    def last_admitted_at(self) -> Optional[float]:
+    def last_admitted_at(self) -> float | None:
         """
         Wall-clock stamp of the most recent admission, or ``None`` if none yet.
 
@@ -118,7 +117,7 @@ class RateLimiter:
             await asyncio.sleep(sleep_for)
 
 
-_LIMITER: Optional[RateLimiter] = None
+_LIMITER: RateLimiter | None = None
 
 
 def _limiter_fixed() -> RateLimiter:
@@ -180,7 +179,7 @@ class CircuitBreaker:
             self._open = False
 
 
-_CIRCUIT_BREAKER: Optional[CircuitBreaker] = None
+_CIRCUIT_BREAKER: CircuitBreaker | None = None
 
 
 def circuit_breaker() -> CircuitBreaker:
@@ -268,7 +267,7 @@ async def chat_json(
     system_prompt: str,
     user_prompt: str,
     *,
-    max_tokens: Optional[int] = None,
+    max_tokens: int | None = None,
     temperature: float = 0.0,
 ) -> dict:
     """
@@ -311,7 +310,7 @@ async def chat_json(
         return p
 
     payload = build_payload()
-    last_exc: Optional[Exception] = None
+    last_exc: Exception | None = None
 
     for attempt in range(3):
         try:
@@ -333,8 +332,8 @@ async def chat_json(
             if resp.status_code == 503:
                 await cb.record_failure()
                 raise RuntimeError(
-                    f"provider returned 503 (overloaded) - "
-                    f"falling back to heuristics"
+                    "provider returned 503 (overloaded) - "
+                    "falling back to heuristics"
                 )
 
             # Some providers reject response_format - degrade once, loudly.

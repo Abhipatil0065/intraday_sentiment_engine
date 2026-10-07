@@ -1,0 +1,36 @@
+2026-10-07 21:35:57 | INFO     | app.database                 | Database ready: sqlite:///C:/Users/HP/.vscode/intraday_sentiment_engine/data/intraday_sentiment.db
+2026-10-07 21:35:57 | INFO     | apscheduler.scheduler        | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-10-07 21:35:57 | INFO     | apscheduler.scheduler        | Added job "_scheduled_tick" to job store "default"
+2026-10-07 21:35:57 | INFO     | apscheduler.scheduler        | Scheduler started
+2026-10-07 21:35:57 | INFO     | app.main                     | Scheduler started (every 180s)
+2026-10-07 21:35:57 | INFO     | app.main                     | Shutdown complete
+2026-10-07 21:35:57 | INFO     | apscheduler.scheduler        | Scheduler has been shut down
+2026-10-07 21:36:20 | INFO     | app.ingestion.financialjuice | Financial Juice: extracted 75 headlines (try 1)
+2026-10-07 21:36:27 | INFO     | app.ingestion.financialjuice | Financial Juice: session report body 0 -> 645 chars (Morning Juice - US Session Prep (7th October))
+2026-10-07 21:36:27 | INFO     | app.ingestion.financialjuice | Financial Juice: enriched 1/1 session reports with full article text
+2026-10-07 21:36:27 | INFO     | app.ingestion.news_fetcher   | Fetched 992 articles from 23/23 sources (0 errors)
+2026-10-07 21:36:39 | INFO     | app.ingestion.fj_calendar    | FinancialJuice calendar: 122 rows -> 62 events (60 skipped) in 11.4s
+2026-10-07 21:36:39 | INFO     | app.ingestion.economic_calendar | Economic calendar provider financialjuice -> 62 event(s)
+2026-10-07 21:36:39 | INFO     | app.ingestion.economic_calendar | Economic calendar: 9 events from 1 feed(s)
+2026-10-07 21:36:39 | INFO     | app.ingestion.economic_calendar | Economic calendar provider faireconomy -> 9 event(s)
+2026-10-07 21:36:39 | INFO     | app.analysis.calendar_merge  | Calendar merge: USD forecast disagreement for 'University Michigan 5 Yr Inflation Prelim' - keeping financialjuice=3.5, discarding financialjuice=4.7
+2026-10-07 21:36:39 | INFO     | app.analysis.calendar_merge  | Calendar merge: USD previous disagreement for 'University Michigan 5 Yr Inflation Prelim' - keeping financialjuice=3.4, discarding financialjuice=4.6
+2026-10-07 21:36:39 | INFO     | app.ingestion.economic_calendar | Economic calendar merge: {'input_events': 71, 'merged': 1, 'output_events': 70, 'filled_actual': 0, 'filled_forecast': 0, 'filled_previous': 0, 'disagreements': 2}
+2026-10-07 21:36:43 | WARNING  | app.analysis.news_classifier | LLM classification attempt 1/2 failed: provider returned 503 (overloaded) - falling back to heuristics
+2026-10-07 21:36:44 | WARNING  | app.analysis.news_classifier | LLM classification attempt 2/2 failed: provider returned 503 (overloaded) - falling back to heuristics
+2026-10-07 21:36:44 | WARNING  | app.analysis.news_classifier | LLM analysis failed, using heuristic: LLM classification failed after 2 attempts: provider returned 503 (overloaded) - falling back to heuristics
+2026-10-07 21:36:44 | INFO     | app.services.pipeline        | Re-classifying 5 backlog articles with LLM
+2026-10-07 21:37:02 | WARNING  | app.analysis.news_classifier | LLM analysis timed out after 10s for 'Unum Group stock hits 52-week low at 20.85 USD' - using heuristic fallback
+2026-10-07 21:37:02 | WARNING  | app.analysis.news_classifier | LLM classification attempt 1/2 failed: provider returned 503 (overloaded) - falling back to heuristics
+2026-10-07 21:37:03 | WARNING  | app.analysis.news_classifier | LLM classification attempt 2/2 failed: provider returned 503 (overloaded) - falling back to heuristics
+2026-10-07 21:37:03 | WARNING  | app.analysis.news_classifier | LLM analysis failed, using heuristic: LLM classification failed after 2 attempts: provider returned 503 (overloaded) - falling back to heuristics
+2026-10-07 21:37:03 | WARNING  | app.analysis.llm_client      | LLM circuit breaker OPEN after 3 consecutive failures - skipping LLM for remainder of tick
+2026-10-07 21:37:03 | WARNING  | app.analysis.news_classifier | LLM classification attempt 1/2 failed: provider returned 503 (overloaded) - falling back to heuristics
+2026-10-07 21:37:03 | WARNING  | app.analysis.news_classifier | LLM classification attempt 2/2 failed: LLM circuit breaker open - falling back to heuristics
+2026-10-07 21:37:03 | WARNING  | app.analysis.news_classifier | LLM analysis failed, using heuristic: LLM classification failed after 2 attempts: LLM circuit breaker open - falling back to heuristics
+2026-10-07 21:37:03 | INFO     | app.services.pipeline        | Successfully re-classified 1 backlog articles
+2026-10-07 21:37:03 | INFO     | app.services.pipeline        | Removed 0 unroutable asset_impact rows
+2026-10-07 21:37:04 | INFO     | app.services.pipeline        | XAUUSD: BEARISH score=-45.6 (n=365 conf=0.39 event_risk=False)
+2026-10-07 21:37:04 | INFO     | app.services.pipeline        | XAGUSD: BEARISH score=-70.5 (n=347 conf=0.47 event_risk=False)
+2026-10-07 21:37:04 | INFO     | app.services.pipeline        | BTCUSD: BEARISH score=-86.6 (n=368 conf=0.47 event_risk=False)
+2026-10-07 21:37:05 | INFO     | app.services.pipeline        | Pipeline complete: fetched=992 new=2 rejected=276 dup=0 llm_ok=2 llm_fail=5 llm_skip_batch=0 llm_skip_breaker=0 llm_backlog=1 purged=0 unroutable=0

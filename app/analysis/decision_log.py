@@ -17,7 +17,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from app.config import BASE_DIR, settings
 from app.logging_conf import get_logger
@@ -54,7 +54,7 @@ class DecisionLog:
     the live pipeline down.
     """
 
-    def __init__(self, path: Optional[Path] = None) -> None:
+    def __init__(self, path: Path | None = None) -> None:
         raw = path or getattr(settings, "decision_log_path",
                               "logs/decisions.jsonl")
         self.path = Path(raw)
@@ -75,7 +75,7 @@ class DecisionLog:
     # -- convenience writers ------------------------------------------------
     def record_article(self, *, title: str, source: str, cluster_id: str,
                        category: str, mode: str, assets: Any = None,
-                       extra: Optional[dict] = None) -> None:
+                       extra: dict | None = None) -> None:
         for entry in (assets or []):
             self.append(DecisionRecord(
                 ts=_now_iso(), kind="article", title=title, source=source,
@@ -105,7 +105,7 @@ class DecisionLog:
         ))
 
     # -- reading ------------------------------------------------------------
-    def read(self, limit: Optional[int] = None) -> list[DecisionRecord]:
+    def read(self, limit: int | None = None) -> list[DecisionRecord]:
         if not self.path.exists():
             return []
         out: list[DecisionRecord] = []
@@ -125,7 +125,7 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-_LOG: Optional[DecisionLog] = None
+_LOG: DecisionLog | None = None
 
 
 def get_decision_log() -> DecisionLog:

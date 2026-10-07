@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Optional
 
 from app.logging_conf import get_logger
-from app.models.enums import MarketRegime, SessionName
+from app.models.enums import SessionName
 from app.utils import timeutils as T
 
 log = get_logger(__name__)
@@ -27,7 +26,7 @@ SESSION_ORDER: list[SessionName] = [
 ]
 
 
-def detect_session(now: Optional[datetime] = None) -> SessionName:
+def detect_session(now: datetime | None = None) -> SessionName:
     """
     Current trading session in the market timezone.
 
@@ -62,7 +61,7 @@ def _session_start(ref: datetime, session: SessionName) -> datetime:
     return ref
 
 
-def previous_session(now: Optional[datetime] = None) -> SessionName:
+def previous_session(now: datetime | None = None) -> SessionName:
     ref = (now or T.now_utc()).astimezone(T.market_tz())
     current = detect_session(ref)
     idx = SESSION_ORDER.index(current) if current in SESSION_ORDER else -1
@@ -71,14 +70,14 @@ def previous_session(now: Optional[datetime] = None) -> SessionName:
     return SESSION_ORDER[idx - 1]
 
 
-def next_session(now: Optional[datetime] = None) -> SessionName:
+def next_session(now: datetime | None = None) -> SessionName:
     ref = (now or T.now_utc()).astimezone(T.market_tz())
     current = detect_session(ref)
     idx = SESSION_ORDER.index(current) if current in SESSION_ORDER else len(SESSION_ORDER)
     return SESSION_ORDER[idx % len(SESSION_ORDER)]
 
 
-def session_progress(now: Optional[datetime] = None) -> float:
+def session_progress(now: datetime | None = None) -> float:
     """0.0-1.0 through the current session - used to fade stale prep signals."""
     ref = (now or T.now_utc()).astimezone(T.market_tz())
     session = detect_session(ref)
@@ -151,7 +150,7 @@ EQUITY_SESSION_MAP: dict[SessionName, dict[str, object]] = {
 }
 
 
-def equity_session(now: Optional[datetime] = None) -> SessionName:
+def equity_session(now: datetime | None = None) -> SessionName:
     """Active equity region: current session, or previous one in OFF_HOURS."""
     current = detect_session(now)
     if current is SessionName.OFF_HOURS:

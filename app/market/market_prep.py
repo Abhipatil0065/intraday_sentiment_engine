@@ -9,12 +9,14 @@ MARKET_WRAP content (the two concepts are kept separate by design).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
 
 from app.analysis.sentiment_engine import (
     SentimentResult,
     WeightedSignal,
+)
+from app.analysis.sentiment_engine import (
     compute as compute_sentiment,
 )
 from app.logging_conf import get_logger

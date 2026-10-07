@@ -9,10 +9,9 @@ gold". Detected from today's news mix, with an explicit confidence.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Sequence
 
 from app.logging_conf import get_logger
-from app.models.enums import Asset, Direction, MarketRegime, NewsCategory
+from app.models.enums import Asset, MarketRegime, NewsCategory
 
 log = get_logger(__name__)
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Optional
 
 import feedparser
 import httpx
@@ -15,7 +14,7 @@ from app.logging_conf import get_logger
 log = get_logger(__name__)
 
 
-def _entry_text(entry) -> tuple[str, str, Optional[str], Optional[str]]:
+def _entry_text(entry) -> tuple[str, str, str | None, str | None]:
     """(title, body, published_raw, updated_raw) from a feed entry."""
     title = strip_html(getattr(entry, "title", "") or "")
 
