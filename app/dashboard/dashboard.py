@@ -152,6 +152,23 @@ st.caption(
     f"Poll every {status['poll_interval_seconds']}s · Regime: {data['regime']}"
 )
 
+# ---------------- Market Regime ----------------
+st.subheader("Market Regime")
+with st.container(border=True):
+    regime = data.get("regime", "MIXED")
+    conf = float(data.get("regime_confidence", 0.0)) * 100
+    st.markdown(
+        f"**Regime:** `{regime}` · confidence {conf:.0f}% · "
+        f"market TZ `{data.get('market_timezone', 'N/A')}` · "
+        f"display TZ `{data.get('display_timezone', 'N/A')}`"
+    )
+    drivers = data.get("regime_drivers") or []
+    if drivers:
+        for d in drivers:
+            st.markdown(f"- {d}")
+    else:
+        st.caption("No regime drivers flagged.")
+
 # ---------------- Asset Sentiment Blocks ----------------
 st.subheader("Asset Sentiment")
 
@@ -197,12 +214,132 @@ with st.container(border=True):
     if equity.get("note"):
         st.info(equity["note"])
 
+# ---------------- FinancialJuice Session Analysis ----------------
+fj = fetch("/api/financialjuice/sessions")
+if fj and "boxes" in fj:
+    st.subheader("FinancialJuice Session Analysis")
+    st.caption(
+        f"Source: {fj.get('source', 'FinancialJuice')} · "
+        f"Indian Date: {fj.get('india_date_display', fj.get('india_date', 'n/a'))} · "
+        f"TZ: {fj.get('timezone', 'Asia/Kolkata')} · "
+        "Bullish + Bearish = 100%"
+    )
+    ctx = fj.get("context") or {}
+    if ctx.get("news_items") or ctx.get("calendar_items"):
+        st.caption(
+            f"Blended with high-impact Section B news ({ctx.get('news_items', 0)}) "
+            f"and economic-calendar signals ({ctx.get('calendar_items', 0)})."
+        )
+    for i, box in enumerate(fj["boxes"], 1):
+        with st.container(border=True):
+            st.markdown(
+                f"**{i}. {box.get('title', '')}**"
+            )
+            badge = box.get("age_label", "")
+            if box.get("found"):
+                if box.get("is_today"):
+                    badge = "TODAY'S REPORT"
+                else:
+                    badge = "YESTERDAY'S REPORT"
+            else:
+                badge = "NO REPORT"
+            st.caption(
+                f"{badge} · Published: {box.get('published_ist', 'Not yet')}"
+                + (f" · Report date: {box.get('report_date_display', '')}"
+                   if box.get("report_date_display") else "")
+            )
+            if box.get("report_title"):
+                st.markdown(f"_{box['report_title']}_")
+            for a in box.get("assets", []):
+                bull = float(a.get("bull_pct", 50.0))
+                bear = float(a.get("bear_pct", 50.0))
+                col = st.columns([1, 3])
+                with col[0]:
+                    st.markdown(
+                        f"<div style='font-size:22px;font-weight:700;"
+                        f"color:{'#2ea043' if bull >= bear else '#f85149'}'>"
+                        f"{bull if bull >= bear else bear:.1f}%</div>",
+                        unsafe_allow_html=True,
+                    )
+                with col[1]:
+                    st.markdown(
+                        f"<div style='font-size:11px;letter-spacing:1.4px;"
+                        f"color:#8b98a9'>{a.get('label', '').upper()}</div>"
+                        f"<div style='font-size:10.5px;color:#8b98a9'>"
+                        f"🟢 Bullish {bull:.1f}% · 🔴 Bearish {bear:.1f}%</div>",
+                        unsafe_allow_html=True,
+                    )
+                    drivers = a.get("drivers") or []
+                    if drivers:
+                        for d in drivers[:2]:
+                            st.markdown(f"- {d}")
+            drivers = box.get("drivers") or []
+            risks = box.get("risks") or []
+            if drivers or risks:
+                dcol, rcol = st.columns(2)
+                with dcol:
+                    st.markdown("**Top Drivers**")
+                    for d in drivers[:3]:
+                        st.markdown(f"- {d}")
+                with rcol:
+                    st.markdown("**Key Risks**")
+                    for r in risks[:3]:
+                        st.markdown(f"- {r}")
+elif fj and "_error" in fj:
+    pass  # FJ section is optional; don't break the page on it.
+
 # ---------------- Alerts ----------------
 if data["alerts"]:
     st.subheader("🚨 High-Impact Alerts")
     for a in data["alerts"]:
         st.error(f"**{a['asset']}** · {a['direction']} · "
                  f"est. delta {a['sentiment_delta']:+.1f} — {a['headline']}")
+
+# ---------------- Section A — Economic Calendar ----------------
+st.subheader("Section A — Economic Calendar")
+cal_rows = []
+for asset in data["assets"]:
+    for r in (asset.get("economic_calendar") or []):
+        cal_rows.append((asset["label"], asset["symbol"], r))
+if cal_rows:
+    for label, symbol, r in cal_rows:
+        released = (r.get("mode") == "RELEASED")
+        vals = []
+        if r.get("actual") is not None:
+            vals.append(f"actual **{r['actual']}**")
+        if r.get("forecast") is not None:
+            vals.append(f"forecast **{r['forecast']}**")
+        if r.get("previous") is not None:
+            vals.append(f"prev {r['previous']}")
+        if r.get("surprise") is not None:
+            s = r["surprise"]
+            vals.append(f"surprise {'+' if s > 0 else ''}{s}")
+        with st.container(border=True):
+            c1, c2 = st.columns([4, 1])
+            with c1:
+                st.markdown(
+                    f"**{r.get('title', '')}** · `{label}` ({symbol})"
+                )
+                st.caption(
+                    f"{r.get('country', '')} · "
+                    f"{r.get('when_utc', '')}"
+                    + ("" if released else " (expected)") + f" · impact `{r.get('impact', '')}`"
+                )
+                st.markdown(f"**Read:** {r.get('reason', '')}")
+                st.markdown(f"**Transmission:** {r.get('transmission', '')}")
+            with c2:
+                st.markdown(
+                    f"<div style='font-size:11px;letter-spacing:1.4px;"
+                    f"color:#8b98a9'>DIRECTION</div>"
+                    f"<div style='font-size:22px;font-weight:700;"
+                    f"color:{'#2ea043' if r.get('direction') == 'BULLISH' else '#f85149'}'>"
+                    f"{r.get('direction', '')}</div>",
+                    unsafe_allow_html=True,
+                )
+                if vals:
+                    st.markdown(" · ".join(vals))
+else:
+    st.info("No qualifying macro releases inside the forward-looking window.")
 
 # ---------------- Section B ----------------
 # The API ships one page of the day; streamlit pages through /api/news so the
