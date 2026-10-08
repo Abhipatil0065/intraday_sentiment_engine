@@ -58,10 +58,11 @@ def bar_figure(b: dict) -> go.Figure:
     return fig
 
 
-def render_block(b: dict) -> None:
+def render_block(b: dict, *, key: str = "") -> None:
     c1, c2 = st.columns([3, 2])
     with c1:
         st.plotly_chart(bar_figure(b), use_container_width=True,
+                        key=key or None,
                         config={"displayModeBar": False})
     with c2:
         # Label names the side holding more than half the split, so the chip
@@ -170,7 +171,7 @@ for asset in data["assets"]:
         ]:
             block = asset[scope_key]
             with st.expander(f"{scope_label}", expanded=(scope_key == "current")):
-                render_block(block)
+                render_block(block, key=f"{asset_symbol}_{scope_key}")
 
 # ---------------- Equity Card ----------------
 st.subheader("Global Equity Card")
@@ -192,7 +193,7 @@ equity_block = {
 with st.container(border=True):
     st.markdown(f"**{equity.get('title', 'Global Equity')}**")
     st.caption(f"Region: {equity.get('region', 'N/A')} | Symbol: {equity.get('symbol', 'N/A')}")
-    render_block(equity_block)
+    render_block(equity_block, key="equity_global")
     if equity.get("note"):
         st.info(equity["note"])
 
