@@ -14,7 +14,7 @@ if ($listener) {
 }
 
 $args = @('-m', 'streamlit', 'run', $Script, '--server.port', '8501', '--server.headless', 'true')
-Write-Output "Starting: $PythonExe -m streamlit $($args -join ' ')"
+Write-Output "Starting: $PythonExe $($args -join ' ')"
 $proc = Start-Process -FilePath $PythonExe `
     -ArgumentList $args `
     -WorkingDirectory $ProjectDir `

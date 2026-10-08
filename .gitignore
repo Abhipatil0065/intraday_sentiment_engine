@@ -6,6 +6,7 @@
 # Runtime data
 data/
 logs/
+backups/
 *.db
 *.db-wal
 *.db-shm

@@ -281,13 +281,16 @@ class IngestStats:
     purged: dict = field(default_factory=dict)
 
     def verify_new_article_counters(self) -> bool:
-        """Assert that new-article LLM buckets sum to new_today.
+        """Assert that the four new-article LLM buckets sum to new_today.
 
-        llm_new_skipped_breaker is a subset of llm_new_failed (circuit breaker
-        failures), not a separate category.
+        The buckets are mutually exclusive: each new article is counted
+        in exactly one of llm_new_ok / llm_new_failed /
+        llm_new_skipped_breaker / llm_new_skipped_batch. Their sum must
+        therefore equal new_today exactly.
         """
         total = (self.llm_new_ok + self.llm_new_failed +
-                 self.llm_new_skipped_batch)
+                 self.llm_new_skipped_batch +
+                 self.llm_new_skipped_breaker)
         return total == self.new_today
 
 
@@ -399,12 +402,18 @@ async def _ingest_article(art: RawArticle, session, stats: IngestStats,
         llm_ok = False
         skip_reason = "batch_cap"
     if use_llm:
+        # The four new-article buckets are MUTUALLY EXCLUSIVE: every new
+        # article lands in exactly one of llm_new_ok / llm_new_failed /
+        # llm_new_skipped_breaker / llm_new_skipped_batch, and their sum
+        # must equal new_today. A circuit-breaker skip is its own bucket,
+        # NOT a member of llm_new_failed - counting it in both double-counted
+        # the article and broke the invariant.
         if llm_ok:
             stats.llm_new_ok += 1
+        elif skip_reason == "circuit_breaker":
+            stats.llm_new_skipped_breaker += 1
         else:
             stats.llm_new_failed += 1
-            if skip_reason == "circuit_breaker":
-                stats.llm_new_skipped_breaker += 1
     else:
         # use_llm=False means batch cap reached
         stats.llm_new_skipped_batch += 1

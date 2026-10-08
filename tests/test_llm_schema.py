@@ -123,6 +123,14 @@ async def test_analyze_retries_once_then_falls_back(monkeypatch):
 
     from app.analysis import news_classifier
     from app.analysis.llm_client import circuit_breaker
+    from app.config import settings
+
+    # Set LLM enabled/disabled via monkeypatch, NOT via .env, so the test
+    # does not depend on the shipped LLM_ENABLED value. ``has_llm`` is a
+    # read-only property, so its two inputs are toggled instead.
+    monkeypatch.setattr(type(settings), "has_llm", True, raising=False)
+    monkeypatch.setattr(settings, "llm_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "llm_api_key", "test-key", raising=False)
 
     # Reset circuit breaker before test
     await circuit_breaker().reset()
@@ -147,6 +155,12 @@ async def test_analyze_retries_once_then_falls_back(monkeypatch):
 async def test_analyze_never_raises_on_llm_failure(monkeypatch):
     from app.analysis import news_classifier
     from app.analysis.llm_client import circuit_breaker
+    from app.config import settings
+
+    # Set LLM enabled/disabled via monkeypatch, NOT via .env.
+    monkeypatch.setattr(type(settings), "has_llm", True, raising=False)
+    monkeypatch.setattr(settings, "llm_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "llm_api_key", "test-key", raising=False)
 
     # Reset circuit breaker before test
     await circuit_breaker().reset()

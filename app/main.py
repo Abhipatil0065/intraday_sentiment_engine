@@ -8,6 +8,7 @@ dashboard, and runs the ingestion pipeline on an APScheduler background job.
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from datetime import timezone
 from pathlib import Path
@@ -91,7 +92,14 @@ async def lifespan(app: FastAPI):
     init_db()
     global _scheduler
 
-    if settings.poll_interval_seconds > 0:
+    # Hermetic test mode: never start the APScheduler and never prime the
+    # pipeline. ``TestClient`` entering this lifespan would otherwise spawn a
+    # background tick that outlives the test process (orphaned python
+    # processes), and the scheduler thread keeps the event loop alive after
+    # the test finishes. Set APP_TESTING=1 (see tests/conftest.py) to opt in.
+    _testing = os.environ.get("APP_TESTING", "").strip() in ("1", "true", "yes")
+
+    if not _testing and settings.poll_interval_seconds > 0:
         _scheduler = AsyncIOScheduler(timezone=settings.market_timezone)
         _scheduler.add_job(
             _scheduled_tick,
@@ -104,8 +112,9 @@ async def lifespan(app: FastAPI):
         _scheduler.start()
         log.info("Scheduler started (every %ds)", settings.poll_interval_seconds)
 
-    # Prime the pipeline immediately so the dashboard is never empty.
-    asyncio.create_task(_scheduled_tick())
+    if not _testing:
+        # Prime the pipeline immediately so the dashboard is never empty.
+        asyncio.create_task(_scheduled_tick())
 
     yield
 

@@ -11,10 +11,8 @@ import pytest
 
 from app.analysis.llm_client import CircuitBreaker, reset_circuit_breaker, circuit_breaker
 from app.analysis.news_classifier import analyze_article, heuristic_analyze
-from app.models.db_models import NewsArticle, AssetImpact
-from app.models.enums import Asset, Direction, EconomicImportance, ImpactStrength
 from app.services.pipeline import run_once
-from app.database import init_db, session_scope
+from app.database import init_db
 from app.main import app
 from app.config import settings
 
@@ -64,8 +62,15 @@ class TestCircuitBreaker:
         assert not cb.is_open
 
     @pytest.mark.asyncio
-    async def test_llm_fallback_when_breaker_open(self):
+    async def test_llm_fallback_when_breaker_open(self, monkeypatch):
         """analyze_article falls back to heuristic when breaker is open."""
+        # Set LLM enabled/disabled via monkeypatch, NOT via .env, so the test
+        # does not depend on the shipped LLM_ENABLED value. ``has_llm`` is a
+        # read-only property, so its two inputs are toggled instead.
+        monkeypatch.setattr(type(settings), "has_llm", True, raising=False)
+        monkeypatch.setattr(settings, "llm_enabled", True, raising=False)
+        monkeypatch.setattr(settings, "llm_api_key", "test-key", raising=False)
+
         cb = circuit_breaker()
         await cb.reset()
 
@@ -154,9 +159,18 @@ class TestLLMBatchLimit:
     def setup_db(self):
         init_db()
         yield
-        with session_scope() as session:
-            session.execute(AssetImpact.__table__.delete())
-            session.execute(NewsArticle.__table__.delete())
+        # Teardown touches ONLY the test engine (the temp DB pointed to by
+        # DATABASE_URL in tests/conftest.py). It never touches the live
+        # data/intraday_sentiment.db.
+        from app.database import engine
+
+        from app.models.db_models import Base
+
+        with engine.begin() as conn:
+            conn.exec_driver_sql("DELETE FROM asset_impact")
+            conn.exec_driver_sql("DELETE FROM news_article")
+        Base.metadata.drop_all(bind=engine)
+        Base.metadata.create_all(bind=engine)
 
     def test_llm_batch_limit_respected(self):
         """LLM_BATCH_LIMIT=15 limits concurrent LLM calls."""
