@@ -109,3 +109,31 @@ No flip table - flips derived client-side (index.html:107-120 compare polls):
 - [x DONE 2026-10-06, pytest 905 passed] Task 6 - per-asset driver logic with ranked drivers: DRIVER_RANKINGS table in app/config.py defines per-asset event type weights (GOLD: FED_DECISION/YIELDS/USD_DXY > GEOPOLITICAL_RISK > ETF_FLOW/CENTRAL_BANK; SILVER: CHINA_DEMAND/INDUSTRIAL_DEMAND > FED_DECISION/YIELDS/USD_DXY/GEOPOLITICAL_RISK; BITCOIN: BTC_ETF_FLOW/CRYPTO_REGULATION/CRYPTO_LIQUIDATION/RISK_ON/RISK_OFF > FED_DECISION/YIELDS/USD_DXY/LIQUIDITY/GEOPOLITICAL_RISK). transmission_map.resolve() applies driver_rank (top=1.0, default 0.3) once in the weight path: contribution = sign * magnitude * scale * specificity * driver_rank. Asset-specific direction is owned by transmission map (per-asset sign/magnitude), no shared direction in cue_rules.py or asset_relevance.py. Tests: geopolitical escalation -> GOLD bullish/BITCOIN bearish; hawkish Fed -> all three bearish; BTC ETF outflows -> BITCOIN bearish, gold direction unchanged. Covered by tests/test_transmission_map.py (4 new tests).
 - [x DONE 2026-10-06, pytest 908 passed] Task 7 - equity card scoring: equity_card.py stops using BITCOIN's relevance slot as scoring vehicle. EQUITY_RELEVANCE table in app/config.py defines equity-specific relevance per category (EQUITIES=1.00, CENTRAL_BANK=0.95, INTEREST_RATES=0.95, INFLATION=0.90, EMPLOYMENT=0.90, GDP=0.85, TREASURY_YIELDS=0.95, USD_DXY=0.90, GEOPOLITICS=0.70, RISK_SENTIMENT=0.80, BANKING_FINANCIAL_STRESS=0.85). Inputs: EQUITIES + central bank + macro data + geopolitical + banking stress + risk sentiment categories, filtered by active region keywords (EQUITY_SESSION_MAP). Direction: hawkish policy/hot inflation/rising yields/escalation -> bearish; cuts/easing/earnings beats/strong growth -> bullish (uses equity_direction from Task 3b). State kept separate per region (EQUITY:<region>). Surprise, tier, decay, repeat rules from Tasks 3-5b apply via sentiment_engine.compute(). Tests: ECB hawkish in EUROPE bearish/ASIA no_data; earnings beat bullish; equity score independent of BITCOIN relevance. Covered by tests/test_tier_multipliers.py (3 new tests).
 - [x DONE 2026-10-06, pytest 908 passed] Task 8 - stability (no whipsaw): reuse _LAST_BIAS carry-forward store from Task 1; add _LAST_FLIP_TIME for hold-time tracking. Flip only if (a) opposite side exceeds current by FLIP_MARGIN (15.0), OR (b) fresh Tier 1 item points opposite. Minimum hold FLIP_HOLD_MINUTES=15 between flips (except Tier 1). When bias held, payload_score ensures score sign matches label; confidence capped low for held-but-weak calls. Equity regions (EQUITY:<region>) keep separate state. Tests: single Tier 3 opposite doesn't flip; fresh Tier 1 opposite does flip; margin respected (just below no flip, just above flips); hold time respected for non-Tier-1; held bias label and payload score sign never disagree; equity regions independent. Covered by existing tests in test_binary_bias.py, test_sentiment_engine.py, test_bias_state.py, test_tier_multipliers.py (with added clear_bias_history isolation fixtures).
+
+## Gold vs Silver divergence note - CORRECTION (2026-10-08)
+
+Commit 75f312a ("Implement dampening, 90-min anchor window, and various fixes")
+carries this unverified line in its commit message:
+
+    Analyze Gold vs Silver divergence: Gold -35 vs Silver -83, justified by
+    transmission map (Gold more sensitive to geopolitical risk, Silver to
+    industrial demand)
+
+STATUS: NOT VERIFIED and WRONG. The figures "-35" and "-83" were never
+observed anywhere in this repository. They do not appear in any log, report,
+or backup.
+
+Observed values pulled from the repo own logs (live.log:4,9 and
+soak.log:178,179), both timestamped 2026-10-08:
+
+    XAUUSD  scope=CURRENT score=-57.90 damped(k=.5)=-54.90 bias=BEARISH conf=0.434 art=107
+    XAGUSD  scope=CURRENT score=-69.70 damped(k=.5)=-65.80 bias=BEARISH conf=0.455 art=103
+
+So the real divergence at that moment was Gold -57.9 vs Silver -69.7 (silver
+MORE negative than gold, the opposite of the "-35 vs -83" claim). The
+transmission-map justification in the commit message was written to fit
+figures that were never measured and is therefore withdrawn.
+
+This commit message cannot be rewritten (history is immutable), so the
+correction is recorded here. Anyone quoting the Gold/Silver divergence from
+75f312a should use the observed -57.9 / -69.7 above, NOT -35 / -83.
