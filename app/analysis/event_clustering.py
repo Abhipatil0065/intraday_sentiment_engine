@@ -177,17 +177,51 @@ def cluster_signals(signals: list, window_hours: float = 0.5) -> list:
             if not matched:
                 clusters.append([s])
 
-        # For each cluster, keep the highest-weight signal and apply corroboration boost
+        # For each cluster, keep the highest-weight signal and apply corroboration boost.
+        #
+        # BUG FIX (2026-10-08): the old representative selector used
+        # ``max(cluster, key=lambda s: max(0, s.final_weight))``. ``final_weight``
+        # is assigned by ``sentiment_engine._aggregate`` AFTER this function
+        # returns, so every signal carried 0.0 here and the "best" member was
+        # chosen by arbitrary tuple ordering. Worse, a cluster whose members
+        # DISAGREE in direction collapsed to one side and the other side's
+        # vote was silently dropped.
+        #
+        # Two changes, both required by the brief:
+        #   1. cluster only within the SAME direction. A hawkish and a dovish
+        #      headline about the same event are NOT one event - they are two
+        #      readings, and merging them manufactures a verdict neither source
+        #      actually supports.
+        #   2. pick the representative by the weight scoring actually uses
+        #      (relevance x persistence x quality x session x tier x decay),
+        #      not by a field that is always zero at this point.
         for cluster in clusters:
             if len(cluster) == 1:
                 clustered.append(cluster[0])
-            else:
-                # Find the signal with the highest final weight
-                best = max(cluster, key=lambda s: max(0, s.final_weight))
-                # Count unique sources in this cluster
-                sources = {s.source_quality for s in cluster}
-                # Also consider source_name if available
-                source_names = {getattr(s, 'source_name', '') for s in cluster if getattr(s, 'source_name', '')}
+                continue
+
+            # Split by direction so opposing readings never share a cluster.
+            by_dir: dict = {}
+            for s in cluster:
+                by_dir.setdefault(s.direction, []).append(s)
+
+            for direction, members in by_dir.items():
+                if len(members) == 1:
+                    clustered.append(members[0])
+                    continue
+
+                # Representative = highest ACTUAL weight, recomputed here with
+                # the same formula _signal_weight uses downstream. This is the
+                # weight that will decide the contribution, so it is the right
+                # thing to maximise.
+                from app.analysis.sentiment_engine import _signal_weight
+
+                _now = _scoring_now()
+                best = max(members, key=lambda s: max(0.0, _signal_weight(s, _now)))
+                # Count unique sources in this sub-cluster
+                sources = {s.source_quality for s in members}
+                source_names = {getattr(s, 'source_name', '') for s in members
+                                if getattr(s, 'source_name', '')}
                 independent_sources = len(sources | source_names)
                 # Apply corroboration boost
                 boost = corroboration_multiplier(independent_sources)
@@ -217,6 +251,23 @@ def cluster_signals(signals: list, window_hours: float = 0.5) -> list:
                 clustered.append(new_signal)
 
     return clustered
+
+
+def _scoring_now():
+    """
+    The "now" the sentiment engine will use when it scores these signals.
+
+    ``cluster_signals`` runs inside ``_recompute_sentiment`` (pipeline.py:724)
+    which does NOT pass a ``now``. The engine therefore falls back to the
+    wall clock via ``sentiment_engine.compute -> _aggregate(now=None) ->
+    decay_weight(published_at, tier, now=None) -> _age_hours -> age_hours``.
+    Matching that here keeps the representative selection on exactly the same
+    decay curve the aggregate will use, so "highest weight" means highest
+    contribution.
+    """
+    from app.utils import timeutils as T
+
+    return T.now_utc()
 
 
 @dataclass
