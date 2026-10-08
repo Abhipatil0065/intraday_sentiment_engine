@@ -57,6 +57,12 @@ $ProjectDir = Split-Path -Parent $PSScriptRoot
 $LogDir = Join-Path $ProjectDir 'logs'
 $ServiceLog = Join-Path $LogDir 'service.log'
 $PidFile = Join-Path $LogDir 'dashboard.pid'
+# Single-instance lock. Two watchdogs can be running at once (the scheduled
+# task and a manual install_autostart run), and without this guard they race:
+# both see the port empty, both Start-Process, and the second instance either
+# fights for the port or silently shadows the first. The lock is created
+# exclusively, so only ONE caller may launch at a time.
+$LockFile = Join-Path $LogDir 'dashboard.lock'
 $StdOutLog = Join-Path $LogDir 'api_stdout.log'
 $StdErrLog = Join-Path $LogDir 'api_stderr.log'
 $HealthUrl = "http://127.0.0.1:$Port/api/health"
@@ -184,6 +190,69 @@ function Test-IsEngineProcess {
     return (($cmd -like '*run.py*--api*') -or ($cmd -like '*app.main:app*'))
 }
 
+function Get-LockOwner {
+    <#  PID that currently holds the launch lock, or $null.
+
+          The lock file is written with CreateNew semantics, so the writer's
+          PID is the only thing ever in it - no other process can have written
+          a number there. The holder is the watchdog process that is launching,
+          so a PID that is no longer alive means the lock holder died and the
+          lock is stale (otherwise a dead watchdog would block every restart
+          forever). #>
+    if (-not (Test-Path -LiteralPath $LockFile)) { return $null }
+    try {
+        $raw = (Get-Content -LiteralPath $LockFile -Raw).Trim()
+        if ($raw -eq '') { return $null }
+        $candidate = [int]$raw
+        if (Get-Process -Id $candidate -ErrorAction SilentlyContinue) {
+            return $candidate
+        }
+    } catch {
+        # Unreadable lock - treat as stale.
+    }
+    return $null
+}
+
+function Test-LockHeld {
+    <#  True when another watchdog is currently launching the server. #>
+    return (Get-LockOwner) -ne $null
+}
+
+function Acquire-Lock {
+    <#  Take the launch lock. Returns $true on success, $false if it is held. #>
+    try {
+        $stream = [System.IO.File]::Open(
+            $LockFile,
+            [System.IO.FileMode]::CreateNew,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::None
+        )
+        try {
+            $bytes = [System.Text.Encoding]::ASCII.GetBytes($PID.ToString())
+            $stream.Write($bytes, 0, $bytes.Length)
+            $stream.Flush()
+        } finally {
+            $stream.Close()
+        }
+        return $true
+    } catch [System.IO.IOException] {
+        # File exists and is open by another process - someone else is launching.
+        return $false
+    } catch {
+        return $false
+    }
+}
+
+function Release-Lock {
+    try {
+        if (Test-Path -LiteralPath $LockFile) {
+            Remove-Item -LiteralPath $LockFile -Force -ErrorAction SilentlyContinue
+        }
+    } catch {
+        # Best effort; never fail the caller because of lock cleanup.
+    }
+}
+
 function Wait-DashboardHealthy {
     param([int]$TimeoutSeconds = 300)
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -207,6 +276,34 @@ function Clear-VeryLargeLog {
 # Actions
 # --------------------------------------------------------------------------
 function Start-Dashboard {
+    if (Test-DashboardHealthy -TimeoutSec 2) {
+        Write-Log "Dashboard already healthy on http://127.0.0.1:$Port - nothing to do."
+        return $true
+    }
+
+    # --- SINGLE-INSTANCE GUARD -----------------------------------------------
+    # Only one watchdog may launch at a time. Two watchdogs running concurrently
+    # (the scheduled task + a manual install_autostart run) both see the port
+    # empty and both Start-Process, which is what produced the duplicate
+    # 12392/22788 and 4152/18508 pairs in service.log. The lock is exclusive,
+    # so the second caller waits instead of racing.
+    if (Test-LockHeld) {
+        $holder = Get-LockOwner
+        Write-Log "Another watchdog is already launching the dashboard (PID $holder) - deferring." 'INFO'
+        return $true
+    }
+    if (-not (Acquire-Lock)) {
+        Write-Log "Could not acquire launch lock - another watchdog is starting the dashboard." 'WARN'
+        return $true
+    }
+    try {
+        _Start-Dashboard
+    } finally {
+        Release-Lock
+    }
+}
+
+function _Start-Dashboard {
     if (Test-DashboardHealthy -TimeoutSec 2) {
         Write-Log "Dashboard already healthy on http://127.0.0.1:$Port - nothing to do."
         return $true
@@ -288,6 +385,7 @@ function Stop-Dashboard {
     if ($targets.Count -eq 0) {
         Write-Log "Nothing to stop - port $Port is free."
         Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $LockFile -Force -ErrorAction SilentlyContinue
         return
     }
 
@@ -301,6 +399,7 @@ function Stop-Dashboard {
     }
 
     Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $LockFile -Force -ErrorAction SilentlyContinue
 
     $deadline = (Get-Date).AddSeconds(10)
     while ((Get-Date) -lt $deadline) {

@@ -137,3 +137,28 @@ figures that were never measured and is therefore withdrawn.
 This commit message cannot be rewritten (history is immutable), so the
 correction is recorded here. Anyone quoting the Gold/Silver divergence from
 75f312a should use the observed -57.9 / -69.7 above, NOT -35 / -83.
+
+---
+
+## Oct 8 2026 single-instance API fix
+
+Two `python run.py --api` servers were running at once (PIDs 19088 and 25080),
+which is what produced the duplicate launch pairs in `logs/service.log`
+(`12392/22788`, `4152/18508`, `1352/...`). Root cause: **two watchdogs** were
+supervising the same port - the `IntradaySentimentDashboard` scheduled task and
+a second `dashboard_service.ps1` started manually from `tools/install_autostart.ps1`
+(parent 1668 -> svchost). `Start-Dashboard` had no single-instance guard, so when
+the API died both watchdogs raced to relaunch it and both `Start-Process`ed it.
+
+Fixed in `tools/dashboard_service.ps1`:
+- `logs/dashboard.lock` - an exclusive `CreateNew` lock file. Only one watchdog
+  may launch at a time; the other sees `Test-LockHeld` and defers.
+- `Get-LockOwner` treats a lock whose PID is dead as stale, so a killed watchdog
+  can never block restarts forever.
+- `Stop-Dashboard` removes the lock too.
+- `Stop-Process -Id 22648` removed the duplicate watchdog; `Stop-Process -Id 9296`
+  removed the zombie launcher that `dashboard.pid` pointed at (it had zero TCP
+  sockets - the real server was its child, PID 22576, which owns port 8000).
+
+One watchdog (PID 2384, the scheduled task) and one server (PID 6648) remain.
+Streamlit on 8501 was never touched.
