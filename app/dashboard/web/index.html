@@ -22,6 +22,32 @@
   header h1{font-size:12px;letter-spacing:2px;font-weight:600;margin-bottom:5px}
   .meta{font-size:11px;color:var(--dim);display:flex;gap:15px;flex-wrap:wrap}
   .meta b{color:var(--txt);font-weight:600}
+  /* ---- System Health Status Strip (top header, below the title) ----
+     A horizontal row of small rounded pills, each with a coloured dot
+     indicator. Low-opacity fills + matching borders for a clean dark theme. */
+  .status-strip{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+                font-size:11px;margin-top:2px}
+  .pill{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;
+        border-radius:20px;font-weight:600;letter-spacing:.4px;
+        white-space:nowrap;border:1px solid transparent;color:var(--dim)}
+  .pill .dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+  .pill.live{background:rgba(34,197,94,.10);border-color:rgba(34,197,94,.40);color:#86efac}
+  .pill.live .dot{background:#22c55e;box-shadow:0 0 6px #22c55e}
+  .pill.stopped{background:rgba(239,68,68,.10);border-color:rgba(239,68,68,.40);color:#fca5a5}
+  .pill.stopped .dot{background:#ef4444;box-shadow:0 0 6px #ef4444}
+  .pill.idle{background:rgba(156,163,175,.10);border-color:rgba(156,163,175,.40);color:#d1d5db}
+  .pill.idle .dot{background:#9ca3af}
+  .pill.bull{background:rgba(34,197,94,.10);border-color:rgba(34,197,94,.40);color:#86efac}
+  .pill.bear{background:rgba(239,68,68,.10);border-color:rgba(239,68,68,.40);color:#fca5a5}
+  .status-strip .ts{margin-left:auto;color:var(--dim);font-variant-numeric:tabular-nums}
+  /* Error alert pill - hidden by default, only shown when a status goes red. */
+  .alert-pill{display:none;align-items:center;gap:5px;
+             background:rgba(239,68,68,.18);border:1px solid rgba(239,68,68,.6);
+             color:#fff;padding:4px 11px;border-radius:20px;font-weight:700;
+             font-size:11px;white-space:nowrap;animation:pulse 1.6s infinite ease-in-out}
+  .alert-pill.show{display:inline-flex}
+  .alert-pill .dot{width:7px;height:7px;border-radius:50%;background:#fff}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.55}}
   .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
        background:var(--neu);margin-right:5px;vertical-align:middle}
   .dot.on{background:var(--bull);box-shadow:0 0 6px var(--bull)}
@@ -341,7 +367,15 @@
   <div class="stale-banner hidden" id="staleBanner"></div>
 <header>
   <h1>INTRADAY NEWS SENTIMENT &amp; MARKET IMPACT ENGINE</h1>
-  <div class="meta" id="meta">Loading&hellip;</div>
+  <div class="status-strip" id="statusStrip">
+    <span class="pill live" id="pLlm"><span class="dot"></span><span id="lLlm">LLM: LIVE</span></span>
+    <span class="pill bear" id="pSent"><span class="dot"></span><span id="lSent">Sentiment: BEARISH | Session: ASIA → EUROPE</span></span>
+    <span class="pill live" id="pNews"><span class="dot"></span><span id="lNews">News Feed: LIVE</span></span>
+    <span class="pill live" id="pPipe"><span class="dot"></span><span id="lPipe">Pipeline: RUNNING</span></span>
+    <span class="pill live" id="pDb"><span class="dot"></span><span id="lDb">DB: CONNECTED</span></span>
+    <span class="pill alert-pill" id="pAlert"><span class="dot"></span><span id="lAlert">⚠️ ALERT: LLM Engine Down - Fallback Active</span></span>
+    <span class="ts" id="tsLastUpdated">Last Updated: n/a</span>
+  </div>
 </header>
 <main>
   <div id="prepStrip"></div>
@@ -361,6 +395,28 @@ let ws=null, backoff=1000, DATA=null, activeFilter='ALL';
 /* Feed paging state. total = the whole day (from the API); loaded = how many
    rows are currently in memory across pages fetched so far. */
 let FEED={items:[],total:0,loaded:0,page:60,busy:false};
+  /* ---- System Health Status Strip state ----
+     Placeholder state wired to the backend. These are updated from the
+     /api/dashboard payload (status.*) and /api/health, so the pills reflect
+     real-time engine health. Each has a colour map keyed by state. */
+  let HEALTH={
+    llmStatus:'LIVE',          // LIVE | STOPPED | IDLE
+    globalSentiment:'BEARISH', // BULLISH | BEARISH
+    activeSession:'ASIA → EUROPE',
+    newsFeedStatus:'LIVE',     // LIVE | STOPPED
+    pipelineStatus:'RUNNING',  // RUNNING | STOPPED
+    dbStatus:'CONNECTED',      // CONNECTED | DISCONNECTED
+    systemError:null,          // string | null
+    lastUpdated:''
+  };
+  const LLMMAP={LIVE:'live',STOPPED:'stopped',IDLE:'idle'};
+  const SENTMAP={BULLISH:'bull',BEARISH:'bear'};
+  const STD_MAP={LIVE:'live',STOPPED:'stopped',RUNNING:'live',CONNECTED:'live',DISCONNECTED:'stopped'};
+  function pillClass(key,state){
+    if(key==='llm') return LLMMAP[state]||'idle';
+    if(key==='sent') return SENTMAP[state]||'idle';
+    return STD_MAP[state]||'idle';
+  }
 function esc(s){return String(s==null?'':s)
   .replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function n1(v){return (Math.round((+v||0)*10)/10).toFixed(1);}
@@ -941,20 +997,52 @@ function renderHeader(d){
   }else{
     staleBanner.classList.add('hidden');
   }
-  var box=document.getElementById('meta');
-    '<span><span class="dot '+(st.running?'on':'')+'"></span>'
-    +(st.running?'RUNNING':'IDLE')+'</span>'
-    +'<span>DATE <b>'+esc(d.date)+'</b></span>'
-    +'<span>TIME <b>'+esc(d.current_time)+'</b></span>'
-    +'<span>SESSION <b>'+esc(d.current_session)+'</b></span>'
-    +'<span>REGIME <b>'+esc(d.regime)+'</b></span>'
-    +'<span>MODE <b>'+esc(st.analysis_mode)+'</b></span>'
-    +'<span>ARTICLES <b>'+(st.articles_today||0)+'</b></span>'
-    +'<span>EVENTS <b>'+(st.events_today||0)+'</b></span>'
-    +'<span>SOURCES <b>'+(st.sources_ok||0)+'/'+(st.sources_polled||0)+'</b></span>'
-    +'<span>NEW <b>'+(st.new_news_since_last_update||0)+'</b></span>'
-    +'<span>POLL <b>'+(st.poll_interval_seconds||0)+'s</b></span>'
-    +'<span>UPDATED <b>'+esc(st.last_updated||'n/a')+'</b></span>';
+  /* ---- System Health Status Strip ----
+     Each pill's label and colour come from the HEALTH state map, so the strip
+     is a single source of truth: update HEALTH and every pill re-renders.
+     The error pill appears only when a non-green status is set. */
+  var s=d.status||{};
+  var llm = s.llm_enabled ? (s.llm_status || 'LIVE') : 'STOPPED';
+  HEALTH.llmStatus = llm;
+  HEALTH.globalSentiment = (d.regime==='BEARISH') ? 'BEARISH' : (d.regime==='BULLISH' ? 'BULLISH' : 'BEARISH');
+  HEALTH.activeSession = (d.current_session||'') + ' → ' + (d.next_session||'');
+  HEALTH.newsFeedStatus = (s.sources_ok && s.sources_polled && s.sources_ok < s.sources_polled) ? 'STOPPED' : 'LIVE';
+  HEALTH.pipelineStatus = st.running ? 'RUNNING' : 'STOPPED';
+  HEALTH.dbStatus = s.last_poll_ok ? 'CONNECTED' : 'DISCONNECTED';
+  HEALTH.lastUpdated = st.last_updated || '';
+  /* Any red status => show the error pill with a specific message. */
+  var reds = [];
+  if(HEALTH.llmStatus==='STOPPED') reds.push('LLM Engine Down - Fallback Active');
+  if(HEALTH.newsFeedStatus==='STOPPED') reds.push('News Feed Stopped - No New Articles');
+  if(HEALTH.pipelineStatus==='STOPPED') reds.push('Pipeline Stopped - No Tick Running');
+  if(HEALTH.dbStatus==='DISCONNECTED') reds.push('Database Disconnected');
+  HEALTH.systemError = reds.length ? reds[0] : null;
+
+  var setPill = function(id, state){
+    var el=document.getElementById(id);
+    if(!el) return;
+    el.className='pill '+pillClass(id.replace('p','').toLowerCase(), state);
+  };
+  setPill('pLlm', HEALTH.llmStatus);
+  setPill('pSent', HEALTH.globalSentiment);
+  setPill('pNews', HEALTH.newsFeedStatus);
+  setPill('pPipe', HEALTH.pipelineStatus);
+  setPill('pDb', HEALTH.dbStatus);
+
+  document.getElementById('lLlm').textContent='LLM: '+HEALTH.llmStatus;
+  document.getElementById('lSent').textContent='Sentiment: '+HEALTH.globalSentiment+' | Session: '+HEALTH.activeSession;
+  document.getElementById('lNews').textContent='News Feed: '+HEALTH.newsFeedStatus;
+  document.getElementById('lPipe').textContent='Pipeline: '+HEALTH.pipelineStatus;
+  document.getElementById('lDb').textContent='DB: '+HEALTH.dbStatus;
+  document.getElementById('tsLastUpdated').textContent='Last Updated: '+(HEALTH.lastUpdated||'n/a');
+
+  var alertPill=document.getElementById('pAlert');
+  if(HEALTH.systemError){
+    alertPill.classList.add('show');
+    document.getElementById('lAlert').textContent='⚠️ ALERT: '+HEALTH.systemError;
+  }else{
+    alertPill.classList.remove('show');
+  }
   var dr=d.regime_drivers||[];
   document.getElementById('regime').innerHTML=
     '<div class="regime"><b>MARKET REGIME:</b> '+esc(d.regime)
