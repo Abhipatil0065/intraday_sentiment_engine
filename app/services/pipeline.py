@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import atexit
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import and_, delete, exists, func, or_, select
 
@@ -318,6 +318,22 @@ async def _is_fj_session_report(art: RawArticle) -> bool:
     return classify_fj_session(art.title or "", art.body or "") is not None
 
 
+def _is_fj_session_report_sync(art: RawArticle) -> bool:
+    """Synchronous twin of ``_is_fj_session_report`` for use in the ingest loop.
+
+    ``classify_fj_session`` is pure-Python, so no await is needed; the async
+    wrapper exists only to keep the public surface consistent.
+    """
+    from app.analysis.fj_sessions import (
+        classify_fj_session,
+        is_financial_juice,
+    )
+
+    if not is_financial_juice(art.source):
+        return False
+    return classify_fj_session(art.title or "", art.body or "") is not None
+
+
 def _fj_session_report_is_admissible(published: datetime,
                                     now: datetime | None = None) -> bool:
     """
@@ -353,6 +369,7 @@ async def _ingest_article(art: RawArticle, session, stats: IngestStats,
                           use_llm: bool = True):
     """Apply the TODAY filter, classify, cluster and store one article."""
     published, updated, tz_label = _parse_article_time(art)
+    is_fj = _is_fj_session_report_sync(art)
 
     # --- ROLLING-WINDOW FILTER (improvement item 3) ---
     # Replaces the "same market-timezone calendar date" gate. Admitting news on
@@ -361,20 +378,43 @@ async def _ingest_article(art: RawArticle, session, stats: IngestStats,
     # date carve-out below is no longer needed for ordinary headline flow.
     if published is None:
         stats.rejected += 1
+        if is_fj:
+            log.info("FJ-SESSION REJECT (no published time): %r", art.title[:80])
         return None
     if not within_rolling_window(published) or not within_max_age(published):
         stats.rejected += 1
+        if is_fj:
+            log.info(
+                "FJ-SESSION REJECT (outside window): %r published=%s age_h=%.1f "
+                "rolling=%s max_age=%s",
+                art.title[:80], published,
+                (published - datetime.now(timezone.utc)).total_seconds() / 3600.0,
+                within_rolling_window(published), within_max_age(published),
+            )
         return None
-    if await _is_fj_session_report(art):
+    if is_fj:
         # Session reports still get their own IST-date rule on top, because a
         # US wrap published ~15:35 ET the previous day must be able to appear on
         # the Indian trading date the dashboard renders it under.
         if not _fj_session_report_is_admissible(published):
             stats.rejected += 1
+            log.info(
+                "FJ-SESSION REJECT (not IST-admissible): %r published=%s",
+                art.title[:80], published,
+            )
             return None
+        log.info(
+            "FJ-SESSION ADMITTED: %r guid=%s published=%s",
+            art.title[:80], art.guid, published,
+        )
 
     # --- EVENT DEDUPLICATION (section 16) ---
     dedupe = _dedup.match(art.title, published)
+    if is_fj:
+        log.info(
+            "FJ-SESSION DEDUP: %r -> event_key=%s is_new=%s score=%.2f",
+            art.title[:80], dedupe.event_key, dedupe.is_new_event, dedupe.score,
+        )
 
     row = NewsArticle(
         guid=art.guid,
@@ -1100,6 +1140,11 @@ async def run_once() -> IngestStats:
             llm_calls = 0
             for art in report.articles:
                 if art.guid in existing:
+                    if _is_fj_session_report_sync(art):
+                        log.debug(
+                            "FJ-SESSION DUP (guid already in DB): %r guid=%s",
+                            art.title[:80], art.guid,
+                        )
                     continue
                 # Cap LLM classifications per tick. Once the batch limit is
                 # reached, remaining new articles get deterministic heuristics
@@ -1113,6 +1158,11 @@ async def run_once() -> IngestStats:
                         new_articles.append(row)
                         if use_llm:
                             llm_calls += 1
+                    elif _is_fj_session_report_sync(art):
+                        log.debug(
+                            "FJ-SESSION REJECTED by _ingest_article: %r guid=%s",
+                            art.title[:80], art.guid,
+                        )
                     elif use_llm and settings.has_llm:
                         # Article was rejected (not new) but would have used LLM slot
                         # Don't count this against the batch limit since it's not a new article
@@ -1120,6 +1170,26 @@ async def run_once() -> IngestStats:
                 except Exception as exc:
                     log.exception("Failed to ingest: %s", art.title[:80])
                     stats.errors.append(f"ingest: {type(exc).__name__}: {exc}")
+                    # A flush failure (e.g. UNIQUE constraint on guid) leaves the
+                    # SQLAlchemy session in a "pending rollback" state. Without
+                    # this, EVERY subsequent article in the same tick dies with
+                    # PendingRollbackError and the whole batch is lost.
+                    try:
+                        session.rollback()
+                    except Exception:
+                        pass
+                    # Diagnose why a guid that is clearly in the DB still fails.
+                    if "UNIQUE constraint" in str(exc):
+                        with session_scope() as probe:
+                            from app.models.db_models import NewsArticle as _NA
+                            from sqlalchemy import select as _sel, func as _fn
+                            cnt = probe.scalar(
+                                _fn.count(_NA.id).where(_NA.guid == art.guid))
+                            log.error(
+                                "GUID-COLLISION DIAG: guid=%s in_existing=%s "
+                                "db_count=%s source=%s",
+                                art.guid, art.guid in existing, cnt, art.source,
+                            )
 
             _news_since_update += len(new_articles)
             stats.articles_new = len(new_articles)
