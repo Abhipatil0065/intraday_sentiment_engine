@@ -297,3 +297,224 @@ def test_cluster_signals_respects_time_window():
 
     clustered = cluster_signals(signals, window_hours=0.5)
     assert len(clustered) == 2  # Two separate clusters due to time window
+
+# --------------------------------------------------------------------------
+# Direction-split representative selection (bug fix 2026-10-08)
+# --------------------------------------------------------------------------
+# The old selector ranked cluster members by ``final_weight``, which is
+# 0.0 for every signal at clustering time (it is assigned later by
+# ``_aggregate``), so the survivor was picked by arbitrary tuple order
+# and a cluster whose members disagreed in direction collapsed to one
+# side. These tests pin the fix: clusters split by direction, and the
+# representative is the member with the highest ``_signal_weight``.
+#
+# NOTE: these tests stamp headlines at the REAL wall clock (not the
+# fixed ``NOW`` above) because ``cluster_signals`` selects the
+# representative with its own wall-clock "now" (``_scoring_now``).
+# Fresh timestamps keep that internal selection meaningful.
+
+def test_hawkish_and_dovish_same_event_both_survive():
+    """A hawkish and a dovish headline about ONE event are two readings.
+
+    The titles differ by a single word ("hike" vs "cut"), so the
+    scoring-time similarity puts them in ONE title cluster inside the
+    30-minute window: jaccard 7/9 = 0.778 plus 0.15 for the shared
+    "fed" entity = 0.928 >= 0.72. Before the fix the cluster collapsed
+    to a single signal and one side's vote silently vanished; both
+    readings must survive now.
+    """
+    from datetime import timedelta
+
+    from app.analysis.event_clustering import cluster_signals
+    from app.analysis.sentiment_engine import WeightedSignal
+    from app.models.enums import (
+        Asset, Direction, EconomicImportance, ImpactStrength, NewsCategory,
+    )
+    from app.utils import timeutils as T
+
+    base = T.now_utc().replace(microsecond=0)
+    common = dict(
+        asset=Asset.GOLD,
+        strength=ImpactStrength.HIGH,
+        importance=EconomicImportance.VERY_HIGH,
+        relevance=0.90,
+        persistence=0.90,
+        source_quality="TIER_2_MAJOR",
+        category=NewsCategory.CENTRAL_BANK,
+    )
+    hawkish = WeightedSignal(
+        title="Fed minutes show policymakers back another rate hike",
+        direction=Direction.BEARISH,
+        published_at=base,
+        **common,
+    )
+    dovish = WeightedSignal(
+        title="Fed minutes show policymakers back another rate cut",
+        direction=Direction.BULLISH,
+        published_at=base + timedelta(minutes=10),
+        **common,
+    )
+
+    clustered = cluster_signals([hawkish, dovish], window_hours=0.5)
+
+    assert len(clustered) == 2, (
+        f"hawkish and dovish readings collapsed to {len(clustered)} signal(s)"
+    )
+    assert {s.direction for s in clustered} == {
+        Direction.BEARISH, Direction.BULLISH}
+    titles = {s.title for s in clustered}
+    assert "Fed minutes show policymakers back another rate hike" in titles
+    assert "Fed minutes show policymakers back another rate cut" in titles
+
+
+def test_eight_same_direction_duplicates_score_like_one():
+    """8 same-direction duplicates score the same as 1, boost alone excepted.
+
+    The 8 articles span the 4 source tiers, so the cluster counts 4
+    independent sources and its weight is multiplied by
+    corroboration_multiplier(4) = 1.1562 (diminishing returns, capped
+    at 1.30) - and by nothing else. Every duplicate points the same
+    way, so the signed score (a ratio of the two sides) is unchanged:
+    score_8 == score_1 exactly (tolerance 0.0). The bear-side TOTAL may
+    differ only by that capped boost: tolerance abs=1e-6.
+    """
+    from datetime import timedelta
+
+    from app.analysis.event_clustering import (
+        cluster_signals, corroboration_multiplier,
+    )
+    from app.analysis.sentiment_engine import (
+        WeightedSignal, _aggregate, clear_bias_history, compute,
+    )
+    from app.models.enums import (
+        Asset, Direction, EconomicImportance, ImpactStrength, NewsCategory,
+    )
+    from app.utils import timeutils as T
+
+    base = T.now_utc().replace(microsecond=0)
+    now = base
+    tiers = [
+        "TIER_1_OFFICIAL", "TIER_2_MAJOR", "TIER_2_MAJOR",
+        "TIER_2_MAJOR", "TIER_2_MAJOR", "TIER_3_CRYPTO",
+        "TIER_4_OTHER", "TIER_4_OTHER",
+    ]
+    duplicates = [
+        WeightedSignal(
+            asset=Asset.GOLD,
+            title=(f"Fed minutes show policymakers see another rate "
+                   f"hike by year end {i}"),
+            direction=Direction.BEARISH,
+            strength=ImpactStrength.VERY_HIGH,
+            importance=EconomicImportance.VERY_HIGH,
+            published_at=base + timedelta(minutes=i),
+            relevance=0.80,
+            persistence=0.90,
+            source_quality=tier,
+            category=NewsCategory.CENTRAL_BANK,
+        )
+        for i, tier in enumerate(tiers)
+    ]
+    # The cluster representative is the TIER_1_OFFICIAL member (quality
+    # multiplier 1.00 and TIER_1 event tier - the heaviest member), so
+    # the single-article baseline is that same article on its own.
+    single = duplicates[0]
+
+    clustered = cluster_signals(list(duplicates), window_hours=0.5)
+    assert len(clustered) == 1
+
+    clear_bias_history()
+    agg_one = _aggregate([single], now)
+    res_one = compute([single], Asset.GOLD, now=now)
+    clear_bias_history()
+    agg_eight = _aggregate(clustered, now)
+    res_eight = compute(clustered, Asset.GOLD, now=now)
+
+    # Same direction on every member: the score is a ratio of the two
+    # sides, so scaling the bear side by the boost cannot move it.
+    assert res_eight.score == res_one.score
+    assert res_eight.score == -100.0
+
+    # The bear total grows by exactly the capped corroboration boost
+    # for 4 independent sources (1.1562) and by nothing else.
+    expected_boost = corroboration_multiplier(4)
+    assert clustered[0].corroboration == pytest.approx(expected_boost, abs=1e-9)
+    assert agg_eight["bear"] == pytest.approx(
+        agg_one["bear"] * expected_boost, abs=1e-6)
+    assert agg_eight["bull"] == agg_one["bull"] == 0.0
+
+
+def test_representative_is_the_highest_signal_weight_member():
+    """The surviving signal is the member with the highest _signal_weight.
+
+    Three same-direction near-duplicates (identical token sets after
+    number stripping) with deliberately different weights: the
+    TIER_1_OFFICIAL / high-relevance article outweighs the TIER_4 one
+    ~10x and the TIER_3 one ~40x. The heaviest article is also the
+    NEWEST, so picking the first (or any positional) member would
+    survive a different headline. The cluster must keep the heaviest.
+    """
+    from datetime import timedelta
+
+    from app.analysis.event_clustering import cluster_signals
+    from app.analysis.sentiment_engine import WeightedSignal, _signal_weight
+    from app.models.enums import (
+        Asset, Direction, EconomicImportance, ImpactStrength, NewsCategory,
+    )
+    from app.utils import timeutils as T
+
+    base = T.now_utc().replace(microsecond=0)
+    now = base
+
+    light = WeightedSignal(
+        asset=Asset.GOLD,
+        title="Fed minutes show policymakers back another rate hike in 2027",
+        direction=Direction.BEARISH,
+        strength=ImpactStrength.HIGH,
+        importance=EconomicImportance.HIGH,
+        published_at=base,
+        relevance=0.40,
+        persistence=0.50,
+        source_quality="TIER_4_OTHER",
+        category=NewsCategory.CENTRAL_BANK,
+    )
+    lighter = WeightedSignal(
+        asset=Asset.GOLD,
+        title="Fed minutes show policymakers back another rate hike in 2028",
+        direction=Direction.BEARISH,
+        strength=ImpactStrength.HIGH,
+        importance=EconomicImportance.LOW,
+        published_at=base + timedelta(minutes=5),
+        relevance=0.30,
+        persistence=0.50,
+        source_quality="TIER_3_CRYPTO",
+        category=NewsCategory.CENTRAL_BANK,
+    )
+    heavy = WeightedSignal(
+        asset=Asset.GOLD,
+        title="Fed minutes show policymakers back another rate hike in 2026",
+        direction=Direction.BEARISH,
+        strength=ImpactStrength.HIGH,
+        importance=EconomicImportance.VERY_HIGH,
+        published_at=base + timedelta(minutes=10),
+        relevance=0.95,
+        persistence=0.90,
+        source_quality="TIER_1_OFFICIAL",
+        category=NewsCategory.CENTRAL_BANK,
+    )
+
+    # Sanity: the weight ordering is unambiguous at the scoring moment.
+    members = (light, lighter, heavy)
+    weights = {s.title: _signal_weight(s, now) for s in members}
+    assert weights[heavy.title] > weights[light.title] > weights[lighter.title]
+
+    # Deliberately unordered input: selection must not depend on it.
+    clustered = cluster_signals([light, heavy, lighter], window_hours=0.5)
+
+    assert len(clustered) == 1
+    expected = max(members, key=lambda s: _signal_weight(s, now))
+    assert clustered[0].title == expected.title == heavy.title
+    # Guards against positional (first-member) selection ...
+    assert clustered[0].title != light.title
+    # ... and against picking the lowest-weight member, which the old
+    # final_weight-based selector could do arbitrarily.
+    assert clustered[0].title != lighter.title
