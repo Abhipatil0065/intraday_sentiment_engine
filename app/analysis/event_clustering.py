@@ -54,6 +54,41 @@ _ENTITIES = {
     "tariff", "sanctions", "recession", "inflation", "yields",
 }
 
+# Specific event anchors for the second clustering rule (2026-10-08).
+# A central-bank family maps its named spellings onto one family key;
+# every name here is already a macro entity in _ENTITIES above, so
+# the minutes/decision anchors reuse the existing entity detection.
+_CENTRAL_BANK_FAMILIES = (
+    ("fed", frozenset({"fed", "fomc", "powell"})),
+    ("ecb", frozenset({"ecb", "lagarde"})),
+    ("boe", frozenset({"boe"})),
+    ("boj", frozenset({"boj"})),
+    ("pboc", frozenset({"pboc"})),
+)
+
+# Named statistical releases, most specific first. A headline that
+# covers several releases ("NFP ... unemployment ...") anchors on
+# its PRIMARY release only - the first hit in this order - so a
+# payrolls headline and an unemployment headline never share a key.
+_RELEASE_EVENTS = (
+    ("nfp", frozenset({"nonfarm", "payrolls", "payroll", "nfp"})),
+    ("unemployment", frozenset({"unemployment", "jobless"})),
+    ("cpi", frozenset({"cpi"})),
+    ("ppi", frozenset({"ppi"})),
+    ("pce", frozenset({"pce"})),
+    ("gdp", frozenset({"gdp"})),
+    ("pmi", frozenset({"pmi"})),
+    ("ism", frozenset({"ism"})),
+)
+
+# Words that turn a central-bank headline into a DECISION event.
+# Deliberately narrow: commentary, speeches and forecasts carry no
+# decision word and therefore anchor on nothing.
+_CB_DECISION_WORDS = frozenset({
+    "decision", "decides", "holds", "hold", "hike", "hikes",
+    "hiked", "cut", "cuts", "raise", "raises", "raised",
+})
+
 _NUM_RE = re.compile(r"\d+(?:[.,]\d+)?%?")
 _PUNCT_RE = re.compile(r"[^\w\s]")
 _WORD_RE = re.compile(r"[a-z0-9]+")
@@ -70,6 +105,37 @@ def extract_entities(title: str) -> set[str]:
     """Macro entities named in the headline - the real event fingerprint."""
     text = _PUNCT_RE.sub(" ", (title or "").lower())
     return set(_WORD_RE.findall(text)) & _ENTITIES
+
+
+def event_anchor(title: str) -> str | None:
+    """
+    The SPECIFIC event a headline is about, or None.
+
+    One key per headline, chosen by priority:
+      1. "<bank>_minutes"  - the minutes document AND the bank
+         ("Fed minutes show ...", "FOMC Minutes: ...");
+      2. "release:<name>"  - a named statistical release (NFP,
+         CPI, PPI, PCE, GDP, PMI, ISM, unemployment);
+      3. "<bank>_decision" - the bank AND a decision word
+         ("ECB holds rates", "Fed cuts rates").
+
+    Returns None for everything else. Loose topics ("gold",
+    "tariff", "inflation") never anchor on their own, so two
+    unrelated headlines can never merge through this key.
+    """
+    text = _PUNCT_RE.sub(" ", (title or "").lower())
+    words = frozenset(_WORD_RE.findall(text))
+    if "minutes" in words:
+        for family, names in _CENTRAL_BANK_FAMILIES:
+            if names & extract_entities(title):
+                return f"{family}_minutes"
+    for release, triggers in _RELEASE_EVENTS:
+        if triggers & words:
+            return f"release:{release}"
+    for family, names in _CENTRAL_BANK_FAMILIES:
+        if names & words and (words & _CB_DECISION_WORDS):
+            return f"{family}_decision"
+    return None
 
 
 def corroboration_multiplier(independent_sources: int) -> float:
@@ -169,7 +235,22 @@ def cluster_signals(signals: list, window_hours: float = 0.5) -> list:
                     if shared:
                         entity_boost = 0.15 * shared
                 similarity = min(1.0, jaccard + entity_boost)
-                if similarity >= 0.72:  # Use same threshold as dedup
+                # Rule 2 (event-anchored join, 2026-10-08): the SAME
+                # specific event is ONE cluster even when the outlets
+                # word it too differently for the 0.72 title rule to
+                # fire. All three conditions must hold:
+                #   * same direction - a hawkish and a dovish reading
+                #     of one event are two readings, not one event;
+                #   * inside the time window (checked above, exactly
+                #     like the title rule - the anchor never extends
+                #     the window);
+                #   * the same specific event key from event_anchor().
+                event_matched = False
+                if s.direction == rep.direction:
+                    s_key = event_anchor(s.title)
+                    if s_key is not None and s_key == event_anchor(rep.title):
+                        event_matched = True
+                if similarity >= 0.72 or event_matched:  # 0.72 = dedup threshold
                     cluster.append(s)
                     matched = True
                     break

@@ -214,7 +214,7 @@ def test_cluster_signals_collapses_duplicates():
     # Should have corroboration boost for multiple independent sources
     # corroboration_multiplier(8) = 1.0 + 0.10 * sum(1/log2(i+1) for i=2..8)
     # = 1.0 + 0.10 * (1/log2(3) + 1/log2(4) + ... + 1/log2(9))
-    # ≈ 1.0 + 0.10 * 2.5 = 1.25 (capped at 1.30)
+    # ??? 1.0 + 0.10 * 2.5 = 1.25 (capped at 1.30)
     assert clustered[0].corroboration >= 1.15  # At least some boost
     assert clustered[0].corroboration <= 1.30  # Capped
 
@@ -518,3 +518,249 @@ def test_representative_is_the_highest_signal_weight_member():
     # ... and against picking the lowest-weight member, which the old
     # final_weight-based selector could do arbitrarily.
     assert clustered[0].title != lighter.title
+
+
+# --------------------------------------------------------------------------
+# Event-anchored clustering (second rule, 2026-10-08)
+# --------------------------------------------------------------------------
+# Rule 2 joins two signals when ALL of these hold:
+#   * the same direction,
+#   * inside the 30-minute window (the same window as the title rule -
+#     the anchor never extends it),
+#   * the same specific event key from event_anchor() (Fed/FOMC
+#     minutes, a named release such as NFP/CPI, or a central-bank
+#     decision).
+# The 0.72 title-similarity rule is unchanged and still fires first.
+
+from app.models.enums import Direction  # module-level: used by the
+# real-headline fixture below.
+
+# The 7 real 2026-10-07 Fed/FOMC-minutes signals from the
+# 17:30-19:30 UTC replay (exact titles, timestamps and XAUUSD
+# directions as stored in the database).
+FED_MINUTES_SET = [
+    ("US Dollar Index Price Forecast: 101.80 remains key support zone "
+     "ahead of FOMC minutes - FXStreet",
+     "2026-10-07T18:00:00", Direction.MIXED),
+    ("Fed's minutes show no appetite for a series of interest-rate hikes",
+     "2026-10-07T18:10:13", Direction.BEARISH),
+    ("Fed officials see another hike coming, but no sign as to when, "
+     "minutes show", "2026-10-07T18:42:36", Direction.BEARISH),
+    ("FOMC minutes show the Fed ready to hike again in 2026 as AI "
+     "buildout replaces tariffs as main driver of core prices - Kitco",
+     "2026-10-07T18:45:37", Direction.MIXED),
+    ("Fed policymakers divided over rate-hike logic in September, "
+     "minutes show - Kitco", "2026-10-07T18:54:52", Direction.BEARISH),
+    ("Fed Minutes: Officials saw inflation risks worsening before "
+     "September hike - FXStreet", "2026-10-07T18:58:01", Direction.MIXED),
+    ("Gold slides below $4,100 as FOMC Minutes signal further Fed "
+     "hikes - FXStreet", "2026-10-07T19:29:05", Direction.BEARISH),
+]
+
+
+def _mk_signal(title, published_iso, direction):
+    """A weighted signal with uniform, realistic scoring fields."""
+    from app.analysis.sentiment_engine import WeightedSignal
+    from app.models.enums import (
+        Asset, EconomicImportance, ImpactStrength, NewsCategory,
+    )
+    return WeightedSignal(
+        asset=Asset.GOLD,
+        title=title,
+        direction=direction,
+        strength=ImpactStrength.HIGH,
+        importance=EconomicImportance.VERY_HIGH,
+        published_at=datetime.fromisoformat(published_iso),
+        relevance=0.90,
+        persistence=0.90,
+        source_quality="TIER_2_MAJOR",
+        category=NewsCategory.CENTRAL_BANK,
+    )
+
+
+def test_event_anchor_is_specific_and_conservative():
+    from app.analysis.event_clustering import event_anchor
+
+    assert (event_anchor("Fed minutes show policymakers back "
+                         "another rate hike") == "fed_minutes")
+    assert (event_anchor("FOMC Minutes: Officials saw inflation "
+                         "risks worsening") == "fed_minutes")
+    assert (event_anchor("US Nonfarm Payrolls Rise 250K in September")
+            == "release:nfp")
+    assert (event_anchor("Unemployment Rate Falls to 3.8 Percent")
+            == "release:unemployment")
+    assert (event_anchor("US CPI Rises 0.3 Percent in September")
+            == "release:cpi")
+    assert event_anchor("Fed holds rates steady") == "fed_decision"
+    assert event_anchor("ECB holds rates steady") == "ecb_decision"
+    # Loose topics never anchor on their own - only specific events.
+    assert event_anchor("Gold slides on profit taking") is None
+    assert event_anchor("China factory output beats forecasts") is None
+    assert (event_anchor("BOJ: many regions reported consumption "
+                         "stayed resilient") is None)
+    # A headline covering several releases anchors on its PRIMARY
+    # release only (priority order), so it can never bridge a pure
+    # payrolls headline to a pure unemployment headline.
+    assert (event_anchor("Nonfarm Payrolls Rise as Unemployment "
+                         "Holds at 4.1 Percent") == "release:nfp")
+
+
+def test_real_fed_minutes_headlines_collapse_by_event():
+    """(a) The 7 real Oct-7 Fed-minutes signals: 7 singletons -> 5.
+
+    The event-anchored rule merges exactly the two pairs that share
+    direction + event key + the 30-minute window:
+      * 18:42:36 + 18:54:52 (both BEARISH, gap 12m16s, title
+        similarity 0.40 - far below 0.72)
+      * 18:45:37 + 18:58:01 (both MIXED, gap 12m24s, title
+        similarity 0.28)
+
+    NOT VERIFIED against a 1-2 cluster outcome: the seven headlines
+    span 89 minutes and every remaining same-direction bridge is
+    outside the 30-minute window - 18:10:13->18:42:36 is 32m23s,
+    18:54:52->19:29:05 is 34m13s, 18:00:00->18:45:37 is 45m37s -
+    and 18:58:01->19:29:05 (31m04s) also disagrees in direction.
+    Collapsing this set to 1-2 clusters needs a ~46-minute event
+    window; that is a threshold decision and was NOT made here.
+    """
+    from app.analysis.event_clustering import cluster_signals
+
+    signals = [_mk_signal(t, ts, d) for t, ts, d in FED_MINUTES_SET]
+    clustered = cluster_signals(signals, window_hours=0.5)
+
+    assert len(clustered) == 5
+
+    survivors = {s.title for s in clustered}
+    # The three headlines with no same-direction neighbour inside
+    # 30 minutes always survive untouched.
+    for idx in (0, 1, 6):
+        assert FED_MINUTES_SET[idx][0] in survivors
+    # Each merged pair contributes exactly ONE representative.
+    pair_bearish = {FED_MINUTES_SET[2][0], FED_MINUTES_SET[4][0]}
+    pair_mixed = {FED_MINUTES_SET[3][0], FED_MINUTES_SET[5][0]}
+    assert len(survivors & pair_bearish) == 1
+    assert len(survivors & pair_mixed) == 1
+    assert len(survivors) == 5
+
+    # The two merges are legal under all three rule conditions ...
+    from app.analysis.event_clustering import event_anchor
+    for i, j in ((2, 4), (3, 5)):
+        title_i, ts_i, dir_i = FED_MINUTES_SET[i]
+        title_j, ts_j, dir_j = FED_MINUTES_SET[j]
+        assert dir_i == dir_j
+        assert event_anchor(title_i) == event_anchor(title_j) == "fed_minutes"
+        gap = abs((datetime.fromisoformat(ts_j)
+                   - datetime.fromisoformat(ts_i)).total_seconds())
+        assert gap <= 1800
+    # ... and the bridges that stayed separate are all outside it.
+    for i, j in ((1, 2), (4, 6), (0, 3), (5, 6)):
+        ts_i = FED_MINUTES_SET[i][1]
+        ts_j = FED_MINUTES_SET[j][1]
+        gap = abs((datetime.fromisoformat(ts_j)
+                   - datetime.fromisoformat(ts_i)).total_seconds())
+        assert gap > 1800
+
+
+def test_nfp_and_unemployment_headlines_do_not_merge():
+    """(b) NFP and the unemployment rate are different releases.
+
+    Both point BEARISH five minutes apart, so only the event key
+    keeps them apart: release:nfp vs release:unemployment. Title
+    similarity is 0 (no shared content tokens, no shared entities).
+    """
+    from app.analysis.event_clustering import cluster_signals, event_anchor
+
+    nfp = _mk_signal("US Nonfarm Payrolls Rise 250K in September",
+                     "2026-10-07T12:30:00", Direction.BEARISH)
+    unemployment = _mk_signal("Unemployment Rate Falls to 3.8 Percent",
+                              "2026-10-07T12:35:00", Direction.BEARISH)
+    assert event_anchor(nfp.title) == "release:nfp"
+    assert event_anchor(unemployment.title) == "release:unemployment"
+
+    clustered = cluster_signals([nfp, unemployment], window_hours=0.5)
+    assert len(clustered) == 2
+
+
+def test_same_release_different_wording_merges():
+    """Two differently worded NFP headlines are ONE release event.
+
+    Title similarity is only 0.63 (jaccard 2/6 + 0.30 for the two
+    shared entities), so the 0.72 rule does NOT fire - the event
+    anchor does the merge.
+    """
+    from app.analysis.event_clustering import cluster_signals
+
+    a = _mk_signal("US Nonfarm Payrolls Rise 250K in September",
+                   "2026-10-07T12:30:00", Direction.BEARISH)
+    b = _mk_signal("Nonfarm payrolls top forecasts at 250K",
+                   "2026-10-07T12:38:00", Direction.BEARISH)
+    clustered = cluster_signals([a, b], window_hours=0.5)
+    assert len(clustered) == 1
+
+
+def test_event_rule_keeps_hawkish_and_dovish_minutes_apart():
+    """(c) Hawkish and dovish minutes readings are two readings.
+
+    Both carry the fed_minutes anchor, and their title similarity
+    (jaccard 4/12 = 0.333 + 0.15 shared "fed" = 0.483) is below
+    0.72, so ONLY the event rule could join them - and it must not,
+    because the rule requires the same direction.
+    """
+    from app.analysis.event_clustering import cluster_signals, event_anchor
+
+    hawkish = _mk_signal("Fed minutes show policymakers back "
+                         "another rate hike",
+                         "2026-10-07T18:42:00", Direction.BEARISH)
+    dovish = _mk_signal("Fed minutes reveal policymakers leaned "
+                        "against rate cut",
+                        "2026-10-07T18:50:00", Direction.BULLISH)
+    assert (event_anchor(hawkish.title)
+            == event_anchor(dovish.title) == "fed_minutes")
+
+    clustered = cluster_signals([hawkish, dovish], window_hours=0.5)
+    assert len(clustered) == 2
+    assert {s.direction for s in clustered} == {
+        Direction.BEARISH, Direction.BULLISH}
+
+
+def test_same_event_over_30_minutes_apart_stays_separate():
+    """(d) The event anchor never extends the 30-minute window."""
+    from app.analysis.event_clustering import cluster_signals
+
+    a = _mk_signal("Fed minutes show policymakers back "
+                   "another rate hike",
+                   "2026-10-07T18:42:00", Direction.BEARISH)
+    b = _mk_signal("Fed minutes show policymakers back "
+                   "another rate hike",
+                   "2026-10-07T19:13:00", Direction.BEARISH)  # +31 min
+    clustered = cluster_signals([a, b], window_hours=0.5)
+    assert len(clustered) == 2
+
+
+def test_same_event_exactly_30_minutes_apart_merges():
+    """The window boundary is inclusive: 30:00 exactly is inside."""
+    from app.analysis.event_clustering import cluster_signals
+
+    a = _mk_signal("Fed minutes show policymakers back "
+                   "another rate hike",
+                   "2026-10-07T18:42:00", Direction.BEARISH)
+    b = _mk_signal("Fed minutes show policymakers back "
+                   "another rate hike",
+                   "2026-10-07T19:12:00", Direction.BEARISH)  # +30:00
+    clustered = cluster_signals([a, b], window_hours=0.5)
+    assert len(clustered) == 1
+
+
+def test_different_event_keys_do_not_merge():
+    """A Fed DECISION and Fed MINUTES are different events."""
+    from app.analysis.event_clustering import cluster_signals, event_anchor
+
+    decision = _mk_signal("Fed holds rates steady",
+                          "2026-10-07T14:00:00", Direction.BEARISH)
+    minutes = _mk_signal("Fed minutes show no appetite for hikes",
+                         "2026-10-07T14:05:00", Direction.BEARISH)
+    assert event_anchor(decision.title) == "fed_decision"
+    assert event_anchor(minutes.title) == "fed_minutes"
+
+    clustered = cluster_signals([decision, minutes], window_hours=0.5)
+    assert len(clustered) == 2
