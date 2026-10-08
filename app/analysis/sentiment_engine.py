@@ -60,6 +60,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 
+from app.config import settings
 from app.logging_conf import get_logger
 from app.models.enums import (
     Asset,
@@ -330,6 +331,10 @@ class SentimentResult:
     # The pre-clamp net score, for logging/audit only: `score` is what the
     # payload shows, so a tie-break can never contradict its own badge.
     raw_score: float = 0.0
+    # Dampened score for display/cue strength. Computed as
+    # raw * total_weight / (total_weight + k). Raw score is used for
+    # bias labels, flip margin and stability-hold logic.
+    damped_score: float = 0.0
     confidence: float = 0.0
     bias: Bias = Bias.BULLISH
     mode: str = "heuristic"
@@ -522,6 +527,27 @@ def _score_from(bull: float, bear: float) -> float:
     return round(100.0 * (bull - bear) / total, 1)
 
 
+def _damped_score(raw_score: float, total_weight: float) -> float:
+    """
+    Apply dampening to the raw score based on total evidence weight.
+
+    Formula: damped = raw * total_weight / (total_weight + k)
+    
+    When total_weight is 0, returns 0.
+    When k=0, returns raw (no dampening).
+    As total_weight increases, damped approaches raw.
+    
+    The raw score is preserved for bias labels, flip margin and stability-hold
+    logic. The damped score is for display and cue strength only.
+    """
+    k = getattr(settings, "score_damping_k", 0.5)
+    if total_weight <= 0:
+        return 0.0
+    if k <= 0:
+        return raw_score
+    return round(raw_score * total_weight / (total_weight + k), 1)
+
+
 def _confidence_from(bull: float, bear: float, directionless: float,
                      used: int) -> float:
     """
@@ -703,7 +729,7 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
             asset=asset, score=0.0, confidence=0.0, bias=bias,
             mode=mode, contributing_articles=0, contributing_clusters=0,
             event_risk=event_risk, event_risk_note=event_risk_note,
-            stale=True, note=note,
+            stale=True, note=note, damped_score=0.0,
         )
 
     agg = _aggregate(relevant, now)
@@ -712,6 +738,9 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
 
     score = _score_from(bull, bear)
     confidence = _confidence_from(bull, bear, agg["directionless"], agg["used"])
+
+    # Total directional weight for dampening
+    total_weight = bull + bear
 
     # BINARY BIAS: label = sign of the net news score. Inside EPS the sign is
     # not trustworthy, so the heaviest, newest directional signal breaks the
@@ -748,6 +777,9 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
             note = ""
         remember_bias(key, final_bias)
 
+    # Dampened score for display/cue strength (raw used for bias/flip/stability)
+    damped = _damped_score(raw, total_weight)
+
     # Drivers are reported on the side the CURRENT SIGNALS point to (computed_bias),
     # not the held bias. This ensures drivers reflect what the news is saying now.
     # The bull_drivers/bear_drivers always show both sides for the dashboard.
@@ -771,6 +803,7 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
         asset=asset,
         score=score,
         raw_score=raw,
+        damped_score=damped,
         confidence=confidence,
         bias=final_bias,
         mode=mode,

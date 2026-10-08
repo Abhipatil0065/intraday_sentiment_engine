@@ -169,6 +169,9 @@ class Settings(BaseSettings):
     bias_min_abs_score: float = 12.0
     bias_min_confidence: float = 0.30
     bias_score_scale: float = 100.0
+    # Dampening factor for display/cue strength. damped = raw * total_weight / (total_weight + k).
+    # k=0 disables dampening (damped = raw). Default 0.5.
+    score_damping_k: float = Field(default=0.5, validation_alias="SCORE_DAMPING_K")
 
     # ---------------- text quality (item 5) ----------------
     # Token distance within which a subject and verb are treated as related.

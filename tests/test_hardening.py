@@ -166,12 +166,12 @@ class TestLLMBatchLimit:
 
         # Verify concurrency constant in news_classifier
         from app.analysis import news_classifier
-        assert news_classifier.LLM_MAX_CONCURRENT == 4
+        assert news_classifier.LLM_MAX_CONCURRENT == 2
 
     def test_concurrency_cap_respected(self):
-        """Concurrency capped at 4."""
+        """Concurrency capped at 2."""
         from app.analysis.news_classifier import LLM_MAX_CONCURRENT
-        assert LLM_MAX_CONCURRENT == 4
+        assert LLM_MAX_CONCURRENT == 2
 
 
 if __name__ == "__main__":

@@ -769,6 +769,7 @@ def _recompute_sentiment(session, stats: IngestStats):
                     delta_60m=result.delta_60m,
                     event_risk=result.event_risk,
                     event_risk_note=result.event_risk_note,
+                    damped_score=result.damped_score,
                     drivers=[{"title": d.title, "contribution": d.contribution,
                               "direction": d.direction, "weight": d.weight}
                              for d in result.drivers],

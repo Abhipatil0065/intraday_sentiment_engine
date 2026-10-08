@@ -225,6 +225,7 @@ def _block(session, asset: str, scope: str) -> dict:
         # consumer read these fields. "display" is added alongside them for the
         # dashboard's own use and is never written back.
         "score": snap.score,
+        "damped_score": snap.damped_score,
         "confidence": snap.confidence,
         "bias": snap.bias,
         "display": to_display(snap.score, snap.bias),

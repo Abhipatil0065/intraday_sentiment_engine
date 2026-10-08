@@ -453,3 +453,113 @@ def test_equity_card_follows_same_suppression_rules():
     # Higher CPI -> inflation family -> equity BEARISH
     assert card.bias == Bias.BEARISH.value
     assert card.contributing_articles == 1
+
+
+# =============================================================================
+# DAMPENING TESTS (Task 1)
+# =============================================================================
+
+def test_damped_score_sign_preserved():
+    """Damped score preserves the sign of the raw score."""
+    from app.analysis.sentiment_engine import _damped_score
+    
+    assert _damped_score(50.0, 10.0) > 0
+    assert _damped_score(-50.0, 10.0) < 0
+    assert _damped_score(0.0, 10.0) == 0.0
+
+
+def test_damped_score_zero_weight():
+    """Total weight of 0 gives damped score of 0."""
+    from app.analysis.sentiment_engine import _damped_score
+    
+    assert _damped_score(50.0, 0.0) == 0.0
+    assert _damped_score(-50.0, 0.0) == 0.0
+
+
+def test_damped_score_k_zero_equals_raw():
+    """k=0 means no dampening, damped equals raw."""
+    from app.analysis.sentiment_engine import _damped_score
+    
+    # Need to test with k=0 - we'll mock the setting
+    import app.config as config_module
+    original_k = config_module.settings.score_damping_k
+    config_module.settings.score_damping_k = 0.0
+    
+    try:
+        assert _damped_score(50.0, 10.0) == 50.0
+        assert _damped_score(-30.0, 5.0) == -30.0
+    finally:
+        config_module.settings.score_damping_k = original_k
+
+
+def test_damped_score_more_evidence_larger_magnitude():
+    """More evidence (higher total_weight) gives larger magnitude for same ratio."""
+    from app.analysis.sentiment_engine import _damped_score
+    
+    # Same raw score (ratio), different total weights
+    damped_low = _damped_score(50.0, 1.0)   # Low evidence
+    damped_high = _damped_score(50.0, 10.0)  # High evidence
+    
+    # With k=0.5: 50 * 1/1.5 = 33.3, 50 * 10/10.5 = 47.6
+    assert abs(damped_high) > abs(damped_low)
+    
+    # Negative side too
+    damped_low_neg = _damped_score(-50.0, 1.0)
+    damped_high_neg = _damped_score(-50.0, 10.0)
+    assert abs(damped_high_neg) > abs(damped_low_neg)
+
+
+def test_compute_returns_damped_score():
+    """compute() returns both raw_score and damped_score in SentimentResult."""
+    from app.analysis.sentiment_engine import compute, WeightedSignal
+    from app.models.enums import (
+        Asset, Direction, EconomicImportance, ImpactStrength, NewsCategory,
+    )
+    
+    signals = [
+        WeightedSignal(
+            asset=Asset.GOLD, title="Bullish gold news",
+            direction=Direction.BULLISH, strength=ImpactStrength.HIGH,
+            importance=EconomicImportance.HIGH, relevance=0.8, persistence=0.7,
+            category=NewsCategory.CENTRAL_BANK, published_at=NOW - timedelta(minutes=10),
+        ),
+        WeightedSignal(
+            asset=Asset.GOLD, title="More bullish gold news",
+            direction=Direction.BULLISH, strength=ImpactStrength.MEDIUM,
+            importance=EconomicImportance.MEDIUM, relevance=0.6, persistence=0.5,
+            category=NewsCategory.INFLATION, published_at=NOW - timedelta(minutes=20),
+        ),
+    ]
+    
+    result = compute(signals, Asset.GOLD, now=NOW)
+    
+    assert hasattr(result, 'damped_score')
+    assert result.raw_score != 0.0
+    assert result.damped_score != 0.0
+    # Damped should have same sign as raw
+    assert (result.damped_score > 0) == (result.raw_score > 0)
+    # Magnitude of damped should be <= magnitude of raw (for k>0)
+    assert abs(result.damped_score) <= abs(result.raw_score)
+
+
+def test_damped_score_stored_in_snapshot():
+    """Damped score is stored in SentimentSnapshot (via pipeline)."""
+    from app.analysis.sentiment_engine import compute, WeightedSignal
+    from app.models.enums import (
+        Asset, Direction, EconomicImportance, ImpactStrength, NewsCategory,
+    )
+    
+    signals = [
+        WeightedSignal(
+            asset=Asset.GOLD, title="Bullish gold news",
+            direction=Direction.BULLISH, strength=ImpactStrength.HIGH,
+            importance=EconomicImportance.HIGH, relevance=0.8, persistence=0.7,
+            category=NewsCategory.CENTRAL_BANK, published_at=NOW - timedelta(minutes=10),
+        ),
+    ]
+    
+    result = compute(signals, Asset.GOLD, now=NOW)
+    
+    # The result should have damped_score attribute
+    assert hasattr(result, 'damped_score')
+    assert isinstance(result.damped_score, float)

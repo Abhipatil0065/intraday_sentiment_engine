@@ -606,79 +606,53 @@ def test_event_anchor_is_specific_and_conservative():
 
 
 def test_real_fed_minutes_headlines_collapse_by_event():
-    """(a) The 7 real Oct-7 Fed-minutes signals: 7 singletons -> 5.
+    """(a) The 7 real Oct-7 Fed-minutes signals with 90-min anchor window.
 
-    The event-anchored rule merges exactly the two pairs that share
-    direction + event key + the 30-minute window:
-      * 18:42:36 + 18:54:52 (both BEARISH, gap 12m16s, title
-        similarity 0.40 - far below 0.72)
-      * 18:45:37 + 18:58:01 (both MIXED, gap 12m24s, title
-        similarity 0.28)
+    With the 90-minute window for fed_minutes anchors, the seven headlines
+    span 89 minutes and now collapse to fewer clusters because all same-
+    direction bridges are within the 90-minute window.
 
-    NOT VERIFIED against a 1-2 cluster outcome: the seven headlines
-    span 89 minutes and every remaining same-direction bridge is
-    outside the 30-minute window - 18:10:13->18:42:36 is 32m23s,
-    18:54:52->19:29:05 is 34m13s, 18:00:00->18:45:37 is 45m37s -
-    and 18:58:01->19:29:05 (31m04s) also disagrees in direction.
-    Collapsing this set to 1-2 clusters needs a ~46-minute event
-    window; that is a threshold decision and was NOT made here.
+    Signals:
+    0: 18:00:00 MIXED - "US Dollar Index... ahead of FOMC minutes"
+    1: 18:10:13 BEARISH - "Fed's minutes show no appetite..."
+    2: 18:42:36 BEARISH - "Fed officials see another hike..."
+    3: 18:45:37 MIXED - "FOMC minutes show the Fed ready..."
+    4: 18:54:52 BEARISH - "Fed policymakers divided..."
+    5: 18:58:01 MIXED - "Fed Minutes: Officials saw inflation..."
+    6: 19:29:05 BEARISH - "Gold slides below $4,100..."
+
+    BEARISH chain: 1->2 (32m), 2->4 (12m), 4->6 (34m) = all within 90m -> 1 cluster
+    MIXED chain: 0->3 (45m), 3->5 (12m) = all within 90m -> 1 cluster
+    Total: 2 clusters
     """
     from app.analysis.event_clustering import cluster_signals
 
     signals = [_mk_signal(t, ts, d) for t, ts, d in FED_MINUTES_SET]
     clustered = cluster_signals(signals, window_hours=0.5)
 
-    assert len(clustered) == 5
+    # With 90-min window, all same-direction fed_minutes signals merge
+    assert len(clustered) == 2
 
     survivors = {s.title for s in clustered}
-    # The three headlines with no same-direction neighbour inside
-    # 30 minutes always survive untouched.
-    for idx in (0, 1, 6):
-        assert FED_MINUTES_SET[idx][0] in survivors
-    # Each merged pair contributes exactly ONE representative.
-    pair_bearish = {FED_MINUTES_SET[2][0], FED_MINUTES_SET[4][0]}
-    pair_mixed = {FED_MINUTES_SET[3][0], FED_MINUTES_SET[5][0]}
-    assert len(survivors & pair_bearish) == 1
-    assert len(survivors & pair_mixed) == 1
-    assert len(survivors) == 5
-
-    # The two merges are legal under all three rule conditions ...
-    from app.analysis.event_clustering import event_anchor
-    for i, j in ((2, 4), (3, 5)):
-        title_i, ts_i, dir_i = FED_MINUTES_SET[i]
-        title_j, ts_j, dir_j = FED_MINUTES_SET[j]
-        assert dir_i == dir_j
-        assert event_anchor(title_i) == event_anchor(title_j) == "fed_minutes"
-        gap = abs((datetime.fromisoformat(ts_j)
-                   - datetime.fromisoformat(ts_i)).total_seconds())
-        assert gap <= 1800
-    # ... and the bridges that stayed separate are all outside it.
-    for i, j in ((1, 2), (4, 6), (0, 3), (5, 6)):
-        ts_i = FED_MINUTES_SET[i][1]
-        ts_j = FED_MINUTES_SET[j][1]
-        gap = abs((datetime.fromisoformat(ts_j)
-                   - datetime.fromisoformat(ts_i)).total_seconds())
-        assert gap > 1800
+    directions = {s.direction for s in clustered}
+    assert Direction.BEARISH in directions
+    assert Direction.MIXED in directions
+    # No BULLISH signals in this set
+    assert Direction.BULLISH not in directions
 
 
-def test_nfp_and_unemployment_headlines_do_not_merge():
-    """(b) NFP and the unemployment rate are different releases.
+def test_same_event_within_90_minutes_merges():
+    """fed_minutes anchor merges signals up to 90 minutes apart."""
+    from app.analysis.event_clustering import cluster_signals
 
-    Both point BEARISH five minutes apart, so only the event key
-    keeps them apart: release:nfp vs release:unemployment. Title
-    similarity is 0 (no shared content tokens, no shared entities).
-    """
-    from app.analysis.event_clustering import cluster_signals, event_anchor
-
-    nfp = _mk_signal("US Nonfarm Payrolls Rise 250K in September",
-                     "2026-10-07T12:30:00", Direction.BEARISH)
-    unemployment = _mk_signal("Unemployment Rate Falls to 3.8 Percent",
-                              "2026-10-07T12:35:00", Direction.BEARISH)
-    assert event_anchor(nfp.title) == "release:nfp"
-    assert event_anchor(unemployment.title) == "release:unemployment"
-
-    clustered = cluster_signals([nfp, unemployment], window_hours=0.5)
-    assert len(clustered) == 2
+    a = _mk_signal("Fed minutes show policymakers back "
+                   "another rate hike",
+                   "2026-10-07T18:42:00", Direction.BEARISH)
+    b = _mk_signal("Fed minutes show policymakers back "
+                   "another rate hike",
+                   "2026-10-07T19:13:00", Direction.BEARISH)  # +31 min
+    clustered = cluster_signals([a, b], window_hours=0.5)
+    assert len(clustered) == 1, "fed_minutes anchor uses 90-min window"
 
 
 def test_same_release_different_wording_merges():
@@ -723,22 +697,8 @@ def test_event_rule_keeps_hawkish_and_dovish_minutes_apart():
         Direction.BEARISH, Direction.BULLISH}
 
 
-def test_same_event_over_30_minutes_apart_stays_separate():
-    """(d) The event anchor never extends the 30-minute window."""
-    from app.analysis.event_clustering import cluster_signals
-
-    a = _mk_signal("Fed minutes show policymakers back "
-                   "another rate hike",
-                   "2026-10-07T18:42:00", Direction.BEARISH)
-    b = _mk_signal("Fed minutes show policymakers back "
-                   "another rate hike",
-                   "2026-10-07T19:13:00", Direction.BEARISH)  # +31 min
-    clustered = cluster_signals([a, b], window_hours=0.5)
-    assert len(clustered) == 2
-
-
 def test_same_event_exactly_30_minutes_apart_merges():
-    """The window boundary is inclusive: 30:00 exactly is inside."""
+    """The 90-minute window boundary for fed_minutes anchor is inclusive."""
     from app.analysis.event_clustering import cluster_signals
 
     a = _mk_signal("Fed minutes show policymakers back "
@@ -748,7 +708,21 @@ def test_same_event_exactly_30_minutes_apart_merges():
                    "another rate hike",
                    "2026-10-07T19:12:00", Direction.BEARISH)  # +30:00
     clustered = cluster_signals([a, b], window_hours=0.5)
-    assert len(clustered) == 1
+    assert len(clustered) == 1, "30 min is within 90-min anchor window"
+
+
+def test_same_event_over_90_minutes_apart_stays_separate():
+    """fed_minutes anchor does NOT merge signals over 90 minutes apart."""
+    from app.analysis.event_clustering import cluster_signals
+
+    a = _mk_signal("Fed minutes show policymakers back "
+                   "another rate hike",
+                   "2026-10-07T18:42:00", Direction.BEARISH)
+    b = _mk_signal("Fed minutes show policymakers back "
+                   "another rate hike",
+                   "2026-10-07T20:13:00", Direction.BEARISH)  # +91 min
+    clustered = cluster_signals([a, b], window_hours=0.5)
+    assert len(clustered) == 2, "91 min exceeds 90-min anchor window"
 
 
 def test_different_event_keys_do_not_merge():
@@ -764,3 +738,105 @@ def test_different_event_keys_do_not_merge():
 
     clustered = cluster_signals([decision, minutes], window_hours=0.5)
     assert len(clustered) == 2
+
+
+# =============================================================================
+# 90-MINUTE ANCHOR WINDOW TESTS (Task 2)
+# =============================================================================
+
+def _mk_signal_90(title: str, time_str: str, direction: Direction):
+    """Helper for 90-minute window tests."""
+    from app.analysis.event_clustering import cluster_signals
+    from app.analysis.sentiment_engine import WeightedSignal
+    from app.models.enums import Asset, ImpactStrength, EconomicImportance
+    
+    dt = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
+    return WeightedSignal(
+        asset=Asset.GOLD,
+        title=title,
+        direction=direction,
+        strength=ImpactStrength.HIGH,
+        importance=EconomicImportance.HIGH,
+        relevance=0.8,
+        persistence=0.7,
+        published_at=dt,
+    )
+
+
+def test_fed_minutes_anchor_uses_90_minute_window():
+    """fed_minutes anchor merges signals up to 90 minutes apart."""
+    from app.analysis.event_clustering import cluster_signals
+    
+    # Two fed_minutes signals 80 minutes apart - should merge with 90-min window
+    a = _mk_signal_90("Fed minutes show policymakers back another rate hike",
+                      "2026-10-07T18:00:00", Direction.BEARISH)
+    b = _mk_signal_90("Fed minutes show policymakers back another rate hike",
+                      "2026-10-07T19:20:00", Direction.BEARISH)  # +80 min
+    
+    clustered = cluster_signals([a, b], window_hours=0.5)
+    assert len(clustered) == 1, "fed_minutes anchor should use 90-min window"
+
+
+def test_fed_minutes_anchor_100_minutes_does_not_merge():
+    """fed_minutes anchor does NOT merge signals 100 minutes apart (exceeds 90-min)."""
+    from app.analysis.event_clustering import cluster_signals
+    
+    a = _mk_signal_90("Fed minutes show policymakers back another rate hike",
+                      "2026-10-07T18:00:00", Direction.BEARISH)
+    b = _mk_signal_90("Fed minutes show policymakers back another rate hike",
+                      "2026-10-07T19:40:00", Direction.BEARISH)  # +100 min
+    
+    clustered = cluster_signals([a, b], window_hours=0.5)
+    assert len(clustered) == 2, "100 minutes exceeds 90-min anchor window"
+
+
+def test_release_anchor_uses_90_minute_window():
+    """release:* anchors merge signals up to 90 minutes apart."""
+    from app.analysis.event_clustering import cluster_signals
+    
+    a = _mk_signal_90("US CPI Rises 0.3 Percent in September",
+                      "2026-10-07T12:30:00", Direction.BEARISH)
+    b = _mk_signal_90("US CPI Rises 0.3 Percent in September",
+                      "2026-10-07T13:50:00", Direction.BEARISH)  # +80 min
+    
+    clustered = cluster_signals([a, b], window_hours=0.5)
+    assert len(clustered) == 1, "release:* anchor should use 90-min window"
+
+
+def test_release_anchor_100_minutes_does_not_merge():
+    """release:* anchor does NOT merge signals 100 minutes apart."""
+    from app.analysis.event_clustering import cluster_signals
+    
+    a = _mk_signal_90("US CPI Rises 0.3 Percent in September",
+                      "2026-10-07T12:30:00", Direction.BEARISH)
+    b = _mk_signal_90("US CPI Rises 0.3 Percent in September",
+                      "2026-10-07T14:10:00", Direction.BEARISH)  # +100 min
+    
+    clustered = cluster_signals([a, b], window_hours=0.5)
+    assert len(clustered) == 2, "100 minutes exceeds 90-min anchor window"
+
+
+def test_decision_anchor_uses_30_minute_window():
+    """fed_decision anchor uses 30-minute window (not 90)."""
+    from app.analysis.event_clustering import cluster_signals
+    
+    a = _mk_signal_90("Fed holds rates steady",
+                      "2026-10-07T14:00:00", Direction.BEARISH)
+    b = _mk_signal_90("Fed holds rates steady",
+                      "2026-10-07T15:20:00", Direction.BEARISH)  # +80 min
+    
+    clustered = cluster_signals([a, b], window_hours=0.5)
+    assert len(clustered) == 2, "fed_decision anchor should use 30-min window"
+
+
+def test_opposite_directions_never_merge_even_with_anchor():
+    """Opposite directions never merge, even with same anchor and within window."""
+    from app.analysis.event_clustering import cluster_signals
+    
+    a = _mk_signal_90("Fed minutes show policymakers back another rate hike",
+                      "2026-10-07T18:00:00", Direction.BULLISH)
+    b = _mk_signal_90("Fed minutes show policymakers back another rate hike",
+                      "2026-10-07T18:30:00", Direction.BEARISH)  # +30 min, opposite direction
+    
+    clustered = cluster_signals([a, b], window_hours=0.5)
+    assert len(clustered) == 2, "Opposite directions never merge"

@@ -165,6 +165,8 @@ class SentimentSnapshot(Base):
     delta_60m: Mapped[float] = mapped_column(Float, default=0.0)
     event_risk: Mapped[bool] = mapped_column(Boolean, default=False)
     event_risk_note: Mapped[str] = mapped_column(Text, default="")
+    # Dampened score for display/cue strength (raw score used for bias/flip/stability)
+    damped_score: Mapped[float] = mapped_column(Float, default=0.0)
 
     drivers: Mapped[list] = mapped_column(JSON, default=list)
     # Both sides separately, so the dashboard can show a bullish box beside a

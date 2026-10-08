@@ -167,7 +167,8 @@ def cluster_signals(signals: list, window_hours: float = 0.5) -> list:
 
     Args:
         signals: List of WeightedSignal objects
-        window_hours: Time window for clustering (default 0.5 hours = 30 minutes)
+        window_hours: Time window for title-similarity clustering (default 0.5 hours = 30 minutes).
+                      For fed_minutes/*_minutes and release:* anchors, a 90-minute (1.5h) window is used.
 
     Returns:
         List of clustered WeightedSignal objects with updated corroboration
@@ -181,7 +182,9 @@ def cluster_signals(signals: list, window_hours: float = 0.5) -> list:
         by_asset.setdefault(s.asset, []).append(s)
 
     clustered: list[WeightedSignal] = []
-    window = timedelta(hours=window_hours)
+    default_window = timedelta(hours=window_hours)
+    # 90-minute window for minutes and release anchors
+    anchor_window = timedelta(hours=1.5)
 
     for asset_signals in by_asset.values():
         # Sort by published time (handle timezone-aware and naive datetimes)
@@ -216,7 +219,19 @@ def cluster_signals(signals: list, window_hours: float = 0.5) -> list:
                     s_dt = s_dt.replace(tzinfo=timezone.utc)
                 if rep_dt.tzinfo is None:
                     rep_dt = rep_dt.replace(tzinfo=timezone.utc)
-                if abs((s_dt - rep_dt).total_seconds()) > window.total_seconds():
+                time_diff = abs((s_dt - rep_dt).total_seconds())
+
+                # Determine which window to use based on anchor type
+                s_key = event_anchor(s.title)
+                rep_key = event_anchor(rep.title)
+                # Use 90-min window for minutes and release anchors
+                use_anchor_window = False
+                if s_key and rep_key and s_key == rep_key:
+                    if s_key.endswith("_minutes") or s_key.startswith("release:"):
+                        use_anchor_window = True
+                current_window = anchor_window if use_anchor_window else default_window
+
+                if time_diff > current_window.total_seconds():
                     continue
                 # Title similarity check using normalised tokens
                 s_tokens = normalise_tokens(s.title)
@@ -247,8 +262,7 @@ def cluster_signals(signals: list, window_hours: float = 0.5) -> list:
                 #   * the same specific event key from event_anchor().
                 event_matched = False
                 if s.direction == rep.direction:
-                    s_key = event_anchor(s.title)
-                    if s_key is not None and s_key == event_anchor(rep.title):
+                    if s_key is not None and s_key == rep_key:
                         event_matched = True
                 if similarity >= 0.72 or event_matched:  # 0.72 = dedup threshold
                     cluster.append(s)
