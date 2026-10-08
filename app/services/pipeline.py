@@ -392,6 +392,16 @@ async def _ingest_article(art: RawArticle, session, stats: IngestStats,
     )
 
     # --- NLP / LLM ANALYSIS ---
+    # Commit the article row BEFORE contacting the LLM endpoint. A live
+    # SQLite write transaction blocks every other writer (the watchdog's
+    # legacy-snapshot migration on restart included), and a slow or
+    # rate-limited LLM endpoint would hold that lock for minutes.
+    # expire_on_commit=False keeps the ORM object usable; session.merge
+    # re-attaches it for the field updates below.
+    session.add(row)
+    session.flush()
+    session.commit()
+    row = session.merge(row)
     if use_llm:
         analysis, llm_ok, skip_reason = await analyze_article(art.title, art.body)
     else:
@@ -427,7 +437,6 @@ async def _ingest_article(art: RawArticle, session, stats: IngestStats,
     row.analysis_note = analysis.note
     row.llm_used = llm_ok
 
-    session.add(row)
     session.flush()
 
     # --- EVENT CLUSTERING ---

@@ -276,6 +276,10 @@ function Clear-VeryLargeLog {
 # Actions
 # --------------------------------------------------------------------------
 function Start-Dashboard {
+    # A live engine already answering /api/health means the port is owned, so
+    # every watchdog must bail out immediately. This check runs BEFORE the
+    # lock: the lock only serialises launchers, it does not hide a running
+    # server from a second watchdog that skips the health check.
     if (Test-DashboardHealthy -TimeoutSec 2) {
         Write-Log "Dashboard already healthy on http://127.0.0.1:$Port - nothing to do."
         return $true
@@ -297,6 +301,12 @@ function Start-Dashboard {
         return $true
     }
     try {
+        # Re-check after acquiring the lock: the port may have been claimed
+        # by the watchdog that won the race while we were waiting for it.
+        if (Test-DashboardHealthy -TimeoutSec 2) {
+            Write-Log "Dashboard became healthy while waiting for the launch lock - nothing to do."
+            return $true
+        }
         _Start-Dashboard
     } finally {
         Release-Lock

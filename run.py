@@ -213,7 +213,7 @@ def main() -> None:
               f"rejected={stats.rejected} duplicates={stats.duplicates}")
         for e in stats.errors[:10]:
             print("  !", e)
-    elif args.api or True:  # default to the API server
+    elif args.api:            # run the FastAPI serviceserver
         run_api(host, port, args.reload)
 
 

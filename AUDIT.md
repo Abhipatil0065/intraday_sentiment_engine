@@ -162,3 +162,36 @@ Fixed in `tools/dashboard_service.ps1`:
 
 One watchdog (PID 2384, the scheduled task) and one server (PID 6648) remain.
 Streamlit on 8501 was never touched.
+
+## Oct 8 2026 - single-instance API, DB safety, soak and LLM audit
+
+### What was lost from the Oct 7/8 test-suite deletion
+The working tree had a large scratch/scratch-and-log debris set (root-level
+_diag_*.py, _proof.py, _step1_probe.py, h*.log, i3*.log, kt.log, dash_check.json,
+and scripts/scratch/*.py) that was never committed. The committed test suite
+was NOT deleted - `git log --diff-filter=D` shows only one deleted file in
+history (s.txt, a scratch file). The 56 tests under tests/ are intact and the
+hermetic commit 97eeee3 points DATABASE_URL at a temp DB before any app import
+(tests/conftest.py) and skips the scheduler when APP_TESTING=1 (app/main.py),
+so the suite can never touch data/intraday_sentiment.db. What was genuinely
+lost was the *uncommitted* ad-hoc analysis scripts that had been driving the
+Oct 7 dampening/cluster work; several have been re-created under scripts/scratch/
+with read-only access and a --db argument.
+
+### What is hermetic now
+- tests/conftest.py: temp DB + APP_TESTING=1 + an autouse guard asserting the
+  engine never points at data/intraday_sentiment.db.
+- app/services/pipeline.py: the ingest write transaction is committed before
+  the LLM network call (session.add/flush/commit, then session.merge), so a slow
+  or rate-limited endpoint can no longer hold a SQLite write lock for minutes.
+- run.py: `elif args.api or True` was unconditional - every non --api invocation
+  started a second API server. It is now `elif args.api`.
+- tools/dashboard_service.ps1: Start-Dashboard checks /api/health BEFORE and
+  AFTER acquiring the launch lock, so a running server is never re-launched.
+- Scripts that touch the DB take a --db argument (add_llm_used_column.py,
+  test_unknown_asset.py, scripts/scratch/_item3_gold_silver.py) and clean up
+  their own test rows.
+
+### One-line backup command
+  Copy-Item data/intraday_sentiment.db backups/intraday_sentiment_$(Get-Date -Format yyyyMMdd_HHmmss).db
+
