@@ -13,12 +13,9 @@ Run both:
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import streamlit as st
-
-API = "http://127.0.0.1:8000"
 
 st.set_page_config(
     page_title="Intraday News Sentiment & Market Impact Engine",
@@ -28,15 +25,19 @@ st.set_page_config(
 
 # The HTML dashboard is built for the FastAPI origin, where /api/* and /ws are
 # relative. Inside the Streamlit iframe those would resolve against 127.0.0.1:8501
-# and come back empty, so the URLs are rewritten to absolute API endpoints before
-# the page is embedded. The WebSocket keep-alive is pointed at the engine too.
+# and come back empty, so the URLs are rewritten to point at the running engine.
+#
+# The host is taken from location.hostname ON PURPOSE: "localhost" and
+# "127.0.0.1" are different browser origins, so a hard-coded 127.0.0.1:8000
+# would be cross-origin from a page served at localhost:8501 and the fetch
+# would be blocked. Using the page's own hostname keeps API and page on the
+# same origin in every case (localhost:8501 -> localhost:8000,
+# 127.0.0.1:8501 -> 127.0.0.1:8000).
 _WEB_HTML = (Path(__file__).parent / "web" / "index.html").read_text(encoding="utf-8")
-_WEB_HTML = _WEB_HTML.replace("fetch('/api/", f"fetch('{API}/api/")
-_WEB_HTML = re.sub(
-    r"location\.host\+'\/ws'",
-    f"'{API.replace('http://', '')}/ws'",
-    _WEB_HTML,
-)
+_WEB_HTML = _WEB_HTML.replace(
+    "fetch('/api/", "fetch('http://'+location.hostname+':8000/api/")
+_WEB_HTML = _WEB_HTML.replace(
+    "proto+'://'+location.host+'/ws'", "proto+'://'+location.hostname+':8000/ws'")
 
 # The page is long (prep strip + regime + per-asset cards + news feed), so it is
 # rendered as a tall embedded document with its own scrollbar rather than a

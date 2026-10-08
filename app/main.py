@@ -16,6 +16,7 @@ from pathlib import Path
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import func, select
 
@@ -128,6 +129,19 @@ app = FastAPI(
     description="News-based intraday sentiment for XAUUSD, XAGUSD and BTCUSD.",
     version="1.0.0",
     lifespan=lifespan,
+)
+
+# CORS: the Streamlit tab embeds the HTML dashboard, which fetches /api/*
+# and opens /ws from a different port (8501 -> 8000). Browsers treat the two
+# as distinct origins, so without this every dashboard request is blocked.
+# Allow anything on loopback so localhost and 127.0.0.1 both work.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:8501", "http://127.0.0.1:8501",
+                   "http://localhost:8000", "http://127.0.0.1:8000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
