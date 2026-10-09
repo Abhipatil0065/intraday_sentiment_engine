@@ -36,6 +36,36 @@ python run.py --streamlit       # optional Streamlit UI (2nd terminal)
 
 Open **http://127.0.0.1:8000** for the live dashboard.
 
+### How to run
+
+The simplest way is the start script (uses the project's `.venv` and runs
+`uvicorn app.main:app` on `127.0.0.1:8000`):
+
+```bash
+# Windows: double-click start_server.bat, or run it from a terminal
+start_server.bat
+
+# macOS / Linux: ./start_server.sh
+```
+
+Or run uvicorn directly after activating the venv:
+
+```bash
+# Windows
+.venv\Scripts\activate
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+
+# macOS / Linux
+source .venv/bin/activate
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+> Opening the project folder in VS Code starts the server automatically via a
+> `folderOpen` task (see `.vscode/tasks.json`). If VS Code asks to allow
+> automatic tasks the first time, click **Allow** (or run
+> "Tasks: Manage Automatic Tasks in Folder" from the Command Palette and choose
+> "Allow Automatic Tasks").
+
 ### Keep the dashboard up after a restart (no more ERR_CONNECTION_REFUSED)
 
 `python run.py --api` is a normal console process, so it dies on every reboot.

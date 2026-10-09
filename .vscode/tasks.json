@@ -1,0 +1,24 @@
+{
+    // See https://code.visualstudio.com/docs/editor/tasks for tasks schema.
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Start FastAPI Server",
+            "type": "shell",
+            "command": "start_server.bat",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "runOptions": {
+                    "runOn": "folderOpen"
+                }
+            },
+            "presentation": {
+                "panel": "dedicated",
+                "reveal": "always",
+                "focus": true,
+                "echo": true
+            },
+            "problemMatcher": []
+        }
+    ]
+}
