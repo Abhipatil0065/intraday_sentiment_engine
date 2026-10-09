@@ -3,8 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>Intraday News Sentiment &amp; Market Impact Engine</title>
-<style>
+  <style>
   :root{
     --bg:#0b0e14; --panel:#141922; --panel2:#1a2029; --line:#232b3a;
     --txt:#e6edf3; --dim:#8b98a9; --gold:#f0b429; --silver:#c0c8d1;
@@ -92,8 +95,9 @@
 
    These override the older centred-diverging .bar rules below, which assumed
    <div class="b">/<div class="s"> children positioned from the midpoint. The
-   markup is now two plain spans sized to the split, and a NEUTRAL card (an
-   exact 50/50) greys both sides so a genuinely even split reads as even. */
+   markup is now two plain spans sized to the split. The binary bias contract
+   means the bar is never greyed: the engine names BULLISH or BEARISH on every
+   card, so there is no withheld state to render. */
 .mcard .bar{height:18px;border-radius:9px;display:flex;overflow:hidden;
             background:var(--neu);position:static}
 .mcard .bar::after{display:none}
@@ -369,8 +373,6 @@
   <h1>INTRADAY NEWS SENTIMENT &amp; MARKET IMPACT ENGINE</h1>
   <div class="status-strip" id="statusStrip">
     <span class="pill live" id="pLlm"><span class="dot"></span><span id="lLlm">LLM: LIVE</span></span>
-    <span class="pill bear" id="pSent"><span class="dot"></span><span id="lSent">Sentiment: BEARISH | Session: ASIA → EUROPE</span></span>
-    <span class="pill live" id="pNews"><span class="dot"></span><span id="lNews">News Feed: LIVE</span></span>
     <span class="pill live" id="pPipe"><span class="dot"></span><span id="lPipe">Pipeline: RUNNING</span></span>
     <span class="pill live" id="pDb"><span class="dot"></span><span id="lDb">DB: CONNECTED</span></span>
     <span class="pill alert-pill" id="pAlert"><span class="dot"></span><span id="lAlert">⚠️ ALERT: LLM Engine Down - Fallback Active</span></span>
@@ -401,20 +403,15 @@ let FEED={items:[],total:0,loaded:0,page:60,busy:false};
      real-time engine health. Each has a colour map keyed by state. */
   let HEALTH={
     llmStatus:'LIVE',          // LIVE | STOPPED | IDLE
-    globalSentiment:'BEARISH', // BULLISH | BEARISH
-    activeSession:'ASIA → EUROPE',
-    newsFeedStatus:'LIVE',     // LIVE | STOPPED
     pipelineStatus:'RUNNING',  // RUNNING | STOPPED
     dbStatus:'CONNECTED',      // CONNECTED | DISCONNECTED
     systemError:null,          // string | null
     lastUpdated:''
   };
   const LLMMAP={LIVE:'live',STOPPED:'stopped',IDLE:'idle'};
-  const SENTMAP={BULLISH:'bull',BEARISH:'bear'};
   const STD_MAP={LIVE:'live',STOPPED:'stopped',RUNNING:'live',CONNECTED:'live',DISCONNECTED:'stopped'};
   function pillClass(key,state){
     if(key==='llm') return LLMMAP[state]||'idle';
-    if(key==='sent') return SENTMAP[state]||'idle';
     return STD_MAP[state]||'idle';
   }
 function esc(s){return String(s==null?'':s)
@@ -445,39 +442,44 @@ function rnd(x){
 function disp(b){
   b=b||{};
   if(b.display && typeof b.display.pct==='number') return b.display;
-  /* Fallback for a payload from a server that predates the display block.
-     Same rule as display.py: a named side wins, otherwise the side over 50%
-     is named, and only an exact 50/50 (or no usable bias) stays NEUTRAL. */
-  var s=Math.max(-100,Math.min(100,+b.score||0));
-  var bull=w(rnd(50+s/2));
-  var bias=(b.bias||'');
-  var label;
-  if(bias==='BULLISH'||bias==='BEARISH'){
-    label=bias;
-  }else if(bull>50){
-    label='BULLISH';
-  }else if(100-bull>50){
-    label='BEARISH';
-  }else{
-    label='NEUTRAL';
-  }
+/* Fallback for a payload from a server that predates the display block.
+      Same rule as display.py: a named side wins, otherwise the side over 50%
+      is named. There is no NEUTRAL label and no 50/50 chip - on an exact
+      50/50 the display resolves to BULLISH as the directional default, so a
+      card can never render a withheld verdict. */
+   var s=Math.max(-100,Math.min(100,+b.score||0));
+   var bull=w(rnd(50+s/2));
+   var bias=(b.bias||'');
+   var label;
+   if(bias==='BULLISH'||bias==='BEARISH'){
+     label=bias;
+   }else if(bull>50){
+     label='BULLISH';
+   }else if(100-bull>50){
+     label='BEARISH';
+   }else{
+     label='BULLISH';
+   }
   return {label:label,
           pct:label==='BULLISH'?bull:label==='BEARISH'?100-bull:50,
           bull_pct:bull, bear_pct:100-bull};
 }
 function verdictClass(label){
-  /* Reuse the CSS classes the page already defines for a verdict chip
-     (.BULLISH / .BEARISH / .NO_BIAS) so the new "LABEL n%" chip is styled by
-     exactly the rules the old bias chip used, and NO_BIAS keeps its dashed
-     grey "withheld" look. */
-  return label==='BULLISH'?'BULLISH':label==='BEARISH'?'BEARISH':'NO_BIAS';
+   /* Reuse the CSS classes the page already defines for a verdict chip
+      (.BULLISH / .BEARISH) so the new "LABEL n%" chip is styled by exactly
+      the rules the old bias chip used. The binary bias contract means the
+      label is always one of the two directions - there is no withheld state
+      to style, so NO_BIAS is kept only as a defensive fallback. */
+   return label==='BULLISH'?'BULLISH':label==='BEARISH'?'BEARISH':'NO_BIAS';
 }
-/* Thin bar showing the bull/bear split the headline percentage came from. */
+/* Thin bar showing the bull/bear split the headline percentage came from. The
+   binary bias contract means the bar is never greyed: the engine names a side
+   on every card, so there is no withheld state to render. */
 function mbar(b){
-  var d=disp(b);
-  return '<div class="bar'+(d.label==='NEUTRAL'?' neu':'')+'">'
-    +'<span class="bu" style="width:'+w(d.bull_pct)+'%"></span>'
-    +'<span class="be" style="width:'+w(d.bear_pct)+'%"></span></div>';
+   var d=disp(b);
+   return '<div class="bar">'
+     +'<span class="bu" style="width:'+w(d.bull_pct)+'%"></span>'
+     +'<span class="be" style="width:'+w(d.bear_pct)+'%"></span></div>';
 }
 /* ---- bias flip tracking --------------------------------------------------
    Records WHEN each asset last changed sides, so the card can say how long the
@@ -613,7 +615,7 @@ function msplit(b,asset){
 }
 function sessionChain(){
   if(!DATA) return '\u2014';
-  return esc(DATA.previous_session)+' &rarr; '+esc(DATA.next_session);
+  return esc(DATA.previous_session)+' &rarr; '+esc(DATA.current_session);
 }
 /* TOP DRIVERS box - always drawn, "None flagged" when empty. Driver entries
    are objects {title, contribution, direction}, not bare strings. */
@@ -767,7 +769,7 @@ function renderAssets(assets){
       +'<div class="sym">'+esc(a.symbol)+'</div></div>'
       +'<div class="tagline"><span class="ssub">SESSIONS</span>'
       +'<span class="ssub">'+esc(DATA.previous_session)+' &rarr; '
-      +esc(DATA.next_session)+'</span>'
+      +esc(DATA.current_session)+'</span>'
       +'<span class="ssub">'+rows+' MACRO RELEASES</span>'
       +'</div></div>'
       +calendarBlock(a.economic_calendar)
@@ -1003,10 +1005,7 @@ function renderHeader(d){
      The error pill appears only when a non-green status is set. */
   var s=d.status||{};
   var llm = s.llm_enabled ? (s.llm_status || 'LIVE') : 'STOPPED';
-  HEALTH.llmStatus = llm;
-  HEALTH.globalSentiment = (d.regime==='BEARISH') ? 'BEARISH' : (d.regime==='BULLISH' ? 'BULLISH' : 'BEARISH');
-  HEALTH.activeSession = (d.current_session||'') + ' → ' + (d.next_session||'');
-  HEALTH.newsFeedStatus = (s.sources_ok && s.sources_polled && s.sources_ok < s.sources_polled) ? 'STOPPED' : 'LIVE';
+HEALTH.llmStatus = llm;
   HEALTH.pipelineStatus = st.running ? 'RUNNING' : 'STOPPED';
   HEALTH.dbStatus = s.last_poll_ok ? 'CONNECTED' : 'DISCONNECTED';
   HEALTH.lastUpdated = st.last_updated || '';
@@ -1029,17 +1028,23 @@ function renderHeader(d){
   setPill('pPipe', HEALTH.pipelineStatus);
   setPill('pDb', HEALTH.dbStatus);
 
-  document.getElementById('lLlm').textContent='LLM: '+HEALTH.llmStatus;
-  document.getElementById('lSent').textContent='Sentiment: '+HEALTH.globalSentiment+' | Session: '+HEALTH.activeSession;
-  document.getElementById('lNews').textContent='News Feed: '+HEALTH.newsFeedStatus;
-  document.getElementById('lPipe').textContent='Pipeline: '+HEALTH.pipelineStatus;
-  document.getElementById('lDb').textContent='DB: '+HEALTH.dbStatus;
-  document.getElementById('tsLastUpdated').textContent='Last Updated: '+(HEALTH.lastUpdated||'n/a');
+  /* lSent / lNews: those status pills were removed from the markup, so the
+     spans no longer exist. Without a guard the first render() threw
+     "Cannot set properties of null (setting 'textContent')" at this line,
+     which aborted render() before renderPrepStrip() ever ran - exactly why
+     the four asset cards stayed blank. Guard every pill span; a missing
+     element is silently skipped rather than crashing the whole render. */
+  var _lLlm=document.getElementById('lLlm'); if(_lLlm) _lLlm.textContent='LLM: '+HEALTH.llmStatus;
+  var _lSent=document.getElementById('lSent'); if(_lSent) _lSent.textContent='Sentiment: '+HEALTH.globalSentiment+' | Session: '+HEALTH.activeSession;
+  var _lNews=document.getElementById('lNews'); if(_lNews) _lNews.textContent='News Feed: '+HEALTH.newsFeedStatus;
+  var _lPipe=document.getElementById('lPipe'); if(_lPipe) _lPipe.textContent='Pipeline: '+HEALTH.pipelineStatus;
+  var _lDb=document.getElementById('lDb'); if(_lDb) _lDb.textContent='DB: '+HEALTH.dbStatus;
+  var _ts=document.getElementById('tsLastUpdated'); if(_ts) _ts.textContent='Last Updated: '+(HEALTH.lastUpdated||'n/a');
 
   var alertPill=document.getElementById('pAlert');
   if(HEALTH.systemError){
     alertPill.classList.add('show');
-    document.getElementById('lAlert').textContent='⚠️ ALERT: '+HEALTH.systemError;
+    var _lAlert=document.getElementById('lAlert'); if(_lAlert) _lAlert.textContent='⚠️ ALERT: '+HEALTH.systemError;
   }else{
     alertPill.classList.remove('show');
   }
@@ -1061,6 +1066,7 @@ function renderFilters(){
     +'<span class="fcount">Click a headline to expand its impact breakdown</span>';
 }
 function render(d){
+  console.log('RAW API DATA:', JSON.stringify({regime:d.regime, previous_session:d.previous_session, current_session:d.current_session, next_session:d.next_session, equity_region:d.equity_region}));
   DATA=d;
   renderHeader(d);
   renderPrepStrip(d.assets);
@@ -1091,8 +1097,13 @@ function render(d){
 async function load(){
   try{
     const r=await fetch('/api/dashboard');
-    render(await r.json());
-  }catch(e){ console.error(e); }
+    const d=await r.json();
+    try {
+        render(d);
+    } catch(err) {
+        console.error('RENDER ERROR:', err.message, err.stack);
+    }
+  }catch(e){ console.error('FETCH ERROR:', e); }
   loadFinancialJuice();
 }
 /* FinancialJuice Session Analysis is served by its own read-only endpoint so
@@ -1122,8 +1133,19 @@ document.addEventListener('click',function(e){
 function connect(){
   const proto=location.protocol==='https:'?'wss':'ws';
   ws=new WebSocket(proto+'://'+location.host+'/ws');
+  /* Debounce: the server can push several {type:"update"} messages back-to-back
+     (a tick finishing right after a manual /api/run, or reconnect storms). Each
+     one used to call load() immediately, so overlapping fetch('/api/dashboard')
+     requests raced: a slower older response could land AFTER a newer one and
+     overwrite DATA mid-render, leaving the prep strip blank. Coalesce bursts
+     into a single reload 300ms after the last message. */
+  let _reloadTimer=null;
   ws.onmessage=function(e){ try{ var m=JSON.parse(e.data);
-      if(m.type==='update'){ load(); } }catch(_){} };
+      if(m.type==='update'){
+        clearTimeout(_reloadTimer);
+        _reloadTimer=setTimeout(load,300);
+      }
+  }catch(_){} };
   ws.onclose=function(){ setTimeout(connect,backoff);
     backoff=Math.min(backoff*2,30000); };
   ws.onopen=function(){ backoff=1000; };

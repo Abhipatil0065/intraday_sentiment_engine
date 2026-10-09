@@ -76,12 +76,18 @@ class EquityCardResult:
     mode: str = "heuristic"
     drivers: list = field(default_factory=list)
     contributing_articles: int = 0
+    signal_count: int = 0       # signals that reached this region in the window
     no_data: bool = True
     # True when the region had no signals and the bias was carried forward
     # from region history (or the newest article / DEFAULT_BIAS).
     stale: bool = False
     note: str = ""
     last_updated: str = ""
+    # Same three fields the asset cards expose: contradiction flag and the
+    # 15-minute same-direction burst counts behind the score.
+    contradiction_detected: bool = False
+    burst_bull: int = 0
+    burst_bear: int = 0
 
 
 def _region_of(session: SessionName) -> str:
@@ -163,25 +169,33 @@ def region_signals(signals: Sequence[WeightedSignal],
 
 def neutral_card(session: SessionName, reason: str = "") -> EquityCardResult:
     """
-    50/50 payload for an empty region - never an error, never NO_BIAS.
+    Directional fallback for an empty region - never a 50/50 card, never NO_BIAS.
 
-    The BIAS carries forward the last verdict published for THIS region
-    (stale=True); with no region history the answer is DEFAULT_BIAS.
+    The bias ALWAYS carries forward the last verdict published for THIS region
+    (stale=True). If no region history exists yet, the answer is DEFAULT_BIAS
+    (BULLISH) - a documented directional default, never a withheld verdict. The
+    result is guaranteed to be one of BULLISH / BEARISH: a carried value that
+    somehow resolved to anything else is coerced to DEFAULT_BIAS before it can
+    reach the payload.
     """
     info = EQUITY_SESSION_MAP.get(session, {})
     region = _region_of(session)
     carried = recall_bias(_state_key(region))
-    bias = carried or DEFAULT_BIAS
+    if carried is not None and carried in (Bias.BULLISH, Bias.BEARISH):
+        bias = carried
+    else:
+        bias = DEFAULT_BIAS
     return EquityCardResult(
         region=region,
         title=str(info.get("title", region + " EQUITY")),
         symbol=str(info.get("symbol", "")),
         score=0.0,
         confidence=0.0,
-        bias=bias.value if isinstance(bias, Bias) else str(bias),
+        bias=bias.value,
         mode="heuristic",
         drivers=[],
         contributing_articles=0,
+        signal_count=0,
         no_data=True,
         stale=True,
         note=reason or ("No " + region + " equities news in the window; "
@@ -273,10 +287,15 @@ def build_equity_card(all_signals: Sequence[WeightedSignal],
         mode=getattr(result, "mode", "heuristic"),
         drivers=drivers,
         contributing_articles=int(result.contributing_articles),
+        signal_count=int(getattr(result, "signal_count", 0)),
         no_data=False,
         stale=bool(getattr(result, "stale", False)),
         note="",
         last_updated=T.stamp(),
+        contradiction_detected=bool(getattr(
+            result, "contradiction_detected", False)),
+        burst_bull=int(getattr(result, "burst_bull", 0) or 0),
+        burst_bear=int(getattr(result, "burst_bear", 0) or 0),
     )
 
 
@@ -292,10 +311,14 @@ def to_payload(card: EquityCardResult) -> dict:
         "mode": card.mode,
         "drivers": list(card.drivers),
         "contributing_articles": int(card.contributing_articles),
+        "signal_count": int(getattr(card, "signal_count", 0)),
         "no_data": bool(card.no_data),
         "stale": bool(card.stale),
         "note": card.note,
         "last_updated": card.last_updated,
+        "contradiction_detected": bool(card.contradiction_detected),
+        "burst_bull": int(card.burst_bull),
+        "burst_bear": int(card.burst_bear),
     }
     result["display"] = to_display(card.score, card.bias)
     return result

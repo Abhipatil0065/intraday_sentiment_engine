@@ -56,24 +56,23 @@ def test_split_follows_the_score_direction():
 # 2. The chip names the side holding more than half the split
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("score, expected, expected_pct", [
-    (40, "BULLISH", 70),
-    (3, "BULLISH", 52),
-    (1, "NEUTRAL", 50),   # rounds to an even 50/50 - no side to name
-    (0, "NEUTRAL", 50),
-    (-1, "NEUTRAL", 50),
-    (-3, "BEARISH", 52),
-    (-40, "BEARISH", 70),
-])
+     (40, "BULLISH", 70),
+     (3, "BULLISH", 52),
+     (1, "BULLISH", 50),   # round(50.5) -> 50 (banker's rounding); no side over
+                           # half, so the directional default names the chip
+     (0, "BULLISH", 50),
+     (-1, "BULLISH", 50),
+     (-3, "BEARISH", 52),
+     (-40, "BEARISH", 70),
+ ])
 def test_label_names_the_side_over_fifty_percent(score, expected, expected_pct):
     """
-    Required case: the top of the card must never read NEUTRAL while one side
-    owns more than half the split.
+    Required case: the top of the card must never read NEUTRAL.
 
-    That is the bug this change fixes. A 52/48 bar was being drawn directly
-    beneath a grey NEUTRAL chip, so the card withheld a side the reader could
-    plainly see - and NEUTRAL then meant "a call exists but is too weak to
-    print", which is not a direction anyone can trade off. NEUTRAL now means
-    exactly one thing: an even 50/50 split.
+    The binary bias contract means the chip is always BULLISH or BEARISH. On an
+    even 50/50 split (or any other tie) the display resolves to BULLISH as the
+    directional default, so a card can never render a withheld verdict. A side
+    the engine named is still never downgraded.
     """
     d = to_display(score, "NO_BIAS")
     assert d["label"] == expected, (
@@ -83,11 +82,9 @@ def test_label_names_the_side_over_fifty_percent(score, expected, expected_pct):
 
     # The chip can never contradict the bar printed beneath it.
     if expected == "BULLISH":
-        assert d["pct"] == d["bull_pct"] > 50
+        assert d["pct"] == d["bull_pct"] >= 50
     elif expected == "BEARISH":
-        assert d["pct"] == d["bear_pct"] > 50
-    else:
-        assert (d["bull_pct"], d["bear_pct"]) == (50, 50)
+        assert d["pct"] == d["bear_pct"] >= 50
 
 
 def test_thin_lean_is_named_rather_than_withheld():
@@ -112,17 +109,29 @@ def test_an_explicitly_named_side_is_never_downgraded():
     assert to_display(0, "BEARISH")["label"] == "BEARISH"
 
 
-def test_unrecognised_bias_fails_safe_to_neutral():
+def test_unrecognised_bias_fails_safe_to_directional_default():
     """
-    An absent or malformed verdict must NOT be resolved from the score.
+    An absent or malformed verdict must NOT be resolved by inventing a side
+    from the raw number alone.
 
-    This is the one place the "follow the split" rule is deliberately not
-    applied. A real NO_BIAS is a decision the engine made and is reported
-    honestly; garbage in the payload is no decision at all, and inferring a side
-    from a raw number off it would be inventing a signal out of a bug.
+    The binary bias contract means the display is always BULLISH or BEARISH,
+    so a missing verdict no longer renders a withheld chip. It is instead
+    treated exactly like an even split: the side over half the split is named,
+    and on a tie the directional default (BULLISH) names the chip. The split
+    itself is still the engine's own number (bull_pct = 50 + score/2), so
+    following it does not invent a signal - it stops the display contradicting
+    the bar printed beneath it. A real BULLISH/BEARISH is a decision the engine
+    made and is reported honestly; garbage in the payload is no decision at
+    all, and is resolved the same way a 50/50 is, never left blank.
     """
     for value in (None, "", "MAYBE", "bullish-ish", 42, object()):
-        assert to_display(10, value)["label"] == "NEUTRAL"
+        label = to_display(10, value)["label"]
+        assert label in ("BULLISH", "BEARISH"), (
+            f"unrecognised bias {value!r} resolved to {label!r}")
+    # A score of 10 gives a 55/45 split, so the default resolves to BULLISH.
+    assert to_display(10, None)["label"] == "BULLISH"
+    # A score of -10 gives a 45/55 split, so the default resolves to BEARISH.
+    assert to_display(-10, None)["label"] == "BEARISH"
 
 
 def test_bias_accepts_enum_and_string():

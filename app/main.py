@@ -238,6 +238,9 @@ def _block(session, asset: str, scope: str) -> dict:
             "stale": True,
             "note": "No sentiment computed yet for this scope.",
             "contributing_articles": 0, "contributing_clusters": 0,
+            "signal_count": 0,
+            "contradiction_detected": False,
+            "burst_bull": 0, "burst_bear": 0,
             "price_note": "Price-action confirmation unavailable.",
             "last_updated": "",
         }
@@ -271,6 +274,10 @@ def _block(session, asset: str, scope: str) -> dict:
         "note": snap.note or "",
         "contributing_articles": snap.contributing_articles,
         "contributing_clusters": 0,
+        "signal_count": getattr(snap, "signal_count", 0),
+        "contradiction_detected": bool(getattr(snap, "contradiction_detected", False)),
+        "burst_bull": int(getattr(snap, "burst_bull", 0) or 0),
+        "burst_bear": int(getattr(snap, "burst_bear", 0) or 0),
         "price_note": snap.price_note or "Price-action confirmation unavailable.",
         "last_updated": T.local_clock(snap.computed_at),
     }

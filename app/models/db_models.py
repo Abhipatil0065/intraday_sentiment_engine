@@ -176,6 +176,19 @@ class SentimentSnapshot(Base):
     conflict: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     note: Mapped[str] = mapped_column(Text, default="")
     contributing_articles: Mapped[int] = mapped_column(Integer, default=0)
+    # Number of signals that reached this asset in the window. 0 on a stale
+    # (carried-forward) verdict - the point of stale is that nothing new was
+    # seen. Mirrors contributing_articles on a fresh verdict.
+    signal_count: Mapped[int] = mapped_column(Integer, default=0)
+    # True when both sides are heavily weighted (bull > 80 and bear > 80):
+    # the news is genuinely torn, so a flip is held to a wider margin.
+    contradiction_detected: Mapped[bool] = mapped_column(
+        Boolean, default=False)
+    # News-velocity burst counts in the last 15 minutes: how many same-side
+    # headlines landed together. 0 on a stale verdict. Exposed on the
+    # dashboard so a reader can see the momentum behind the score.
+    burst_bull: Mapped[int] = mapped_column(Integer, default=0)
+    burst_bear: Mapped[int] = mapped_column(Integer, default=0)
 
     price_note: Mapped[str] = mapped_column(Text, default="")
     computed_at: Mapped[datetime] = mapped_column(

@@ -94,6 +94,14 @@ def _purge_legacy_snapshots() -> None:
         # bearish one. Additive: "drivers" is unchanged.
         "bull_drivers": "JSON",
         "bear_drivers": "JSON",
+        "signal_count": "INTEGER DEFAULT 0",
+        # True when both sides are heavily weighted (bull > 80 and bear > 80):
+        # the news is genuinely torn, so a flip is held to a wider margin.
+        "contradiction_detected": "BOOLEAN DEFAULT 0",
+        # News-velocity burst counts in the last 15 minutes: how many same-side
+        # headlines landed together. 0 on a stale verdict.
+        "burst_bull": "INTEGER DEFAULT 0",
+        "burst_bear": "INTEGER DEFAULT 0",
     }
 
     try:

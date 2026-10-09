@@ -57,7 +57,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 
 from app.config import settings
@@ -173,6 +173,15 @@ def payload_score(raw_score: float, bias) -> float:
 # Task 8: stability (no whipsaw) constants.
 from app.config import FLIP_HOLD_MINUTES, FLIP_MARGIN
 
+# IMPROVEMENT 6: anti-whipsaw cooling period after a flip.
+# After a bias flips, the market needs COOLING_MINUTES before another flip is
+# allowed, and during that window the score must clear by COOLING_MARGIN (25,
+# wider than the normal FLIP_MARGIN of 15) so a re-test of the old level does
+# not immediately flip it back. The Tier-1 override still bypasses this
+# entirely - it is checked first in _should_flip() and returns immediately.
+COOLING_MINUTES = 30
+COOLING_MARGIN = 25
+
 # Last published bias per state key: the asset symbol ("GOLD" ...) or
 # "EQUITY:<region>" for the session-aware equity card, so a signal-free poll
 # can carry the previous verdict forward instead of inventing one.
@@ -212,19 +221,34 @@ def clear_bias_history() -> None:
     _LAST_FLIP_TIME.clear()
 
 
+def _ensure_aware(dt: datetime | None) -> datetime | None:
+    """Force a datetime to aware UTC.
+
+    SQLite strips ``tzinfo`` on write and read, so a ``published_at`` that was
+    stored aware comes back naive. Subtracting a naive value from an aware
+    ``now`` raises TypeError. This helper makes every comparison/subtraction
+    safe regardless of what the database handed back.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def _has_fresh_tier1_opposite(relevant: Sequence[WeightedSignal],
                                current_bias: Bias,
                                now: datetime | None) -> bool:
     """
     Check if there's a fresh Tier 1 signal pointing opposite to current bias.
-    
+
     A "fresh" Tier 1 signal is one published within the last hour.
     """
     if now is None:
         return False
     cutoff = now - timedelta(hours=1)
     for s in relevant:
-        if s.published_at is None or s.published_at < cutoff:
+        if s.published_at is None or _ensure_aware(s.published_at) < cutoff:
             continue
         if event_tier(s) != "TIER_1":
             continue
@@ -238,42 +262,78 @@ def _has_fresh_tier1_opposite(relevant: Sequence[WeightedSignal],
 def _should_flip(bull: float, bear: float, current_bias: Bias,
                  relevant: Sequence[WeightedSignal],
                  now: datetime | None,
-                 key: str) -> tuple[bool, Bias]:
+                 key: str,
+                 flip_margin_override: float | None = None) -> tuple[bool, Bias]:
     """
     Determine if bias should flip based on stability rules.
-    
-    Returns (should_flip, new_bias).
+
+    ``flip_margin_override`` widens the required score margin when a
+    contradiction has been detected (both sides heavily weighted): the
+    caller passes ``FLIP_MARGIN + 10`` in that case so a genuinely torn
+    market cannot be flipped on noise. When None the module FLIP_MARGIN is
+    used, unless a cooling period is active (IMPROVEMENT 6) in which case
+    COOLING_MARGIN applies instead.
+
+    Order of gates, earliest first:
+      1. No current bias (first run) -> take the computed bias.
+      2. No weight at all -> hold.
+      3. Fresh Tier 1 opposite signal -> flip immediately, bypasses
+         everything below including the cooling period.
+      4. Cooling period after a recent flip -> wider effective margin.
+      5. Hold-time gate -> refuse to flip again inside FLIP_HOLD_MINUTES.
+      6. Margin gate -> flip only when the score cleared by the margin.
     """
     # No current bias (first run) - just use the computed bias
     if current_bias is None:
         return True, Bias.BULLISH if bull > bear else Bias.BEARISH
-    
+
     # Compute the score from current bull/bear weights
     total = bull + bear
     if total <= 0:
         return False, current_bias
     current_score = 100.0 * (bull - bear) / total
-    
-    # Check for fresh Tier 1 opposite signal (forces flip regardless of margin/hold)
+
+    # Check for fresh Tier 1 opposite signal (forces flip regardless of
+    # margin/hold). This bypasses the cooling period below on purpose: a
+    # confirmed official release is the one event that can flip immediately.
     if _has_fresh_tier1_opposite(relevant, current_bias, now):
         return True, Bias.BEARISH if current_bias is Bias.BULLISH else Bias.BULLISH
-    
-    # Check hold time (skip for Tier 1 - already handled above)
+
+    # IMPROVEMENT 6: anti-whipsaw cooling period after a flip.
+    # After a bias flips, the market needs COOLING_MINUTES before another
+    # flip is allowed, and during that window the score must clear by
+    # COOLING_MARGIN (25, wider than the normal FLIP_MARGIN of 15) so a
+    # re-test of the old level does not immediately flip it back. The
+    # Tier-1 override above still bypasses this entirely - it returned
+    # before reaching this point.
     last_flip = _recall_flip_time(key)
+    in_cooling = (
+        last_flip is not None and
+        now is not None and
+        (now - last_flip).total_seconds() < COOLING_MINUTES * 60
+    )
+
+    if in_cooling:
+        effective_margin = COOLING_MARGIN
+    else:
+        effective_margin = (flip_margin_override if flip_margin_override
+                            is not None else FLIP_MARGIN)
+
+    # Check hold time (skip for Tier 1 - already handled above)
     if last_flip is not None and now is not None:
         hold_elapsed = (now - last_flip).total_seconds() / 60.0
         if hold_elapsed < FLIP_HOLD_MINUTES:
             return False, current_bias
-    
-    # Check margin: score must have crossed zero by at least FLIP_MARGIN
-    # FLIP_MARGIN is on the score scale (-100..+100)
+
+    # Check margin: score must have crossed zero by at least the margin.
+    # The margin is on the score scale (-100..+100).
     if current_bias is Bias.BULLISH:
-        if current_score <= -FLIP_MARGIN:
+        if current_score <= -effective_margin:
             return True, Bias.BEARISH
     else:
-        if current_score >= FLIP_MARGIN:
+        if current_score >= effective_margin:
             return True, Bias.BULLISH
-    
+
     return False, current_bias
 
 
@@ -304,6 +364,9 @@ class WeightedSignal:
     # (release_surprise.surprise_weight). Constant 1.0 for every other
     # signal, so no existing behaviour changes.
     surprise_weight: float = 1.0
+    # Section 7: silver's dual nature. PRECIOUS/INDUSTRIAL/BOTH/null, carried
+    # through so the weight path can reward a characterised silver story.
+    metal_character: str | None = None
 
     # filled by compute()
     recency: float = 0.0
@@ -354,6 +417,18 @@ class SentimentResult:
     # True when there were no signals and the bias was carried forward from
     # history (or from the newest article / DEFAULT_BIAS when there is none).
     stale: bool = False
+    # Number of signals that reached this asset in the window. 0 on a stale
+    # (carried-forward) verdict - the point of stale is that nothing new was
+    # seen. Mirrors contributing_articles on a fresh verdict.
+    signal_count: int = 0
+    # True when both sides are heavily weighted (bull > 80 and bear > 80):
+    # the news is genuinely torn, so a flip is held to a wider margin.
+    contradiction_detected: bool = False
+    # News-velocity burst counts in the last 15 minutes: how many same-side
+    # headlines landed together. 0 on a stale verdict. Exposed on the
+    # dashboard so a reader can see the momentum behind the score.
+    burst_bull: int = 0
+    burst_bear: int = 0
     note: str = ""
 
 
@@ -382,7 +457,30 @@ def decay_weight(published_at: datetime | None, tier: str,
 
 
 def _age_hours(published_at: datetime, now: datetime | None = None) -> float:
+    # Coerce a naive ``now`` (the in-process default from ``datetime.utcnow()``)
+    # to aware UTC before subtracting: ``published_at`` is stored as aware, so
+    # subtracting two naive values raised TypeError whenever a caller passed
+    # an aware clock and the default kicked in.
+    if now is not None and now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
     return age_hours(published_at, now=now) or 0.0
+
+
+def _now_aware(now: datetime | None) -> datetime:
+    """The effective clock for this tick, always aware UTC.
+
+    When ``now`` is not supplied the default is taken from
+    ``app.utils.timestamp_parse.datetime`` rather than this module's own
+    ``datetime``: the test suite monkeypatches that module's clock, and the
+    old ``datetime.utcnow()`` default bypassed it, which aged every test
+    signal past the trading-day cutoff and silently zeroed the score.
+    """
+    if now is None:
+        from app.utils import timestamp_parse as tp
+        now = tp.datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return now
 
 
 def event_tier(s: WeightedSignal) -> str:
@@ -429,6 +527,12 @@ def _signal_weight(s: WeightedSignal, now: datetime | None) -> float:
     multiplied separately here. Source quality (QUALITY_MULT, 0.9..1.0)
     is an independent trust factor, never the tier.
     """
+    # Coerce a naive ``now`` to aware UTC: ``published_at`` is stored aware,
+    # so a naive clock made the age subtraction raise TypeError and silently
+    # skipped the freshness weighting below.
+    if now is not None and now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+
     from app.analysis.cue_rules import detect_verification
     from app.analysis.release_surprise import MAX_SURPRISE_WEIGHT
     from app.config import (
@@ -450,6 +554,14 @@ def _signal_weight(s: WeightedSignal, now: datetime | None) -> float:
     corr = max(1.0, float(s.corroboration or 1.0))
     surprise = max(0.0, min(MAX_SURPRISE_WEIGHT, float(s.surprise_weight or 0.0)))
 
+    # Section 7: silver's dual nature. A characterised XAGUSD story earns a
+    # small boost on top of everything else: PRECIOUS and INDUSTRIAL each
+    # multiply by 1.10, BOTH (the headline drives both channels at once)
+    # stays at 1.0, and an uncharacterised item (null) is unchanged.
+    metal_mult = 1.0
+    if s.asset is Asset.SILVER and s.metal_character:
+        metal_mult = 1.10 if s.metal_character in ("PRECIOUS", "INDUSTRIAL") else 1.0
+
     # Task 4b: the tier comes from the EVENT (event_tier above), never from
     # the outlet. QUALITY_TO_TIER is gone; importance feeds the tier once.
     tier = TIER_MULTIPLIERS.get(event_tier(s), 0.45)
@@ -461,7 +573,7 @@ def _signal_weight(s: WeightedSignal, now: datetime | None) -> float:
     elif detect_verification(s.title) is Verification.CONFIRMED:
         tier *= CONFIRMED_BOOST
 
-    return decay * rel * per * qual * sess * corr * surprise * tier
+    return decay * rel * per * qual * sess * corr * surprise * tier * metal_mult
 
 
 def _mode_for(signals: Sequence[WeightedSignal]) -> str:
@@ -481,6 +593,9 @@ def _aggregate(signals: Sequence[WeightedSignal],
     bear_items: list[tuple[float, WeightedSignal]] = []
     used = 0
     clusters: set[str] = set()
+
+    if now is None:
+        now = _now_aware(None)
 
     for s in signals:
         weight = _signal_weight(s, now)
@@ -514,9 +629,35 @@ def _aggregate(signals: Sequence[WeightedSignal],
             clusters.add(s.cluster_id)
         used += 1
 
+    # --- News velocity burst bonus (IMPROVEMENT 1) ---
+    # A cluster of same-direction headlines in the last 15 minutes is a
+    # momentum cue: multiply the side's total so it can punch through a
+    # marginal FLIP_MARGIN. Conflicting bursts (both sides >= 2 in the
+    # window) cancel the bonus entirely - that is a tug-of-war, not a trend.
+    burst_signals = [s for s in signals
+                     if s.published_at is not None
+                     and (now - _ensure_aware(s.published_at)).total_seconds() <= 900]
+    burst_bull = sum(1 for s in burst_signals
+                     if s.direction is Direction.BULLISH)
+    burst_bear = sum(1 for s in burst_signals
+                     if s.direction is Direction.BEARISH)
+    conflicting_burst = burst_bull >= 2 and burst_bear >= 2
+
+    if not conflicting_burst:
+        if burst_bull >= 5 and burst_bull > burst_bear:
+            bull *= 1.30
+        elif burst_bull >= 3 and burst_bull > burst_bear:
+            bull *= 1.20
+        elif burst_bear >= 5 and burst_bear > burst_bull:
+            bear *= 1.30
+        elif burst_bear >= 3 and burst_bear > burst_bull:
+            bear *= 1.20
+
     return {"bull": bull, "bear": bear, "directionless": directionless,
             "bull_items": bull_items, "bear_items": bear_items,
-            "used": used, "clusters": len(clusters)}
+            "used": used, "clusters": len(clusters),
+            "burst_bull": burst_bull, "burst_bear": burst_bear,
+            "conflicting_burst": conflicting_burst}
 
 
 def _score_from(bull: float, bear: float) -> float:
@@ -582,14 +723,20 @@ def _directional_bias(direction: Direction | None) -> Bias | None:
 
 
 def _tie_break_bias(signals: Sequence[WeightedSignal],
+                    history_key: str | None = None,
                     now: datetime | None = None) -> Bias:
     """
     The |score| < EPS tie-break: the side of the highest-weight, NEWEST signal.
 
     "Weight" is the signal's magnitude (final weight x strength) - how much it
     actually moved the net score - and publication time breaks equal magnitudes
-    in favour of the fresher headline. With no directional signal at all the
-    answer is DEFAULT_BIAS; this function never returns NO_BIAS.
+    in favour of the fresher headline.
+
+    ALWAYS returns BULLISH or BEARISH - never None, NEUTRAL, or MIXED:
+      1. Directional signals exist -> highest weight wins; equal weight is
+         broken by the newest published_at.
+      2. No directional signals  -> carry forward recall_bias(history_key).
+      3. No history at all       -> DEFAULT_BIAS (BULLISH).
     """
     best: WeightedSignal | None = None
     best_key: tuple[float, float] | None = None
@@ -598,13 +745,19 @@ def _tie_break_bias(signals: Sequence[WeightedSignal],
             continue
         weight = _signal_weight(s, now)
         magnitude = weight * STRENGTH_MULT.get(s.strength, 0.45)
-        ts = s.published_at.timestamp() if s.published_at else 0.0
+        ts = _ensure_aware(s.published_at).timestamp() if s.published_at else 0.0
         key = (magnitude, ts)
         if best_key is None or key > best_key:
             best, best_key = s, key
-    if best is None:
-        return DEFAULT_BIAS
-    return _directional_bias(best.direction) or DEFAULT_BIAS
+    if best is not None:
+        return _directional_bias(best.direction) or DEFAULT_BIAS
+    # No directional signal: carry forward the last published bias for this
+    # key instead of inventing one. DEFAULT_BIAS when there is no history.
+    if history_key is not None:
+        carried = recall_bias(history_key)
+        if carried is not None:
+            return carried
+    return DEFAULT_BIAS
 
 
 def _carry_forward_bias(signals: Sequence[WeightedSignal],
@@ -625,7 +778,7 @@ def _carry_forward_bias(signals: Sequence[WeightedSignal],
     for s in signals:
         if _directional_bias(s.direction) is None:
             continue
-        ts = s.published_at.timestamp() if s.published_at else 0.0
+        ts = _ensure_aware(s.published_at).timestamp() if s.published_at else 0.0
         if newest is None or ts > newest_ts:
             newest, newest_ts = s, ts
     if newest is not None:
@@ -680,7 +833,7 @@ def _delta_60m(signals: Sequence[WeightedSignal], asset: Asset,
     cutoff = now - timedelta(minutes=int(settings.delta_window_minutes))
     older = [s for s in signals
              if s.asset is asset and not (s.published_at is not None
-                                         and s.published_at >= cutoff)]
+                                         and _ensure_aware(s.published_at) >= cutoff)]
 
     prior = _aggregate(older, now)
     prior_score = _score_from(prior["bull"], prior["bear"])
@@ -729,7 +882,9 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
             asset=asset, score=0.0, confidence=0.0, bias=bias,
             mode=mode, contributing_articles=0, contributing_clusters=0,
             event_risk=event_risk, event_risk_note=event_risk_note,
-            stale=True, note=note, damped_score=0.0,
+            stale=True, signal_count=0,
+            burst_bull=0, burst_bear=0,
+            note=note, damped_score=0.0,
         )
 
     agg = _aggregate(relevant, now)
@@ -738,6 +893,12 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
 
     score = _score_from(bull, bear)
     confidence = _confidence_from(bull, bear, agg["directionless"], agg["used"])
+
+    # --- High contradiction holds bias stronger (IMPROVEMENT 2) ---
+    # When both sides are heavily weighted the news is genuinely torn, so a
+    # flip should be harder: the score must cross by an extra 10 points.
+    contradiction_detected = (bull > 80.0 and bear > 80.0)
+    effective_flip_margin = FLIP_MARGIN + (10 if contradiction_detected else 0)
 
     # Total directional weight for dampening
     total_weight = bull + bear
@@ -749,14 +910,16 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
     if abs(raw) >= EPS:
         computed_bias = Bias.BULLISH if raw > 0 else Bias.BEARISH
     else:
-        computed_bias = _tie_break_bias(relevant, now)
+        computed_bias = _tie_break_bias(relevant, history_key=key, now=now)
         # A tie-break is a weak call: cap the confidence low so the payload
         # still reads as weak once the label is forced to name a side.
         confidence = min(confidence, TIEBREAK_MAX_CONFIDENCE)
 
     # STABILITY (Task 8): check if we should flip from the last published bias
     last_bias = recall_bias(key)
-    should_flip, final_bias = _should_flip(bull, bear, last_bias, relevant, now, key)
+    should_flip, final_bias = _should_flip(
+        bull, bear, last_bias, relevant, now, key,
+        flip_margin_override=effective_flip_margin)
     
     if not should_flip and last_bias is not None:
         # Hold the previous bias - payload score must match the held label
@@ -817,7 +980,11 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
         contributing_articles=agg["used"],
         contributing_clusters=agg["clusters"],
         stale=False,
+        signal_count=len(relevant),
+        burst_bull=agg["burst_bull"],
+        burst_bear=agg["burst_bear"],
         note=note,
+        contradiction_detected=contradiction_detected,
     )
 
 

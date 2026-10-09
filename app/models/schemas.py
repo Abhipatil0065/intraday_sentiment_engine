@@ -109,6 +109,7 @@ class SentimentBlock(BaseModel):
     event_risk_note: str = ""
     contributing_articles: int = 0
     contributing_clusters: int = 0
+    signal_count: int = 0       # signals that reached this asset in the window
     stale: bool = False           # bias carried forward (no signals in window)
     note: str = ""
     price_note: str = ""

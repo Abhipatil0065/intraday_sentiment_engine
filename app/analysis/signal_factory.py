@@ -69,6 +69,7 @@ def build_signal(
     transmission: str = "",
     mode: str = "heuristic",
     surprise_weight: float = 1.0,
+    metal_character: str | None = None,
 ) -> object:
     """
     Build one correctly-populated ``WeightedSignal``.
@@ -106,4 +107,84 @@ def build_signal(
         # Task 3: surprise size of an ACTUAL scheduled-data print (1.0 for
         # every other signal).
         surprise_weight=surprise_weight,
+        # Section 7: silver's dual-nature character, carried through so the
+        # weight path can reward a characterised silver story.
+        metal_character=metal_character,
+    )
+
+
+# ---------------------------------------------------------------------------
+# IMPROVEMENT 5: Gold and Silver cross-asset bleed.
+# ---------------------------------------------------------------------------
+# A high-relevance, high-strength central-bank / rates / inflation / USD /
+# treasury / banking-stress story moves BOTH precious metals in the same
+# direction. The primary signal is built for the article's own asset; this
+# helper builds a secondary, lower-weight copy for the PAIR so the bleed
+# reaches the aggregator without the article having to be classified twice.
+# The copy is deliberately down-weighted (0.40 on relevance AND persistence)
+# so it never outranks a direct XAGUSD story about silver itself, and it is
+# flagged is_primary=False so the dashboard can tell a bleed from a real
+# silver headline. Bitcoin and the equity proxy are excluded: they are not
+# in BLEED_PAIR, so build_bleed_signal() returns None for them automatically.
+
+BLEED_CATEGORIES = {
+    NewsCategory.CENTRAL_BANK,
+    NewsCategory.INTEREST_RATES,
+    NewsCategory.INFLATION,
+    NewsCategory.USD_DXY,
+    NewsCategory.TREASURY_YIELDS,
+    NewsCategory.BANKING_FINANCIAL_STRESS,
+}
+
+BLEED_PAIR = {
+    Asset.GOLD: Asset.SILVER,
+    Asset.SILVER: Asset.GOLD,
+}
+
+
+def build_bleed_signal(primary: WeightedSignal) -> WeightedSignal | None:
+    """
+    Build a secondary cross-asset bleed signal for the precious-metal pair.
+
+    Returns None when the primary signal is not eligible (wrong asset, wrong
+    category, below the relevance floor, or below HIGH strength) - the caller
+    can unconditionally append the result and let the None do the filtering.
+    """
+    if primary.asset not in BLEED_PAIR:
+        return None
+    if primary.category not in BLEED_CATEGORIES:
+        return None
+    if primary.relevance < 0.70:
+        return None
+    if primary.strength not in (ImpactStrength.HIGH,
+                                ImpactStrength.VERY_HIGH):
+        return None
+
+    target_asset = BLEED_PAIR[primary.asset]
+    # Build the bleed through build_signal(), never by constructing
+    # WeightedSignal directly: that class is imported lazily inside
+    # build_signal and is not in this module's namespace. Instantiating it
+    # here raised NameError on every eligible signal and killed the whole
+    # sentiment recompute (and therefore the tick).
+    return build_signal(
+        asset=target_asset,
+        title=primary.title,
+        direction=primary.direction,
+        strength=primary.strength,
+        importance=primary.importance,
+        published_at=primary.published_at,
+        relevance=primary.relevance * 0.40,
+        persistence=primary.persistence * 0.40,
+        source_quality=primary.source_quality,
+        category=primary.category,
+        session_multiplier=primary.session_multiplier,
+        is_primary=False,
+        event_key=primary.event_key,
+        cluster_id=primary.cluster_id,
+        report_kind=primary.report_kind,
+        reason=primary.reason,
+        transmission=primary.transmission,
+        mode=primary.mode,
+        surprise_weight=primary.surprise_weight,
+        metal_character=primary.metal_character,
     )

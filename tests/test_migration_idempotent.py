@@ -65,7 +65,17 @@ EXPECTED_COLUMNS = {
     # Both driver sides, so the dashboard can show a bullish box beside a
     # bearish one. "drivers" still holds only the leading side.
     "bull_drivers", "bear_drivers",
-    "conflict", "note", "contributing_articles", "price_note", "computed_at",
+    "conflict", "note", "contributing_articles",
+    # Number of signals that reached this asset in the window. 0 on a stale
+    # (carried-forward) verdict. Mirrors contributing_articles on a fresh one.
+    "signal_count",
+    # True when both sides are heavily weighted (bull > 80 and bear > 80): the
+    # news is genuinely torn, so a flip is held to a wider margin.
+    "contradiction_detected",
+    # News-velocity burst counts in the last 15 minutes: how many same-side
+    # headlines landed together. 0 on a stale verdict.
+    "burst_bull", "burst_bear",
+    "price_note", "computed_at",
 }
 
 LEGACY_COLUMNS = {

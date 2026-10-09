@@ -29,7 +29,7 @@ from app.analysis.event_deduplication import EventDeduplicator
 from app.analysis.fj_sessions import FINANCIAL_JUICE_SOURCE
 from app.analysis.news_classifier import analyze_article
 from app.analysis.sentiment_engine import WeightedSignal, remember_bias
-from app.analysis.signal_factory import build_signal
+from app.analysis.signal_factory import build_bleed_signal, build_signal
 from app.config import settings
 from app.database import session_scope
 from app.ingestion.base import RawArticle
@@ -99,6 +99,89 @@ MAX_TICK_DURATION_SECONDS = 600
 # classifier falls back to deterministic heuristics, keeping every tick under
 # the ~120s budget even when the LLM endpoint is degraded.
 LLM_BATCH_LIMIT = 15
+
+# Source-quality tiers, ordered best-first. The priority sort below uses this to
+# rank a batch before the LLM cap is applied, so the 15 most trustworthy /
+# freshest articles get model attention and the tail falls back to heuristics.
+_SOURCE_QUALITY_RANK = {
+    "TIER_1_OFFICIAL": 0,
+    "TIER_2_MAJOR": 1,
+    "TIER_3_CRYPTO": 2,
+    "TIER_4_OTHER": 3,
+}
+
+
+def _make_aware(dt: datetime | None) -> datetime | None:
+    """Force a datetime to aware UTC before it touches the database.
+
+    SQLite strips ``tzinfo`` on write and read, so a naive timestamp stored
+    today comes back naive tomorrow and every downstream subtraction against an
+    aware clock raises TypeError. This guard makes the write path safe by
+    construction instead of relying on every caller to remember.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _priority_sort_articles(articles: list) -> list:
+    """
+    Sort a fetched batch so the highest-priority articles reach the LLM cap.
+
+    Order, in priority:
+      1. source_quality  - TIER_1_OFFICIAL first, then TIER_2_MAJOR, etc.
+      2. published_at    - newest first (parsed from published_raw).
+      3. title           - stable tiebreaker so the sort is deterministic.
+
+    Why this matters: LLM_BATCH_LIMIT caps model calls per tick, and without a
+    sort the cap is hit in arrival order - a rush of Tier 4 social-media noise
+    can consume every slot and leave a Tier 1 central-bank release to heuristics.
+    Sorting first means the 15 most important articles are the ones classified
+    by the model; the remainder are still ingested and scored, just deterministically.
+
+    Note on importance: RawArticle carries no importance field - importance is a
+    CLASSIFICATION output (see cue_rules.detect_importance), so it cannot be a
+    sort input here without classifying first, which defeats the purpose of the
+    cap. Source quality is the pre-classification proxy that best predicts it:
+    official statistical releases and central-bank statements outrank wire
+    copy, which outranks aggregator chatter.
+    """
+    def _key(art):
+        quality_rank = _SOURCE_QUALITY_RANK.get(
+            (getattr(art, "source_quality", "") or "").upper(), 99)
+        published = getattr(art, "published_raw", None)
+        # Newest first: later timestamps sort before earlier ones, so negate the
+        # rank. Unparseable / missing timestamps sort last (rank 999) rather than
+        # being silently dropped - they are still ingested, just deprioritised.
+        try:
+            ts_rank = -_parse_timestamp_rank(published)
+        except Exception:
+            ts_rank = 999
+        return (quality_rank, ts_rank, (getattr(art, "title", "") or "").lower())
+
+    return sorted(articles, key=_key)
+
+
+def _parse_timestamp_rank(value: str | None) -> float:
+    """
+    A sort key for a raw publication timestamp: higher = more recent.
+
+    Prefers an ISO-8601 string (the shape every source emits). Falls back to a
+    numeric epoch so a bare-number timestamp still sorts rather than raising.
+    """
+    if not value:
+        return 0.0
+    text = str(value).strip()
+    try:
+        return float(datetime.fromisoformat(text).timestamp())
+    except ValueError:
+        pass
+    try:
+        return float(text)
+    except ValueError:
+        return 0.0
 
 # Backlog re-classification: how many heuristic articles to re-process with
 # LLM per tick (low priority, only when circuit breaker is closed).
@@ -424,9 +507,9 @@ async def _ingest_article(art: RawArticle, session, stats: IngestStats,
         title=art.title,
         body=(art.body or "")[: settings.article_fetch_max_chars],
         summary=art.summary or "",
-        published_at_utc=published,
+        published_at_utc=_make_aware(published),
         published_tz_label=tz_label,
-        updated_at_source=updated,
+        updated_at_source=_make_aware(updated),
         is_today=True,
         is_updated_article=_is_update_article(published, updated),
     )
@@ -491,15 +574,15 @@ async def _ingest_article(art: RawArticle, session, stats: IngestStats,
             category=analysis.category.value,
             importance=analysis.importance.value,
             verification=analysis.verification.value,
-            first_seen_utc=published,
-            last_updated_utc=published,
+            first_seen_utc=_make_aware(published),
+            last_updated_utc=_make_aware(published),
             article_count=1,
         )
         session.add(event)
         session.flush()
     else:
         event.article_count += 1
-        event.last_updated_utc = published
+        event.last_updated_utc = _make_aware(published)
         event.confirmed_by_followup = True
         rank = {EconomicImportance.LOW: 0, EconomicImportance.MEDIUM: 1,
                 EconomicImportance.HIGH: 2, EconomicImportance.VERY_HIGH: 3}
@@ -676,6 +759,16 @@ def _recompute_sentiment(session, stats: IngestStats):
     Always recomputed from scratch rather than incrementally patched, so
     impact decay (section 17) is applied consistently on every pass.
     """
+    # IMPROVEMENT 4: detect a session change at the start of this tick.
+    # The reweight itself happens below, after the in-memory signal list
+    # is built, so the new multipliers feed the same aggregation that runs
+    # on every other tick.
+    current_session = detect_session()
+    previous_session = getattr(_recompute_sentiment, '_last_session', None)
+    session_changed = (previous_session is not None and
+                       previous_session != current_session)
+    _recompute_sentiment._last_session = current_session
+
     from app.analysis.sentiment_engine import compute as compute_sentiment
 
     rows = session.scalars(
@@ -729,33 +822,44 @@ def _recompute_sentiment(session, stats: IngestStats):
                     impact.asset, row.id, row.title[:80],
                 )
                 continue
-            signals.append(
-                build_signal(
-                    asset=asset_enum,
-                    title=row.title,
-                    direction=Direction(impact.direction),
-                    strength=ImpactStrength(impact.strength),
-                    importance=EconomicImportance(row.importance),
-                    published_at=row.published_at_utc,
-                    relevance=impact.relevance,
-                    persistence=impact.persistence,
-                    source_quality=row.source_quality,
-                    source_name=row.source,
-                    category=cat_enum,
-                    is_primary=is_primary,
-                    event_key=event.event_key if event else "",
-                    # An event covered by several outlets is corroborated; a
-                    # single-source story is not.
-                    independent_sources=(event.article_count if event else 1),
-                    reason=impact.reason,
-                    transmission=impact.transmission,
-                    report_kind=kind,
-                    surprise_weight=release_surprise.surprise_weight(
-                        printed, release_text),
-                    session_multiplier=session_relevance(
-                        detect_session(), cat_enum.value),
-                )
+            signal = build_signal(
+                asset=asset_enum,
+                title=row.title,
+                direction=Direction(impact.direction),
+                strength=ImpactStrength(impact.strength),
+                importance=EconomicImportance(row.importance),
+                published_at=row.published_at_utc,
+                relevance=impact.relevance,
+                persistence=impact.persistence,
+                source_quality=row.source_quality,
+                source_name=row.source,
+                category=cat_enum,
+                is_primary=is_primary,
+                event_key=event.event_key if event else "",
+                # An event covered by several outlets is corroborated; a
+                # single-source story is not.
+                independent_sources=(event.article_count if event else 1),
+                reason=impact.reason,
+                transmission=impact.transmission,
+                report_kind=kind,
+                surprise_weight=release_surprise.surprise_weight(
+                    printed, release_text),
+                session_multiplier=session_relevance(
+                    detect_session(), cat_enum.value),
+                # Section 7: silver's dual-nature character, carried from
+                # the AssetImpact row so the weight path can reward a
+                # characterised XAGUSD story on every recompute.
+                metal_character=impact.metal_character,
             )
+            signals.append(signal)
+
+            # IMPROVEMENT 5: gold/silver cross-asset bleed. A high-relevance,
+            # high-strength macro story lands on both precious metals; the
+            # secondary copy is auto-filtered to XAUUSD/XAGUSD only, so
+            # Bitcoin and the equity proxy (Asset.BITCOIN) never reach it.
+            bleed = build_bleed_signal(signal)
+            if bleed is not None:
+                signals.append(bleed)
             category_weights[cat_enum] = (
                 category_weights.get(cat_enum, 0.0) + impact.relevance
             )
@@ -765,9 +869,37 @@ def _recompute_sentiment(session, stats: IngestStats):
     # Economic calendar joins the same aggregation as the news flow, so the
     # bullish/bearish verdict reflects scheduled macro risk too.
     for sig in _calendar_signals:
-        signals.append(_calendar_signal_to_weighted(sig))
+        cal_signal = _calendar_signal_to_weighted(sig)
+        signals.append(cal_signal)
+        # IMPROVEMENT 5: calendar bleed too - a high-impact FOMC/CPI print
+        # moves both metals; the secondary copy is auto-filtered to the
+        # XAUUSD/XAGUSD pair and is a no-op for every other asset.
+        bleed = build_bleed_signal(cal_signal)
+        if bleed is not None:
+            signals.append(bleed)
         category_weights[sig.profile.category] = (
             category_weights.get(sig.profile.category, 0.0) + sig.relevance
+        )
+
+    # IMPROVEMENT 4, Step 2: on the tick where the session changed, rewrite
+    # every signal's session_multiplier IN MEMORY so the aggregation that
+    # follows uses the new session's relevance weights. The new value is
+    # clamped to [0.5, 1.5] so a session flip can never swing a verdict by
+    # more than a factor of 1.5x in either direction.
+    #
+    # This is a per-tick in-memory adjustment ONLY. The DB rows (news_article
+    # / asset_impact / the WeightedSignal built from them) keep their
+    # original session_multiplier; nothing is written back. The reweight is
+    # recomputed from scratch on every tick, so a later tick in the same
+    # session starts from the stored value again.
+    if session_changed:
+        for s in signals:
+            new_mult = session_relevance(current_session, s.category.value)
+            new_mult = max(0.5, min(1.5, new_mult))
+            s.session_multiplier = new_mult
+        log.info(
+            "Session changed %s→%s: reweighted %d signals",
+            previous_session, current_session, len(signals),
         )
 
     global _last_regime
@@ -844,9 +976,13 @@ def _recompute_sentiment(session, stats: IngestStats):
                                "direction": result.conflict.direction,
                                "weight": result.conflict.weight}
                               if result.conflict else None),
-                    note=result.note,
-                    contributing_articles=result.contributing_articles,
-                    price_note=_price_note(asset),
+note=result.note,
+                     contributing_articles=result.contributing_articles,
+                     signal_count=result.signal_count,
+                     contradiction_detected=result.contradiction_detected,
+                     burst_bull=result.burst_bull,
+                     burst_bear=result.burst_bear,
+                     price_note=_price_note(asset),
                 )
             )
         log.info(
@@ -1136,6 +1272,15 @@ async def run_once() -> IngestStats:
 
             existing = _load_existing_guids(session)
             new_articles: list[NewsArticle] = []
+
+            # CHANGE 7: rank the fetched batch BEFORE the LLM cap is applied,
+            # so the 15 highest-priority articles get model attention. Without
+            # this the cap is hit in arrival order and a rush of low-quality
+            # noise can consume every slot, leaving a Tier 1 release to
+            # heuristics. Sort is by source_quality then published_at (newest
+            # first); every article is still ingested, only the classification
+            # mode differs.
+            report.articles = _priority_sort_articles(report.articles)
 
             llm_calls = 0
             for art in report.articles:

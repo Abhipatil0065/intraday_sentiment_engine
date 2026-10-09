@@ -900,7 +900,18 @@ def resolve_calendar_signals(events: Sequence[CalendarEvent],
     here, so existing callers pick the new behaviour up automatically.
     """
     reference = now or datetime.now(timezone.utc)
-    cutoff = reference + timedelta(hours=max(0, horizon_hours))
+    # horizon_hours may arrive as a non-int (a test double, a string, a
+    # MagicMock auto-attribute). ``max(0, x)`` raises TypeError for anything
+    # that is not orderable against an int, and that exception propagated out
+    # of the pipeline and killed every subsequent tick (the calendar is
+    # supposed to be optional enrichment, never fatal). Coerce defensively.
+    try:
+        horizon = int(horizon_hours)
+    except (TypeError, ValueError):
+        horizon = 48
+    if horizon < 0:
+        horizon = 0
+    cutoff = reference + timedelta(hours=horizon)
     signals: list[CalendarSignal] = []
     for event in events:
         if event.when_utc is None:
