@@ -1066,10 +1066,16 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
         final_bias = last_bias
         # Use payload_score to ensure score sign matches the held label
         score = payload_score(raw, final_bias)
-        # Held-but-weak call: cap confidence low
-        confidence = min(confidence, TIEBREAK_MAX_CONFIDENCE)
-        note = f"Bias held (stability): {last_bias.value} maintained despite raw score {raw:.1f}."
-        low_quality = True
+        # If raw agrees with held bias (same sign, outside EPS), confirm without capping
+        agrees = (abs(raw) >= EPS) and ((raw > 0) == (last_bias is Bias.BULLISH))
+        if agrees:
+            note = f"Bias confirmed: {last_bias.value} maintained with raw score {raw:.1f}."
+            low_quality = False
+        else:
+            # Held-but-weak call: cap confidence low
+            confidence = min(confidence, TIEBREAK_MAX_CONFIDENCE)
+            note = f"Bias held (stability): {last_bias.value} maintained despite raw score {raw:.1f}."
+            low_quality = True
     else:
         # Flip to computed bias (or first-run bias), or use flipped_bias from Tier-1 bypass
         final_bias = flipped_bias if last_bias is not None else computed_bias
