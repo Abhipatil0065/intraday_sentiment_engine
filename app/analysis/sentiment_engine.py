@@ -164,6 +164,21 @@ MIN_TOTAL_WEIGHT = 0.15
 FLIP_MIN_CONFIDENCE = 0.35
 
 
+def confidence_label_for(conf: float, low_quality: bool) -> str:
+    """
+    Map confidence to a label.
+
+    LOW   if low_quality (bias held or tie-broken) or conf < 0.35
+    MEDIUM if conf < 0.55
+    HIGH  otherwise
+    """
+    if low_quality or conf < 0.35:
+        return "LOW"
+    if conf < 0.55:
+        return "MEDIUM"
+    return "HIGH"
+
+
 def payload_score(raw_score: float, bias) -> float:
     """
     The score a payload may show for ``bias``.
@@ -447,6 +462,7 @@ class SentimentResult:
     burst_bull: int = 0
     burst_bear: int = 0
     note: str = ""
+    confidence_label: str = "LOW"
 
 
 def decay_weight(published_at: datetime | None, tier: str,
@@ -950,6 +966,7 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
             stale=True, signal_count=0,
             burst_bull=0, burst_bear=0,
             note=note, damped_score=0.0,
+            confidence_label="LOW",
         )
 
     agg = _aggregate(relevant, now)
@@ -968,7 +985,7 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
     # Total directional weight for dampening
     total_weight = bull + bear
 
-    # NO_BIAS gate: total weight below minimum returns neutral without
+    # NO_BIAS gate: total weight below minimum returns a binary bias without
     # writing to remember_bias or overwriting the last real bias.
     if total_weight < MIN_TOTAL_WEIGHT:
         # Compute drivers for the early return (same logic as below)
@@ -977,18 +994,33 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
         conflict_early = _strongest_conflict(bull_items, bear_items)
         bull_drivers_early = _top_drivers(bull_items)
         bear_drivers_early = _top_drivers(bear_items)
+        # Determine binary bias: stronger side wins; if tied, use history or tie-break
+        if bull > bear:
+            weak_bias = Bias.BULLISH
+            is_stale = False
+            stale_note = "Weak evidence: total weight below minimum"
+        elif bear > bull:
+            weak_bias = Bias.BEARISH
+            is_stale = False
+            stale_note = "Weak evidence: total weight below minimum"
+        else:
+            carried = recall_bias(key)
+            weak_bias = carried if carried is not None else _tie_break_bias(relevant, history_key=key, now=now)
+            is_stale = True
+            stale_note = "No directional evidence; label carried over (stale)"
         return SentimentResult(
             asset=asset, score=0.0, raw_score=0.0, damped_score=0.0, confidence=0.0,
-            bias=Bias.NO_BIAS, mode=mode,
+            bias=weak_bias, mode=mode,
             drivers=drivers_early, conflict=conflict_early,
             bull_drivers=bull_drivers_early, bear_drivers=bear_drivers_early,
             delta_60m=_delta_60m(list(signals), asset, now),
             event_risk=event_risk, event_risk_note=event_risk_note,
             contributing_articles=agg["used"], contributing_clusters=agg["clusters"],
-            stale=False, signal_count=len(relevant),
+            stale=is_stale, signal_count=len(relevant),
             burst_bull=agg["burst_bull"], burst_bear=agg["burst_bear"],
-            note="No directional signal (total weight below minimum)",
+            note=stale_note,
             contradiction_detected=contradiction_detected,
+            confidence_label="LOW",
         )
 
     # BINARY BIAS: label = sign of the net news score. Inside EPS the sign is
@@ -998,30 +1030,10 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
     if abs(raw) >= EPS:
         computed_bias = Bias.BULLISH if raw > 0 else Bias.BEARISH
     else:
-        # Item 5: low confidence hold - if confidence is too low, refuse the
-        # tie-break and return NO_BIAS instead of forcing a binary call on
-        # thin evidence. Do NOT call remember_bias() or _record_flip_time().
+        # Item 5: low confidence - if confidence is too low, we still produce
+        # a binary call via tie-break but cap confidence and mark LOW quality.
         if confidence < FLIP_MIN_CONFIDENCE:
-            # Compute drivers for the early return (same logic as below)
-            leading_for_early = bull_items if (bull > bear) else bear_items
-            drivers_early = _top_drivers(leading_for_early)
-            conflict_early = _strongest_conflict(bull_items, bear_items)
-            bull_drivers_early = _top_drivers(bull_items)
-            bear_drivers_early = _top_drivers(bear_items)
-            return SentimentResult(
-                asset=asset, score=0.0, raw_score=raw, damped_score=0.0,
-                confidence=confidence, bias=Bias.NO_BIAS, mode=mode,
-                drivers=drivers_early, conflict=conflict_early,
-                bull_drivers=bull_drivers_early, bear_drivers=bear_drivers_early,
-                delta_60m=_delta_60m(list(signals), asset, now),
-                event_risk=event_risk, event_risk_note=event_risk_note,
-                contributing_articles=agg["used"],
-                contributing_clusters=agg["clusters"],
-                stale=False, signal_count=len(relevant),
-                burst_bull=agg["burst_bull"], burst_bear=agg["burst_bear"],
-                note="Torn evidence: net score inside EPS, low confidence",
-                contradiction_detected=contradiction_detected,
-            )
+            confidence = min(confidence, TIEBREAK_MAX_CONFIDENCE)
         computed_bias = _tie_break_bias(relevant, history_key=key, now=now)
         # A tie-break is a weak call: cap the confidence low so the payload
         # still reads as weak once the label is forced to name a side.
@@ -1041,12 +1053,14 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
     bull_drivers = _top_drivers(bull_items)
     bear_drivers = _top_drivers(bear_items)
 
-# STABILITY (Task 8): check if we should flip from the last published bias
+    # STABILITY (Task 8): check if we should flip from the last published bias
     last_bias = recall_bias(key)
     should_flip, flipped_bias = _should_flip(
         bull, bear, last_bias, relevant, now, key,
         flip_margin_override=effective_flip_margin)
-    
+
+    low_quality = False
+
     if not should_flip and last_bias is not None:
         # Hold the previous bias - payload score must match the held label
         final_bias = last_bias
@@ -1055,6 +1069,7 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
         # Held-but-weak call: cap confidence low
         confidence = min(confidence, TIEBREAK_MAX_CONFIDENCE)
         note = f"Bias held (stability): {last_bias.value} maintained despite raw score {raw:.1f}."
+        low_quality = True
     else:
         # Flip to computed bias (or first-run bias), or use flipped_bias from Tier-1 bypass
         final_bias = flipped_bias if last_bias is not None else computed_bias
@@ -1064,7 +1079,11 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
             note = f"Bias flipped: {last_bias.value} -> {final_bias.value} (raw {raw:.1f})."
         else:
             note = ""
-        remember_bias(key, final_bias)
+        # Only remember non-tie-break verdicts (abs(raw) >= EPS)
+        if abs(raw) >= EPS:
+            remember_bias(key, final_bias)
+        # Tie-break case (raw inside EPS) is low quality
+        low_quality = abs(raw) < EPS
 
     # Dampened score for display/cue strength (raw used for bias/flip/stability)
     damped = _damped_score(raw, total_weight)
@@ -1111,6 +1130,7 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
         burst_bear=agg["burst_bear"],
         note=note,
         contradiction_detected=contradiction_detected,
+        confidence_label=confidence_label_for(confidence, low_quality),
     )
 
 

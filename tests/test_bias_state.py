@@ -114,12 +114,13 @@ def test_all_directionless_items_produce_a_binary_verdict():
     assert r.bias in (Bias.BULLISH, Bias.BEARISH)
 
 
-def test_tiny_net_score_is_no_bias():
+def test_tiny_net_score_is_low_confidence():
     r = compute([make(direction=Direction.BULLISH, relevance=0.2,
                       strength=ImpactStrength.LOW,
                       importance=EconomicImportance.LOW)], Asset.GOLD)
     if abs(r.score) < _min_score():
-        assert r.bias is Bias.NO_BIAS
+        assert r.bias in (Bias.BULLISH, Bias.BEARISH)
+        assert r.confidence_label == "LOW"
 
 
 def test_low_confidence_is_no_bias_even_with_a_signed_score():
