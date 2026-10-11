@@ -191,6 +191,8 @@ class SentimentSnapshot(Base):
     burst_bear: Mapped[int] = mapped_column(Integer, default=0)
 
     price_note: Mapped[str] = mapped_column(Text, default="")
+    stale: Mapped[bool] = mapped_column(Boolean, default=False)
+    confidence_label: Mapped[str] = mapped_column(String(8), default="LOW")
     computed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, index=True)
 

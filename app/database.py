@@ -195,6 +195,7 @@ def _add_missing_bias_snapshot_columns() -> None:
 def _add_missing_sentiment_columns() -> None:
     """
     Item 1: add the raw_score / baseline_score columns to sentiment_snapshot.
+    Item 2: add stale / confidence_label columns.
 
     Same idempotent PRAGMA-then-ALTER pattern as the migrations above: columns
     are added only when genuinely absent, so an old database picks up the
@@ -206,6 +207,8 @@ def _add_missing_sentiment_columns() -> None:
     add_columns = {
         "raw_score": "FLOAT",
         "baseline_score": "FLOAT",
+        "stale": "BOOLEAN DEFAULT 0",
+        "confidence_label": "VARCHAR(8) DEFAULT 'LOW'",
     }
     try:
         with engine.begin() as conn:

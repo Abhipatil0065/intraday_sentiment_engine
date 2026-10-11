@@ -77,7 +77,7 @@ _news_since_update = 0
 _running = False
 _last_regime = None  # RegimeAssessment from the most recent recompute
 # Economic-calendar signals from the most recent fetch, shared with the API.
-_calendar_signals: list[CalendarSignal] = []
+_last_calendar_signals: list[CalendarSignal] = []
 # Session-aware global equity card from the most recent recompute (NOW-only).
 _last_equity_card: dict | None = None
 
@@ -977,12 +977,14 @@ def _recompute_sentiment(session, stats: IngestStats):
                                "weight": result.conflict.weight}
                               if result.conflict else None),
 note=result.note,
-                     contributing_articles=result.contributing_articles,
-                     signal_count=result.signal_count,
-                     contradiction_detected=result.contradiction_detected,
-                     burst_bull=result.burst_bull,
-                     burst_bear=result.burst_bear,
-                     price_note=_price_note(asset),
+                      contributing_articles=result.contributing_articles,
+                      signal_count=result.signal_count,
+                      contradiction_detected=result.contradiction_detected,
+                      burst_bull=result.burst_bull,
+                      burst_bear=result.burst_bear,
+                      stale=result.stale,
+                      confidence_label=result.confidence_label,
+                      price_note=_price_note(asset),
                 )
             )
         log.info(

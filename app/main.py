@@ -235,6 +235,7 @@ def _block(session, asset: str, scope: str) -> dict:
             "event_risk": False, "event_risk_note": "",
             "drivers": [], "bull_drivers": [], "bear_drivers": [], "conflict": None,
             "stale": True,
+            "confidence_label": "LOW",
             "note": "No sentiment computed yet for this scope.",
             "contributing_articles": 0, "contributing_clusters": 0,
             "signal_count": 0,
@@ -278,7 +279,8 @@ def _block(session, asset: str, scope: str) -> dict:
         # Binary bias: a snapshot with n=0 carried its bias forward from
         # history (or the newest article / DEFAULT_BIAS) instead of news in
         # this window.
-        "stale": snap.contributing_articles == 0,
+        "stale": bool(getattr(snap, "stale", False)) or snap.contributing_articles == 0,
+        "confidence_label": getattr(snap, "confidence_label", "LOW"),
         "note": snap.note or "",
         "contributing_articles": snap.contributing_articles,
         "contributing_clusters": 0,
