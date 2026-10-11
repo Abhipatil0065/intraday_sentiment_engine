@@ -51,10 +51,16 @@
   .alert-pill.show{display:inline-flex}
   .alert-pill .dot{width:7px;height:7px;border-radius:50%;background:#fff}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.55}}
-  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
-       background:var(--neu);margin-right:5px;vertical-align:middle}
-  .dot.on{background:var(--bull);box-shadow:0 0 6px var(--bull)}
-  main{max-width:1500px;width:100%;margin:0 auto;padding:14px 18px 26px}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;
+        background:var(--neu);margin-right:5px;vertical-align:middle}
+   .dot.on{background:var(--bull);box-shadow:0 0 6px var(--bull)}
+   /* Confidence badge & weak-state styling */
+   .conf-badge{font-size:10px;padding:1px 6px;border-radius:8px;margin-left:6px;border:1px solid var(--neu);color:var(--neu)}
+   .conf-badge.high{border-color:var(--bull);color:var(--bull)}
+   .conf-badge.medium{border-color:#d29922;color:#d29922}
+   .verdict.weak{opacity:.45}
+   .split-weak{opacity:.55}
+   main{max-width:1500px;width:100%;margin:0 auto;padding:14px 18px 26px}
   h2{font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;
      margin:22px 0 9px;display:flex;gap:9px;align-items:baseline}
   h2 .n{color:var(--txt);font-weight:400;letter-spacing:0}
@@ -636,6 +642,7 @@ function prepCard(a){
   var b=a.market_prep||{};
   var d=disp(b);
   var risk=b.event_risk?'<span class="risk">EVENT RISK</span>':'';
+  var isWeak=(b.confidence_label==='LOW' || b.stale);
   return '<div class="mcard '+String(a.label||'').toLowerCase()
     +'" data-goto="asset-'+esc(a.symbol)+'" title="Jump to the '
     +esc(String(a.label||'').toUpperCase())+' economic calendar">'
@@ -645,13 +652,15 @@ function prepCard(a){
     +'<div class="mrow"><span class="mlabel">SESSIONS</span>'
     +'<span class="msess">'+sessionChain()+'</span></div>'
     +'<div class="mrow"><span class="mlabel">MARKET PREP</span>'
-    +'<span class="verdict '+verdictClass(d.label)+'">'+d.label+' '+d.pct+'%</span>'
+    +'<span class="verdict '+verdictClass(d.label)+(isWeak?' weak':'')+'">'+d.label+' '+d.pct+'%</span>'
+    +'<span class="conf-badge '+String(b.confidence_label||'LOW').toLowerCase()+'">'
+    +(b.stale?'STALE \u00b7 ':'')+(b.confidence_label||'LOW')+'</span>'
     +'</div>'
     +'<div class="msub">expected / forward-looking setup</div>'
     +mbar(b)
     /* Second arg keys the flip tracking to this asset, so every card keeps its
        own independent flip time. */
-    +msplit(b,a.symbol)
+    +(isWeak?'<div class="split-weak">'+msplit(b,a.symbol)+'</div>':msplit(b,a.symbol))
     +'<div class="mdrv">'
     +mnote('bull','BULLISH DRIVERS',b.bull_drivers,3)
     +mnote('bear','BEARISH DRIVERS',b.bear_drivers,3)+'</div>'
@@ -666,6 +675,7 @@ function prepCard(a){
     +'</div>'
     +'</div>';
 }
+
 /* ONE session-aware global equity card in the 4th strip slot.
    Reuses mbar/msplit/mnote/verdictClass - no copied markup. Reads
    payload.equity + payload.equity_title; the element stays in place and only

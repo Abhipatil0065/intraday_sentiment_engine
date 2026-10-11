@@ -77,7 +77,7 @@ _news_since_update = 0
 _running = False
 _last_regime = None  # RegimeAssessment from the most recent recompute
 # Economic-calendar signals from the most recent fetch, shared with the API.
-_last_calendar_signals: list[CalendarSignal] = []
+_calendar_signals: list[CalendarSignal] = []
 # Session-aware global equity card from the most recent recompute (NOW-only).
 _last_equity_card: dict | None = None
 

@@ -132,14 +132,15 @@ def test_equity_tie_break_payload_score_matches_label():
             relevance=weight, persistence=0.7,
             category=NewsCategory.EQUITIES, cluster_id=cluster)
 
-    # Bullish signals are 10 min old so the raw score leans bullish but stays
-    # inside the tie-break band after per-asset sensitivity scaling.
+    # Bullish signals are MEDIUM and 10 min old so the raw score leans
+    # slightly bullish (about +0.5) but stays inside the tie-break band;
+    # the heavier, newer bearish signal wins the label.
     sigs = [
         eq(Direction.BEARISH, ImpactStrength.VERY_HIGH, 1.0, 2, "bear",
            "Nasdaq slides as yields jump"),
-        eq(Direction.BULLISH, ImpactStrength.HIGH, 1.0, 10, "b1",
+        eq(Direction.BULLISH, ImpactStrength.MEDIUM, 1.0, 10, "b1",
            "Nasdaq climbs on earnings"),
-        eq(Direction.BULLISH, ImpactStrength.HIGH, 1.0, 10, "b2",
+        eq(Direction.BULLISH, ImpactStrength.MEDIUM, 1.0, 10, "b2",
            "S&P 500 rises on strong data"),
     ]
     clear_bias_history()
