@@ -95,7 +95,8 @@ def test_all_directionless_items_yield_no_confidence():
                for i in range(5)]
     r = compute(signals, Asset.GOLD, now=NOW)
     assert r.confidence == 0.0
-    assert r.bias in (Bias.BULLISH, Bias.BEARISH)
+    assert r.bias is Bias.NO_BIAS
+    # Directionless items carry no weight, so the engine returns NO_BIAS.
 def test_dominant_bullish_tilt():
     signals = [make(direction=Direction.BULLISH, title=f"b{i}",
                     cluster_id=f"c{i}") for i in range(6)]
@@ -129,14 +130,16 @@ def test_conflicting_signals_reported_not_forced():
     assert r.conflict.title in ("Fed turns dovish", "Dollar surges broadly")
 
 
-def test_balanced_conflict_still_names_a_side():
-    """An even conflict is surfaced AND resolved to a side (binary bias)."""
+def test_balanced_conflict_returns_no_bias():
+    """Balanced conflict with low confidence is torn evidence: NO_BIAS."""
     signals = [
         make(direction=Direction.BULLISH, title="dovish signal", cluster_id="a"),
         make(direction=Direction.BEARISH, title="hawkish signal", cluster_id="b"),
     ]
     r = compute(signals, Asset.GOLD, now=NOW)
-    assert r.bias in (Bias.BULLISH, Bias.BEARISH)
+    assert r.bias is Bias.NO_BIAS
+    assert "Torn evidence" in r.note
+    # Balanced conflict with low confidence is torn evidence: NO_BIAS.
     assert r.confidence < 0.95
 
 

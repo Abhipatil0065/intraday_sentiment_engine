@@ -159,6 +159,10 @@ TIEBREAK_MAX_CONFIDENCE = 0.30
 # verdict. Below this the evidence is too thin and the engine returns NO_BIAS.
 MIN_TOTAL_WEIGHT = 0.15
 
+# Minimum confidence before a computed flip is allowed (Item 5).
+# When confidence is below this, a flip is refused and the previous bias is held.
+FLIP_MIN_CONFIDENCE = 0.35
+
 
 def payload_score(raw_score: float, bias) -> float:
     """
@@ -944,11 +948,20 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
     # NO_BIAS gate: total weight below minimum returns neutral without
     # writing to remember_bias or overwriting the last real bias.
     if total_weight < MIN_TOTAL_WEIGHT:
+        # Compute drivers for the early return (same logic as below)
+        leading_for_min = bull_items if (bull > bear) else bear_items
+        drivers_early = _top_drivers(leading_for_min)
+        conflict_early = _strongest_conflict(bull_items, bear_items)
+        bull_drivers_early = _top_drivers(bull_items)
+        bear_drivers_early = _top_drivers(bear_items)
         return SentimentResult(
             asset=asset, score=0.0, raw_score=0.0, damped_score=0.0, confidence=0.0,
             bias=Bias.NO_BIAS, mode=mode,
-            contributing_articles=agg["used"], contributing_clusters=agg["clusters"],
+            drivers=drivers_early, conflict=conflict_early,
+            bull_drivers=bull_drivers_early, bear_drivers=bear_drivers_early,
+            delta_60m=_delta_60m(list(signals), asset, now),
             event_risk=event_risk, event_risk_note=event_risk_note,
+            contributing_articles=agg["used"], contributing_clusters=agg["clusters"],
             stale=False, signal_count=len(relevant),
             burst_bull=agg["burst_bull"], burst_bear=agg["burst_bear"],
             note="No directional signal (total weight below minimum)",
@@ -962,10 +975,48 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
     if abs(raw) >= EPS:
         computed_bias = Bias.BULLISH if raw > 0 else Bias.BEARISH
     else:
+        # Item 5: low confidence hold - if confidence is too low, refuse the
+        # tie-break and return NO_BIAS instead of forcing a binary call on
+        # thin evidence. Do NOT call remember_bias() or _record_flip_time().
+        if confidence < FLIP_MIN_CONFIDENCE:
+            # Compute drivers for the early return (same logic as below)
+            leading_for_early = bull_items if (bull > bear) else bear_items
+            drivers_early = _top_drivers(leading_for_early)
+            conflict_early = _strongest_conflict(bull_items, bear_items)
+            bull_drivers_early = _top_drivers(bull_items)
+            bear_drivers_early = _top_drivers(bear_items)
+            return SentimentResult(
+                asset=asset, score=0.0, raw_score=raw, damped_score=0.0,
+                confidence=confidence, bias=Bias.NO_BIAS, mode=mode,
+                drivers=drivers_early, conflict=conflict_early,
+                bull_drivers=bull_drivers_early, bear_drivers=bear_drivers_early,
+                delta_60m=_delta_60m(list(signals), asset, now),
+                event_risk=event_risk, event_risk_note=event_risk_note,
+                contributing_articles=agg["used"],
+                contributing_clusters=agg["clusters"],
+                stale=False, signal_count=len(relevant),
+                burst_bull=agg["burst_bull"], burst_bear=agg["burst_bear"],
+                note="Torn evidence: net score inside EPS, low confidence",
+                contradiction_detected=contradiction_detected,
+            )
         computed_bias = _tie_break_bias(relevant, history_key=key, now=now)
         # A tie-break is a weak call: cap the confidence low so the payload
         # still reads as weak once the label is forced to name a side.
         confidence = min(confidence, TIEBREAK_MAX_CONFIDENCE)
+
+    # Dampened score for display/cue strength (raw used for bias/flip/stability)
+    damped = _damped_score(raw, total_weight)
+
+    # Drivers are reported on the side the CURRENT SIGNALS point to (computed_bias),
+    # not the held bias. This ensures drivers reflect what the news is saying now.
+    # The bull_drivers/bear_drivers always show both sides for the dashboard.
+    leading = bull_items if computed_bias is Bias.BULLISH else bear_items
+    drivers = _top_drivers(leading)
+    conflict = _strongest_conflict(bull_items, bear_items)
+    # Both sides kept separately for the dashboard, which shows a bullish box
+    # and a bearish box side by side rather than only the leading side.
+    bull_drivers = _top_drivers(bull_items)
+    bear_drivers = _top_drivers(bear_items)
 
 # STABILITY (Task 8): check if we should flip from the last published bias
     last_bias = recall_bias(key)
