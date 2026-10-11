@@ -194,6 +194,8 @@ class SentimentSnapshot(Base):
     computed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, index=True)
 
+    outcomes: Mapped[list[BiasOutcome]] = relationship(back_populates="snapshot")
+
 
 class BiasSnapshot(Base):
     """
@@ -274,3 +276,26 @@ class PipelineRun(Base):
     articles_rejected: Mapped[int] = mapped_column(Integer, default=0)
     llm_errors: Mapped[int] = mapped_column(Integer, default=0)
     detail: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class BiasOutcome(Base):
+    """Manual calibration label against a bias snapshot (section 10).
+
+    One row per human label recorded via /api/calibration/labels.
+    """
+
+    __tablename__ = "bias_outcome"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    bias_snapshot_id: Mapped[int] = mapped_column(
+        ForeignKey("sentiment_snapshot.id", ondelete="CASCADE"), index=True)
+    asset: Mapped[str] = mapped_column(String(12), index=True)
+    date_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    bias: Mapped[str] = mapped_column(String(16))
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    outcome: Mapped[str] = mapped_column(String(32))
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    snapshot: Mapped[SentimentSnapshot] = relationship(back_populates="outcomes")

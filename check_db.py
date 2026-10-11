@@ -1,17 +1,11 @@
 import sqlite3
-conn = sqlite3.connect('data/intraday_sentiment.db')
+conn = sqlite3.connect('C:/Users/HP/.vscode/intraday_sentiment_engine/data/intraday_sentiment.db')
 cursor = conn.cursor()
-
-# Check tables
 cursor.execute('SELECT name FROM sqlite_master WHERE type="table"')
-print(cursor.fetchall())
-
-# Check news_article table
-cursor.execute('SELECT COUNT(*) FROM news_article')
-print('news_article count:', cursor.fetchone()[0])
-
-cursor.execute('SELECT COUNT(*) FROM news_article WHERE is_today = 1')
-print('news_article today count:', cursor.fetchone()[0])
-
-cursor.execute('SELECT COUNT(*) FROM asset_impact')
-print('asset_impact count:', cursor.fetchone()[0])
+tables = [row[0] for row in cursor.fetchall()]
+print('Tables:', tables)
+for t in ['sentiment_snapshot', 'bias_outcome', 'bias_snapshots', 'news_article']:
+    cursor.execute('PRAGMA table_info(' + t + ')')
+    cols = [row[1] for row in cursor.fetchall()]
+    print(t + ':', cols)
+conn.close()
