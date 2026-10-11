@@ -102,6 +102,8 @@ class PolarityPair:
     # Phrases that already encode direction and need no verb check.
     fixed_positive: tuple[str, ...] = ()
     fixed_negative: tuple[str, ...] = ()
+    # If True, fixed phrases require a subject to be present in the text.
+    fixed_requires_subject: bool = False
 # --------------------------------------------------------------------------
 # The pairs
 # --------------------------------------------------------------------------
@@ -142,7 +144,7 @@ POLARITY_PAIRS: tuple[PolarityPair, ...] = (
                     "tightening", "hawkish", "restrict", "restricts",
                     "higher for longer", "rate hike"),
     ),
-    # Inflation prints.
+# Inflation prints.
     PolarityPair(
         positive="COOL_INFLATION", negative="HOT_INFLATION",
         subjects=("cpi", "core pce", "pce", "ppi", "core inflation",
@@ -152,10 +154,18 @@ POLARITY_PAIRS: tuple[PolarityPair, ...] = (
                   "below expectations", "missed forecasts", "softer",
                   "benign", "falls", "fell", "lower", "declines"),
         down_verbs=("accelerates", "accelerated", "accelerating", "hotter",
-                    "hot", "sticky", "stickier", "firm", "firmly",
-                    "resilient", "above expectations", "beats expectations",
-                    "higher", "climbs", "climbed", "spikes", "spiked",
-                    "rises", "rose", "rising"),
+                      "hot", "sticky", "stickier", "firm", "firmly",
+                      "resilient", "above expectations", "beats expectations",
+                      "higher", "climbs", "climbed", "spikes", "spiked",
+                      "rises", "rose", "rising"),
+        fixed_positive=("misses forecasts", "miss forecasts", "misses expectations",
+                        "miss expectations", "misses estimates", "below forecasts",
+                        "below consensus", "below estimates"),
+        fixed_negative=("beats forecasts", "beat forecasts", "beat expectations",
+                        "beats estimates", "beat estimates", "tops forecasts",
+                        "tops estimates", "above forecasts", "above consensus",
+                        "above estimates", "exceeds forecasts", "exceeds expectations"),
+        fixed_requires_subject=True,
     ),
     # Labour data.
     PolarityPair(
@@ -255,12 +265,28 @@ def resolve_pair(lowered: str, pair: PolarityPair) -> str | None:
     verb ("the dollar index") genuinely does not say which way it went, and
     guessing here is what produced VAL-5.
     """
-    for phrase in pair.fixed_negative:
-        if contains_plural(lowered, phrase):
-            return pair.negative
-    for phrase in pair.fixed_positive:
-        if contains_plural(lowered, phrase):
-            return pair.positive
+    # If fixed phrases require a subject, check for one first.
+    if pair.fixed_requires_subject:
+        tokens = _tokens(lowered)
+        has_subject = any(_find_subject_index(tokens, s) is not None
+                          for s in pair.subjects)
+        if not has_subject:
+            # Skip fixed phrases; fall through to normal subject/verb logic.
+            pass
+        else:
+            for phrase in pair.fixed_negative:
+                if contains_plural(lowered, phrase):
+                    return pair.negative
+            for phrase in pair.fixed_positive:
+                if contains_plural(lowered, phrase):
+                    return pair.positive
+    else:
+        for phrase in pair.fixed_negative:
+            if contains_plural(lowered, phrase):
+                return pair.negative
+        for phrase in pair.fixed_positive:
+            if contains_plural(lowered, phrase):
+                return pair.positive
 
     tokens = _tokens(lowered)
     if not tokens:

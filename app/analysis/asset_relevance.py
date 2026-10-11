@@ -7,35 +7,39 @@ assets an article is analysed against at all.
 
 from __future__ import annotations
 
+import re
+
 from app.analysis.text_match import contains_phrase
+from app.analysis.transmission_map import detect_event_types
+from app.config import settings
 from app.models.enums import Asset, NewsCategory
 
 # Base relevance 0.0-1.0 per (category, asset).
 RELEVANCE: dict[NewsCategory, dict[Asset, float]] = {
-    NewsCategory.CENTRAL_BANK:            {Asset.GOLD: 0.90, Asset.SILVER: 0.88, Asset.BITCOIN: 0.86},
-    NewsCategory.INTEREST_RATES:          {Asset.GOLD: 0.90, Asset.SILVER: 0.85, Asset.BITCOIN: 0.84},
-    NewsCategory.INFLATION:               {Asset.GOLD: 0.82, Asset.SILVER: 0.80, Asset.BITCOIN: 0.76},
-    NewsCategory.EMPLOYMENT:              {Asset.GOLD: 0.78, Asset.SILVER: 0.72, Asset.BITCOIN: 0.76},
-    NewsCategory.GDP:                     {Asset.GOLD: 0.62, Asset.SILVER: 0.70, Asset.BITCOIN: 0.70},
-    NewsCategory.TREASURY_YIELDS:         {Asset.GOLD: 0.92, Asset.SILVER: 0.84, Asset.BITCOIN: 0.82},
-    NewsCategory.USD_DXY:                 {Asset.GOLD: 0.88, Asset.SILVER: 0.84, Asset.BITCOIN: 0.72},
-    NewsCategory.GEOPOLITICS:             {Asset.GOLD: 0.82, Asset.SILVER: 0.70, Asset.BITCOIN: 0.66},
-    NewsCategory.RISK_SENTIMENT:          {Asset.GOLD: 0.72, Asset.SILVER: 0.72, Asset.BITCOIN: 0.80},
-    NewsCategory.ETF_FLOWS:               {Asset.GOLD: 0.86, Asset.SILVER: 0.80, Asset.BITCOIN: 0.55},
-    NewsCategory.COMMODITY_SUPPLY_DEMAND: {Asset.GOLD: 0.80, Asset.SILVER: 0.78, Asset.BITCOIN: 0.10},
-    NewsCategory.INDUSTRIAL_DEMAND:       {Asset.GOLD: 0.28, Asset.SILVER: 0.72, Asset.BITCOIN: 0.20},
-    NewsCategory.CHINA:                   {Asset.GOLD: 0.55, Asset.SILVER: 0.80, Asset.BITCOIN: 0.40},
-    NewsCategory.CRYPTO_REGULATION:       {Asset.GOLD: 0.05, Asset.SILVER: 0.05, Asset.BITCOIN: 0.88},
-    NewsCategory.BITCOIN_ETF_FLOWS:       {Asset.GOLD: 0.05, Asset.SILVER: 0.05, Asset.BITCOIN: 0.95},
-    NewsCategory.CRYPTO_MARKET_FLOWS:     {Asset.GOLD: 0.02, Asset.SILVER: 0.02, Asset.BITCOIN: 0.92},
-    NewsCategory.OIL_ENERGY:              {Asset.GOLD: 0.44, Asset.SILVER: 0.40, Asset.BITCOIN: 0.22},
-    NewsCategory.EQUITIES:                {Asset.GOLD: 0.52, Asset.SILVER: 0.58, Asset.BITCOIN: 0.72},
-    NewsCategory.BANKING_FINANCIAL_STRESS: {Asset.GOLD: 0.78, Asset.SILVER: 0.66, Asset.BITCOIN: 0.74},
+    NewsCategory.CENTRAL_BANK:            {Asset.GOLD: 0.90, Asset.SILVER: 0.88, Asset.BITCOIN: 0.86, Asset.EQUITY: 0.90},
+    NewsCategory.INTEREST_RATES:          {Asset.GOLD: 0.90, Asset.SILVER: 0.85, Asset.BITCOIN: 0.84, Asset.EQUITY: 0.88},
+    NewsCategory.INFLATION:               {Asset.GOLD: 0.82, Asset.SILVER: 0.80, Asset.BITCOIN: 0.76, Asset.EQUITY: 0.80},
+    NewsCategory.EMPLOYMENT:              {Asset.GOLD: 0.78, Asset.SILVER: 0.72, Asset.BITCOIN: 0.76, Asset.EQUITY: 0.85},
+    NewsCategory.GDP:                     {Asset.GOLD: 0.62, Asset.SILVER: 0.70, Asset.BITCOIN: 0.70, Asset.EQUITY: 0.80},
+    NewsCategory.TREASURY_YIELDS:         {Asset.GOLD: 0.92, Asset.SILVER: 0.84, Asset.BITCOIN: 0.82, Asset.EQUITY: 0.85},
+    NewsCategory.USD_DXY:                 {Asset.GOLD: 0.88, Asset.SILVER: 0.84, Asset.BITCOIN: 0.72, Asset.EQUITY: 0.75},
+    NewsCategory.GEOPOLITICS:             {Asset.GOLD: 0.82, Asset.SILVER: 0.70, Asset.BITCOIN: 0.66, Asset.EQUITY: 0.60},
+    NewsCategory.RISK_SENTIMENT:          {Asset.GOLD: 0.72, Asset.SILVER: 0.72, Asset.BITCOIN: 0.80, Asset.EQUITY: 0.90},
+    NewsCategory.ETF_FLOWS:               {Asset.GOLD: 0.86, Asset.SILVER: 0.80, Asset.BITCOIN: 0.55, Asset.EQUITY: 0.70},
+    NewsCategory.COMMODITY_SUPPLY_DEMAND: {Asset.GOLD: 0.80, Asset.SILVER: 0.78, Asset.BITCOIN: 0.10, Asset.EQUITY: 0.10},
+    NewsCategory.INDUSTRIAL_DEMAND:       {Asset.GOLD: 0.28, Asset.SILVER: 0.72, Asset.BITCOIN: 0.20, Asset.EQUITY: 0.15},
+    NewsCategory.CHINA:                   {Asset.GOLD: 0.55, Asset.SILVER: 0.80, Asset.BITCOIN: 0.40, Asset.EQUITY: 0.55},
+    NewsCategory.CRYPTO_REGULATION:       {Asset.GOLD: 0.05, Asset.SILVER: 0.05, Asset.BITCOIN: 0.88, Asset.EQUITY: 0.10},
+    NewsCategory.BITCOIN_ETF_FLOWS:       {Asset.GOLD: 0.05, Asset.SILVER: 0.05, Asset.BITCOIN: 0.95, Asset.EQUITY: 0.15},
+    NewsCategory.CRYPTO_MARKET_FLOWS:     {Asset.GOLD: 0.02, Asset.SILVER: 0.02, Asset.BITCOIN: 0.92, Asset.EQUITY: 0.30},
+    NewsCategory.OIL_ENERGY:              {Asset.GOLD: 0.44, Asset.SILVER: 0.40, Asset.BITCOIN: 0.22, Asset.EQUITY: 0.40},
+    NewsCategory.EQUITIES:                {Asset.GOLD: 0.52, Asset.SILVER: 0.58, Asset.BITCOIN: 0.72, Asset.EQUITY: 1.00},
+    NewsCategory.BANKING_FINANCIAL_STRESS: {Asset.GOLD: 0.78, Asset.SILVER: 0.66, Asset.BITCOIN: 0.74, Asset.EQUITY: 0.85},
     # OTHER deliberately sits BELOW MIN_RELEVANCE. An item we could not
     # classify has no demonstrated transmission path, so it must not reach the
     # assets on category alone. It still routes once the text explicitly names
     # an asset, because the +0.25 mention boost lifts it back over the line.
-    NewsCategory.OTHER:                   {Asset.GOLD: 0.10, Asset.SILVER: 0.10, Asset.BITCOIN: 0.10},
+    NewsCategory.OTHER:                   {Asset.GOLD: 0.10, Asset.SILVER: 0.10, Asset.BITCOIN: 0.10, Asset.EQUITY: 0.10},
 }
 
 # Direct asset mentions override the category default.
@@ -43,10 +47,26 @@ DIRECT_MENTION: dict[Asset, tuple[str, ...]] = {
     Asset.GOLD: ("gold", "xau", "bullion", "comex gold", "gold price"),
     Asset.SILVER: ("silver", "xag", "silver price"),
     Asset.BITCOIN: ("bitcoin", "btc", "xbt", "bitcoin price"),
+    # Item 2: S&P 500 is its own instrument. An explicit equity mention is the
+    # strongest evidence the item is about equities, so it lifts relevance
+    # above the category default - same rule as the metals.
+    Asset.EQUITY: ("s&p 500", "s&p", "spx", "sp500", "nasdaq", "ndx",
+                   "dow jones", "dow", "wall street", "us stocks",
+                   "stock market", "equities", "equity market",
+                   "russell 2000", "russell", "vix"),
 }
 
 # Below this relevance the asset is not analysed for that article at all.
 MIN_RELEVANCE = 0.20
+
+# Mega-cap patterns for OTHER category earnings override (Item 6).
+_earnings_mega_cap_names = [n.strip().lower() for n in settings.earnings_mega_cap_names.split(",")]
+_EARNINGS_MEGA_CAP_PATTERNS = [
+    re.compile(rf"(?<!\w){re.escape(name)}(?!\w)") for name in _earnings_mega_cap_names
+]
+
+# Earnings event types that trigger mega-cap override for OTHER category.
+_EARNINGS_EVENT_TYPES = {"EARNINGS_BEAT", "EARNINGS_MISS", "GUIDANCE_RAISED", "GUIDANCE_CUT"}
 
 
 def base_relevance(category: NewsCategory, asset: Asset) -> float:
@@ -61,9 +81,20 @@ def relevance_for(category: NewsCategory, asset: Asset, text: str) -> float:
     and raises relevance; it never fully overrides the category default
     because a headline may mention an asset while driving a different
     mechanism (e.g. an oil headline that mentions gold).
+
+    OTHER category special case: if the headline contains a mega-cap name
+    and an earnings event type (EARNINGS_BEAT/MISS, GUIDANCE_RAISED/CUT)
+    is detected, force EQUITY relevance to 1.0 so the signal routes.
     """
     lowered = text.lower()
     base = base_relevance(category, asset)
+
+    # OTHER category + mega-cap earnings -> force EQUITY relevance to 1.0
+    if category is NewsCategory.OTHER and asset is Asset.EQUITY:
+        detected = detect_event_types(text, category)
+        if any(et.value in _EARNINGS_EVENT_TYPES for et in detected):
+            if any(p.search(lowered) for p in _EARNINGS_MEGA_CAP_PATTERNS):
+                return 1.0
 
     mentions = sum(1 for token in DIRECT_MENTION[asset] if contains_phrase(lowered, token))
     if mentions:

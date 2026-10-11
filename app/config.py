@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import statistics
 from datetime import timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -169,9 +170,55 @@ class Settings(BaseSettings):
     bias_min_abs_score: float = 12.0
     bias_min_confidence: float = 0.30
     bias_score_scale: float = 100.0
+    # ---- Item 5: minimum confidence before a computed flip is allowed. ----
+    # A flip the stability gates say "yes" to still has to clear this floor:
+    # below it the new reading is too thin to be trusted and the previous bias
+    # is held instead, with the note recording the reason. This is a GATE on
+    # flipping, not on publishing - the label stays binary, and a first-run
+    # verdict (no previous bias to hold) is never refused. 0.35 is the
+    # proposed default; raise it to make flips harder, lower to make them
+    # easier.
+    flip_min_confidence: float = 0.35
     # Dampening factor for display/cue strength. damped = raw * total_weight / (total_weight + k).
     # k=0 disables dampening (damped = raw). Default 0.5.
     score_damping_k: float = Field(default=0.5, validation_alias="SCORE_DAMPING_K")
+
+    # ---------------- per-asset baseline normalization (item 1) ----------------
+    # Financial news is structurally negative-heavy, so raw cue scores carry a
+    # persistent per-asset skew: the bias_snapshots log ran ~81% BEARISH. A raw
+    # score is a LEVEL, not a change, so subtracting a rolling baseline of the
+    # asset's own recent raw scores turns "how negative is today" into "how
+    # different is today from the last few ticks" - which is what a direction
+    # actually is.
+    #
+    # The baseline is computed from PERSISTED bias_snapshots rows only (articles
+    # are purged at 48h, snapshots are the durable source), strictly from ticks
+    # BEFORE the current one, so there is never any same-tick look-ahead.
+    #
+    # BASELINE_WINDOW_TICKS - how many prior persisted ticks form the baseline.
+    # BASELINE_MIN_TICKS  - fewer than this and the baseline is not trustworthy;
+    #                        the raw score is published as-is until then.
+    # BASELINE_STATISTIC  - "median" (default) or "mean". Median is used because
+    #                        BTCUSD's raw scores cluster in a deep negative tail
+    #                        (-55..-90 for long stretches), where the MEAN is
+    #                        dragged so far negative that a clearly bearish score
+    #                        (-56.7 against a -65 mean) reads as BULLISH - an
+    #                        inversion. The median is robust to that tail.
+    # BASELINE_ENABLED    - feature switch; false publishes raw scores exactly
+    #                        as before this change.
+    # BASELINE_MIN_SCORE  - when |raw| is below this the score is a tie-break
+    #                        band, not a verdict: publish raw as-is so borderline
+    #                        calls are untouched. Mirrors the existing EPS floor.
+    baseline_window_ticks: int = Field(
+        default=20, validation_alias="BASELINE_WINDOW_TICKS")
+    baseline_min_ticks: int = Field(
+        default=5, validation_alias="BASELINE_MIN_TICKS")
+    baseline_statistic: str = Field(
+        default="median", validation_alias="BASELINE_STATISTIC")
+    baseline_enabled: bool = Field(
+        default=True, validation_alias="BASELINE_ENABLED")
+    baseline_min_score: float = Field(
+        default=12.0, validation_alias="BASELINE_MIN_SCORE")
 
     # ---------------- text quality (item 5) ----------------
     # Token distance within which a subject and verb are treated as related.
@@ -272,7 +319,33 @@ class Settings(BaseSettings):
     news_sources: str = ""
 
     # ---------------- assets ----------------
-    assets: str = "XAUUSD,XAGUSD,BTCUSD"
+    # Item 2: S&P 500 as a first-class asset. EQUITY is iterated by the pipeline
+    # like the other three, persisted to sentiment_snapshot/bias_snapshots, and
+    # served from its own card - it is no longer a proxy for BITCOIN.
+    assets: str = "XAUUSD,XAGUSD,BTCUSD,EQUITY"
+
+    # ---------------- session profiles (Item 3) ----------------
+    # Per-asset session multiplier profile. BTCUSD is "flat" by default: it
+    # trades 24 hours a day, so an Asia-session or weekend headline carries the
+    # same weight as a New York one, unlike the physical metals which are
+    # thinly traded outside London/New York.
+    #
+    # Values: "metal" (session curve + weekend discount), "flat" (1.0 always),
+    # "weekend_tolerant" (session curve, weekends at full weight).
+    #
+    # Override per asset, e.g. BTC_SESSION_PROFILE=weekend_tolerant,
+    # XAG_SESSION_PROFILE=flat. Unknown values fall back to "metal".
+    asset_session_profiles: str = ""
+
+    # ---------------- cross-asset bleed (Item 4) ----------------
+    # How much a high-relevance gold story bleeds into silver (and vice versa).
+    # Both relevance AND persistence are multiplied by this, so it is a single
+    # knob for how much the pair shares a common driver. Lower values make
+    # silver require its OWN corroboration rather than inheriting gold's read;
+    # the 0.40 default reflects the historical observation that most macro
+    # headlines genuinely move both metals, while 0.30 is the proposed
+    # tightening that stops silver being a shadow of gold.
+    gold_silver_bleed: float = 0.30
 
     # ---------------- decision log / audit (item 11) ----------------
     # Every classification and every published bias is appended here so the
@@ -408,6 +481,16 @@ class Settings(BaseSettings):
     # When a release publishes both m/m and y/y, keep one row per asset.
     calendar_dedupe_mom_yoy: bool = True
 
+    # Earnings mega-cap / unnamed multipliers (Item 6).
+    # Applied in _signal_weight() when event type is an earnings type.
+    # Mega-cap names get 2x weight; unnamed/small-cap get 0.3x.
+    earnings_mega_cap_names: str = (
+        "apple,microsoft,nvidia,amazon,alphabet,google,meta,tesla,"
+        "broadcom,jpmorgan,berkshire,eli lilly,visa,walmart,exxon"
+    )
+    earnings_mega_cap_mult: float = 2.0
+    earnings_unnamed_mult: float = 0.3
+
     # ---------------- ports ----------------
     dashboard_port: int = 8501
     api_host: str = "127.0.0.1"
@@ -457,6 +540,25 @@ class Settings(BaseSettings):
     def supported_assets(self) -> list[str]:
         return [a.strip().upper() for a in self.assets.split(",") if a.strip()]
 
+    @property
+    def asset_session_profile_map(self) -> dict[str, str]:
+        """
+        Per-asset session multiplier profile, parsed from ``asset_session_profiles``.
+
+        Format: ``BTC=flat,XAG=weekend_tolerant``. Unknown values fall back to
+        the hardcoded default in ``ASSET_SESSION_PROFILES``.
+        """
+        out: dict[str, str] = {}
+        for chunk in (self.asset_session_profiles or "").split(","):
+            if "=" not in chunk:
+                continue
+            key, _, value = chunk.partition("=")
+            key = key.strip().upper()
+            value = value.strip().lower()
+            if key and value:
+                out[key] = value
+        return out
+
     def parsed_table(self, raw: str) -> dict:
         """
         Parse a ``k=v,k=v`` config string into a lowercase-keyed dict.
@@ -486,6 +588,18 @@ class Settings(BaseSettings):
     def surprise_stds(self) -> dict:
         """Historical standard deviation per calendar indicator keyword."""
         return self.parsed_table(self.surprise_std_table)
+
+    @property
+    def baseline_statistic_fn(self):
+        """The aggregation function used for the rolling baseline (item 1).
+
+        Defaults to the median. ``BASELINE_STATISTIC=mean`` selects the mean,
+        which is exposed for comparison but is NOT recommended: BTCUSD's raw
+        scores cluster in a deep negative tail, and the mean is dragged far
+        enough below them that a clearly bearish score reads as bullish.
+        """
+        return statistics.mean if self.baseline_statistic.lower() == "mean" \
+            else statistics.median
 
     @property
     def calendar_provider_list(self) -> list[str]:
@@ -620,6 +734,7 @@ DRIVER_RANKINGS: dict[str, dict[str, float]] = {
         "STRONG_JOBS": 0.85,
         "WEAK_JOBS": 0.80,
         "GEOPOLITICAL_RISK": 1.00,   # risk-off = bullish gold
+        "GEOPOLITICAL_DEESCALATION": 1.00,   # de-escalation = bearish gold
         "BANKING_STRESS": 0.95,      # safe-haven demand
         "RISK_OFF": 0.90,            # flight to quality
         "RISK_ON": 0.50,             # risk-on hurts gold
@@ -627,6 +742,7 @@ DRIVER_RANKINGS: dict[str, dict[str, float]] = {
         "BTC_ETF_FLOW": 0.05,
         "CRYPTO_REGULATION": 0.05,
         "CRYPTO_LIQUIDATION": 0.10,
+        "CRYPTO_HACK": 0.05,
         "CHINA_DEMAND": 0.40,
         "INDUSTRIAL_DEMAND": 0.20,
         "COMMODITY_SUPPLY": 0.60,
@@ -648,6 +764,7 @@ DRIVER_RANKINGS: dict[str, dict[str, float]] = {
         "STRONG_JOBS": 0.80,
         "WEAK_JOBS": 0.75,
         "GEOPOLITICAL_RISK": 0.70,   # weaker safe-haven (part industrial)
+        "GEOPOLITICAL_DEESCALATION": 0.70,   # de-escalation = bearish silver
         "BANKING_STRESS": 0.60,      # weaker safe-haven
         "RISK_OFF": 0.55,
         "RISK_ON": 0.55,
@@ -655,8 +772,24 @@ DRIVER_RANKINGS: dict[str, dict[str, float]] = {
         "BTC_ETF_FLOW": 0.10,
         "CRYPTO_REGULATION": 0.05,
         "CRYPTO_LIQUIDATION": 0.10,
+        "CRYPTO_HACK": 0.05,
         "CHINA_DEMAND": 1.00,        # top driver for silver (industrial)
         "INDUSTRIAL_DEMAND": 0.95,   # top driver for silver
+        # ---- Item 4: silver's OWN industrial and China-demand mechanisms. ----
+        # SILVER_INDUSTRIAL_DEMAND is the XAGUSD-specific supply-chain mechanism
+        # (solar / photovoltaic / EV / electronics / grid), ranked as a top
+        # driver because silver is both a precious and an industrial metal and
+        # the industrial half was previously under-served. SILVER_CHINA_DEMAND
+        # is the China PMI / factory-gate / offtake mechanism, also a top
+        # driver: China is the world's largest physical silver buyer.
+        "SILVER_INDUSTRIAL_DEMAND": 1.00,
+        "SILVER_CHINA_DEMAND": 1.00,
+        # ---- Item 4: gold-silver ratio. ----
+        # A historically HIGH ratio is bullish silver (money rotates into the
+        # cheaper metal); a LOW ratio is bearish silver. Both are top drivers
+        # because the ratio is one of the few silver-specific price signals.
+        "GOLD_SILVER_RATIO_HIGH": 1.00,
+        "GOLD_SILVER_RATIO_LOW": 1.00,
         "COMMODITY_SUPPLY": 0.75,
         "OIL_SUPPLY_TIGHTNESS": 0.15,
         "OIL_SUPPLY_GLUT": 0.10,
@@ -676,6 +809,7 @@ DRIVER_RANKINGS: dict[str, dict[str, float]] = {
         "STRONG_JOBS": 0.85,
         "WEAK_JOBS": 0.80,
         "GEOPOLITICAL_RISK": 0.35,   # risk-off = bearish btc
+        "GEOPOLITICAL_DEESCALATION": 0.35,   # de-escalation = bullish btc
         "BANKING_STRESS": 0.90,      # liquidity stress
         "RISK_ON": 1.00,             # top driver: risk-on = bullish btc
         "RISK_OFF": 1.00,            # top driver: risk-off = bearish btc
@@ -683,6 +817,19 @@ DRIVER_RANKINGS: dict[str, dict[str, float]] = {
         "BTC_ETF_FLOW": 1.00,        # top driver: ETF flows
         "CRYPTO_REGULATION": 1.00,   # top driver: regulation
         "CRYPTO_LIQUIDATION": 1.00,  # top driver: liquidations
+        "CRYPTO_HACK": 1.00,  # top driver: exchange hacks
+        # Item 3: the regulation category split into two mechanisms. A clamp
+        # (ban/enforcement/litigation) is a top bearish driver; clarity
+        # (approval/framework/ETF approval) is a top bullish driver. Both rank
+        # 1.0 because they are the most market-moving crypto-specific events.
+        "REGULATION_CLAMP": 1.00,
+        "REGULATION_CLARITY": 1.00,
+        # Item 3: QE/QT/balance-sheet/TGA moves reach BTC through the liquidity
+        # channel, so they rank as top drivers rather than background macro
+        # inputs. Easing and tightening are opposite directions, so they are
+        # separate event types, each ranking 1.0.
+        "LIQUIDITY_EASING": 1.00,
+        "LIQUIDITY_TIGHTENING": 1.00,
         "CHINA_DEMAND": 0.25,
         "INDUSTRIAL_DEMAND": 0.20,
         "COMMODITY_SUPPLY": 0.10,

@@ -97,11 +97,14 @@ PLURAL_EXEMPT_KEYWORDS: frozenset[str] = frozenset({
 VERY_HIGH_TRIGGERS = [
     "fomc", "federal reserve announces", "emergency meeting", "interest rate decision",
     "cpi", "consumer price index", "pce", "nonfarm payroll", "jobs report",
-    "recession", "default", "war", "invasion", "ceasefire", "rate cut", "rate hike",
+    "recession", "default", "war", "invasion", "rate cut", "rate hike",
     "bitcoin etf approval", "sec approves", "intervention", "crisis",
     # Explicit policy-path repricing is a genuine intraday market mover.
     "higher for longer", "fewer rate cuts", "more rate cuts", "cut rates",
     "raise rates", "hawkish", "dovish",
+    "missile strike", "missile strikes", "airstrike", "airstrikes", "declares war",
+    "us payrolls", "u.s. payrolls", "payrolls report", "payrolls data",
+    "non-farm payrolls", "employment report", "jobs data",
 ]
 HIGH_TRIGGERS = ["fed", "rate", "yield", "dollar", "gdp", "pmi", "inflation",
                  "payroll", "etf", "sanction", "tariff", "china", "treasury",

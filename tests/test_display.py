@@ -59,12 +59,12 @@ def test_split_follows_the_score_direction():
      (40, "BULLISH", 70),
      (3, "BULLISH", 52),
      (1, "BULLISH", 50),   # round(50.5) -> 50 (banker's rounding); no side over
-                           # half, so the directional default names the chip
+                            # half, so the directional default names the chip
      (0, "BULLISH", 50),
      (-1, "BULLISH", 50),
      (-3, "BEARISH", 52),
      (-40, "BEARISH", 70),
- ])
+  ])
 def test_label_names_the_side_over_fifty_percent(score, expected, expected_pct):
     """
     Required case: the top of the card must never read NEUTRAL.
@@ -73,8 +73,11 @@ def test_label_names_the_side_over_fifty_percent(score, expected, expected_pct):
     even 50/50 split (or any other tie) the display resolves to BULLISH as the
     directional default, so a card can never render a withheld verdict. A side
     the engine named is still never downgraded.
+
+    This test uses an unrecognised bias (empty string) to verify the fallback
+    behavior, since NO_BIAS now explicitly produces NEUTRAL.
     """
-    d = to_display(score, "NO_BIAS")
+    d = to_display(score, "")  # unrecognised -> fallback to directional default
     assert d["label"] == expected, (
         f"score={score} split {d['bull_pct']}/{d['bear_pct']} labelled "
         f"{d['label']}, expected {expected}")
@@ -93,8 +96,11 @@ def test_thin_lean_is_named_rather_than_withheld():
     near-floor asset such as bitcoin sits. The bar reads 52/48, so the chip
     names BULLISH 52% - the reader is given the same lean the bar already shows
     instead of a withheld call they cannot act on.
+
+    This test uses an unrecognised bias (empty string) to verify the fallback
+    behavior, since NO_BIAS now explicitly produces NEUTRAL.
     """
-    d = to_display(3, "NO_BIAS")
+    d = to_display(3, "")  # unrecognised -> fallback to directional default
     assert (d["label"], d["pct"]) == ("BULLISH", 52)
     assert (d["bull_pct"], d["bear_pct"]) == (52, 48)
 
@@ -140,11 +146,15 @@ def test_bias_accepts_enum_and_string():
 
     assert to_display(10, Bias.BULLISH)["label"] == "BULLISH"
     assert to_display(10, "BULLISH")["label"] == "BULLISH"
-    # The enum and its string form must resolve identically through the split.
-    assert to_display(10, Bias.NO_BIAS) == to_display(10, "NO_BIAS")
+    # NO_BIAS produces NEUTRAL label with 50/50 split.
+    d = to_display(10, Bias.NO_BIAS)
+    assert d["label"] == "NEUTRAL"
+    assert d["pct"] == 50
+    assert d["bull_pct"] == 50
+    assert d["bear_pct"] == 50
+    assert to_display(10, "NO_BIAS") == d
     assert to_display(80, "BULLISH")["bull_pct"] > \
         to_display(80, "BULLISH")["bear_pct"]
-    assert to_display(0, "NO_BIAS")["bull_pct"] == 50
 # --------------------------------------------------------------------------
 # 3. A named side never shows below 50
 # --------------------------------------------------------------------------
@@ -532,7 +542,9 @@ def test_neutral_card_keeps_the_same_green_and_red_boxes():
     assert "neu" not in split, "msplit must not add a conditional class"
     # And the split figures still describe the real split for NO_BIAS.
     d = to_display(3, "NO_BIAS")
-    assert (d["bull_pct"], d["bear_pct"]) == (52, 48)
+    assert (d["bull_pct"], d["bear_pct"]) == (50, 50)
+    assert d["label"] == "NEUTRAL"
+    assert d["pct"] == 50
 
 
 def test_no_bias_is_still_stated_in_the_verdict_chip():
@@ -682,16 +694,16 @@ def test_api_block_still_exposes_score_and_confidence(session):
 def test_empty_state_block_is_directional_and_even(session):
     """
     With nothing stored, _block must produce the explicit empty state - and
-    binary bias means it names a side (DEFAULT_BIAS) rather than a grey
-    NO_BIAS, while the split stays an honest 50/50.
+    NO_BIAS means it returns NO_BIAS which to_display renders as NEUTRAL
+    with a 50/50 split.
     """
     from app.main import _block
 
     empty = _block(session, "ZZZ_NO_SUCH_ASSET", "MARKET_PREP")
     assert empty["score"] == 0.0
     assert empty["confidence"] == 0.0
-    assert empty["bias"] in ("BULLISH", "BEARISH")
-    assert empty["display"]["label"] == empty["bias"]
+    assert empty["bias"] == "NO_BIAS"
+    assert empty["display"]["label"] == "NEUTRAL"
     assert empty["display"]["pct"] == 50
     assert empty["display"]["bull_pct"] == 50
     assert empty["display"]["bear_pct"] == 50

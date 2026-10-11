@@ -70,6 +70,8 @@ def _bias_name(bias) -> str | None:
         return None
     value = getattr(bias, "value", bias)
     text = str(value).strip().upper()
+    if text == "NO_BIAS":
+        return "NEUTRAL"
     return text if text in (BULLISH, BEARISH) else None
 
 
@@ -104,14 +106,16 @@ def to_display(score: float, bias) -> dict:
     named, so the chip and the bar beneath it can never tell the reader different
     stories. A side holding more than half the split is named at the top even
     when the engine's bias withheld a verdict - the reader is shown the same
-    lean the bar already draws. The output is ALWAYS BULLISH or BEARISH: on an
-    exact 50/50 split, or whenever no side owns more than half, the display
-    resolves to BULLISH as the directional default. There is no NEUTRAL label.
+    lean the bar already draws. The output is BULLISH, BEARISH, or NEUTRAL:
+    on an exact 50/50 split with no named side, the display resolves to BULLISH
+    as the directional default. NEUTRAL is emitted only when the engine
+    explicitly returns NO_BIAS, in which case the split is 50/50 and pct=50.
 
     Args:
         score: the engine's signed score, nominally -100..+100.
         bias: Bias enum or string; anything unrecognised is treated as a missing
-            verdict and resolved to the directional default (BULLISH).
+            verdict and resolved to the directional default (BULLISH). NO_BIAS
+            produces label "NEUTRAL" with a 50/50 split.
 
     Returns:
         ``{"label", "pct", "bull_pct", "bear_pct"}``.
@@ -147,6 +151,10 @@ def to_display(score: float, bias) -> dict:
         label, pct = BULLISH, bull_pct
     elif name == BEARISH:
         label, pct = BEARISH, bear_pct
+    elif name == "NEUTRAL":
+        # Engine withheld a verdict: show NEUTRAL with even 50/50 split.
+        label, pct = "NEUTRAL", 50
+        bull_pct = bear_pct = 50
     else:
         # No named side: follow the split, and on an exact 50/50 (or any other
         # tie) resolve to the directional default BULLISH. The label is always

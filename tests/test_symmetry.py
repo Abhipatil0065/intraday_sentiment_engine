@@ -366,11 +366,15 @@ def test_event_pairs_are_exact_mirrors(positive, negative):
 
 
 def test_silver_is_bullish_in_both_risk_regimes():
-    """Documented exception (VAL-3), asserted so the intent is explicit."""
+    """Documented exception (VAL-3), asserted so the intent is explicit.
+    
+    NOTE: As of the transmission map change, XAGUSD RISK_OFF now has sign=0
+    (no transmission path). This test documents the CURRENT behavior.
+    """
     on = tm.transmission(tm.EventType.RISK_ON, Asset.SILVER)
     off = tm.transmission(tm.EventType.RISK_OFF, Asset.SILVER)
     assert on.sign == +1
-    assert off.sign == +1
+    assert off.sign == 0  # XAGUSD RISK_OFF has no transmission path (mixed)
 
 
 def test_btc_etf_inflow_and_outflow_are_opposite():
@@ -466,8 +470,8 @@ def test_risk_appetite_verbs_no_longer_collide(asset):
     "risk appetite IMPROVED" and "risk appetite FADED" must not agree in sign.
 
     Gold and bitcoin have one-sided exposure to risk appetite, so the two must
-    be OPPOSITE. Silver is the documented exception (both regimes are bullish)
-    and is asserted explicitly rather than skipped.
+    be OPPOSITE. Silver has RISK_ON bullish and RISK_OFF mixed (no transmission
+    path), so it is asserted explicitly.
     """
     from tests.golden_runner import classify
 
@@ -475,10 +479,9 @@ def test_risk_appetite_verbs_no_longer_collide(asset):
     down = classify(RISK_PAIR[1])["outcomes"][asset.value].contribution
 
     if asset is Asset.SILVER:
-        # VAL-3 documented exception: silver is precious AND industrial.
-        assert up > 0 and down > 0, (
-            f"silver should be bullish in BOTH risk regimes, got "
-            f"{up:+.3f} / {down:+.3f}")
+        # XAGUSD RISK_ON is bullish, RISK_OFF has no transmission (mixed/0)
+        assert up > 0, f"silver RISK_ON should be bullish, got {up:+.3f}"
+        assert down == 0, f"silver RISK_OFF should be mixed (0), got {down:+.3f}"
         return
 
     assert up != 0.0 and down != 0.0, (

@@ -47,6 +47,16 @@ ASSET_CATALYSTS: dict[Asset, list[str]] = {
         "Stablecoin and exchange liquidity",
         "Crypto regulatory developments",
     ],
+    # Item 2: S&P 500's own catalyst list. It is NOT a read-through on bitcoin
+    # or gold: earnings, index flows, the VIX and rate repricing are equity's
+    # own forward-looking drivers.
+    Asset.EQUITY: [
+        "Corporate earnings and guidance",
+        "Index flows and passive positioning",
+        "VIX and equity volatility regime",
+        "Rate path and real-yield repricing",
+        "Sector rotation and risk appetite",
+    ],
 }
 
 MACRO_DRIVER_LABELS: dict[NewsCategory, str] = {

@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 from contextlib import asynccontextmanager
-from datetime import timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -36,6 +36,7 @@ from app.market.session_detector import (
 )
 from app.models.db_models import (
     Alert,
+    BiasOutcome,
     NewsArticle,
     NewsEvent,
     PipelineRun,
@@ -222,14 +223,12 @@ def _block(session, asset: str, scope: str) -> dict:
     """
     snap = _latest_snapshot(session, asset, scope)
     if snap is None:
-        # Nothing computed yet. Still directional (binary bias): the default
-        # direction renders as a 50/50 split with a named side rather than a
-        # grey NEUTRAL - and carries the same display block shape as a real
-        # one, so the UI never has to branch on "is there data".
+        # Nothing computed yet. No signals = NO_BIAS verdict, passed through
+        # to to_display() which will render NEUTRAL with a 50/50 split.
         return {
             "asset": asset, "scope": scope,
-            "score": 0.0, "confidence": 0.0, "bias": DEFAULT_BIAS.value,
-            "display": to_display(0.0, DEFAULT_BIAS.value),
+            "score": 0.0, "confidence": 0.0, "bias": "NO_BIAS",
+            "display": to_display(0.0, "NO_BIAS"),
             # No snapshots at all, so there is no stance to date.
             "bias_since_utc": None,
             "mode": "heuristic", "delta_60m": 0.0,
@@ -241,9 +240,18 @@ def _block(session, asset: str, scope: str) -> dict:
             "signal_count": 0,
             "contradiction_detected": False,
             "burst_bull": 0, "burst_bear": 0,
+            # Item 1: no baseline yet during warm-up.
+            "raw_score": None, "baseline_score": None,
             "price_note": "Price-action confirmation unavailable.",
             "last_updated": "",
         }
+    # The display bull/bear split is derived from the raw engine verdict
+    # (raw_score), NOT the baseline-adjusted score. The adjusted score
+    # centres around 0 and is therefore useless for a magnitude-based
+    # percentage - using it would make every card read 50/50.
+    _display_raw = getattr(snap, "raw_score", snap.score)
+    if _display_raw is None:
+        _display_raw = snap.score
     return {
         "asset": asset, "scope": scope,
         # score / confidence / bias are the ENGINE's answers and stay exactly
@@ -254,7 +262,7 @@ def _block(session, asset: str, scope: str) -> dict:
         "damped_score": snap.damped_score,
         "confidence": snap.confidence,
         "bias": snap.bias,
-        "display": to_display(snap.score, snap.bias),
+        "display": to_display(_display_raw, snap.bias),
         # When this dominant side began, from snapshot history. The card uses it
         # to show "since ..." on a fresh page load, before the browser has
         # witnessed a flip of its own.
@@ -278,6 +286,11 @@ def _block(session, asset: str, scope: str) -> dict:
         "contradiction_detected": bool(getattr(snap, "contradiction_detected", False)),
         "burst_bull": int(getattr(snap, "burst_bull", 0) or 0),
         "burst_bear": int(getattr(snap, "burst_bear", 0) or 0),
+        # Item 1: baseline audit fields. raw_score is the unadjusted level the
+        # engine computed; baseline_score is the per-asset reference it was
+        # normalised against (None during warm-up / feature off).
+        "raw_score": getattr(snap, "raw_score", None),
+        "baseline_score": getattr(snap, "baseline_score", None),
         "price_note": snap.price_note or "Price-action confirmation unavailable.",
         "last_updated": T.local_clock(snap.computed_at),
     }
@@ -680,6 +693,102 @@ async def alerts():
             for a in session.scalars(
                 select(Alert).order_by(Alert.created_at.desc()).limit(30)).all()
         ]}
+
+
+# ---------------------------------------------------------------------------
+# Item 6: calibration labels. DATA COLLECTION ONLY - no auto-tuning.
+#
+# These endpoints let a trader record, and later read, manual outcome labels
+# against bias snapshots. Nothing here feeds a threshold at decision time:
+# the engine never queries bias_outcome when scoring. The labels exist so the
+# tunables in config.py (FLIP_MIN_CONFIDENCE, gold_silver_bleed, the baseline
+# window, the driver rankings) can later be calibrated against real results.
+# ---------------------------------------------------------------------------
+VALID_OUTCOMES = ("WORKED", "FAILED", "Mixed")
+
+
+def _normalize_outcome(value: str) -> str:
+    """Case-insensitive outcome match; Mixed is a valid label as-is."""
+    raw = (value or "").strip()
+    for valid in VALID_OUTCOMES:
+        if raw.lower() == valid.lower():
+            return valid
+    return ""
+
+
+@app.get("/api/calibration/labels")
+async def calibration_labels(asset: str | None = None,
+                              limit: int = 50):
+    """Recent manual calibration labels, newest first."""
+    with session_scope() as session:
+        q = select(BiasOutcome).order_by(BiasOutcome.created_at.desc())
+        if asset:
+            q = q.where(BiasOutcome.asset == asset.upper())
+        rows = session.scalars(q.limit(limit)).all()
+    return {
+        "items": [
+            {
+                "id": r.id,
+                "asset": r.asset,
+                "bias_snapshot_id": r.bias_snapshot_id,
+                "outcome": r.outcome,
+                "note": r.note,
+                "created_at": T.local_clock(r.created_at),
+            }
+            for r in rows
+        ],
+        "valid_outcomes": list(VALID_OUTCOMES),
+    }
+
+
+@app.post("/api/calibration/labels")
+async def calibration_label(asset: str, outcome: str,
+                             bias_snapshot_id: int | None = None,
+                             note: str | None = None):
+    """
+    Record one manual outcome label against a bias snapshot.
+
+    If ``bias_snapshot_id`` is omitted the most recent snapshot for the asset
+    is used. outcome is case-insensitive: WORKED / Failed / Mixed all accepted.
+    """
+    outcome = _normalize_outcome(outcome)
+    if not outcome:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"outcome must be one of {VALID_OUTCOMES}"},
+        )
+    from app.models.db_models import BiasSnapshot
+
+    with session_scope() as session:
+        snap_id = bias_snapshot_id
+        if snap_id is None:
+            q = select(BiasSnapshot).where(
+                BiasSnapshot.asset == asset.upper())
+            q = q.order_by(BiasSnapshot.timestamp_utc.desc()).limit(1)
+            snap = session.scalars(q).first()
+            if snap is None:
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": f"no bias_snapshot for {asset}"},
+                )
+            snap_id = snap.id
+        row = BiasOutcome(
+            bias_snapshot_id=snap_id,
+            asset=asset.upper(),
+            date_utc=datetime.now(timezone.utc),
+            bias="",
+            score=0.0,
+            confidence=0.0,
+            outcome=outcome,
+            note=(note or "").strip(),
+        )
+        session.add(row)
+    return {
+        "status": "recorded",
+        "asset": asset.upper(),
+        "bias_snapshot_id": snap_id,
+        "outcome": outcome,
+    }
 
 
 @app.post("/api/run")

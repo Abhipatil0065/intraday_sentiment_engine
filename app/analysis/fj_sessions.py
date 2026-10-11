@@ -327,6 +327,14 @@ ASSET_CUES: dict = {
                     "risk-off", "etf", "bitcoin", "btc", "crypto", "liquidity",
                     "equity", "equities", "hawkish", "dovish", "geopolit",
                     "stablecoin", "outflow", "inflow"),
+    # Item 2: S&P 500 has its own cue family in the legacy FJ box too, so the
+    # session view is not left guessing from the bitcoin cues. Earnings, index
+    # flows, the VIX and the broad equity vocabulary are equity's own drivers.
+    Asset.EQUITY: ("s&p", "spx", "nasdaq", "dow", "stocks", "equit", "earnings",
+                   "revenue", "profit", "guidance", "vix", "wall street",
+                   "index", "etf", "sector", "rally", "plunge", "risk-on",
+                   "risk-off", "hawkish", "dovish", "fed", "rate", "yield",
+                   "dollar", "inflation", "jobs", "payrolls", "growth"),
     # Crude's own drivers first, then the macro families that move it.
 }
 

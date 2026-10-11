@@ -11,6 +11,10 @@ class Asset(str, Enum):
     GOLD = "XAUUSD"
     SILVER = "XAGUSD"
     BITCOIN = "BTCUSD"
+    # Item 2: S&P 500 as a first-class asset, not the legacy equity proxy.
+    # "EQUITY" is the symbol in the DB/payload so the card keeps its own
+    # identity separate from the three metal/crypto instruments.
+    EQUITY = "EQUITY"
 
     @property
     def label(self) -> str:
@@ -18,6 +22,7 @@ class Asset(str, Enum):
             Asset.GOLD: "Gold",
             Asset.SILVER: "Silver",
             Asset.BITCOIN: "Bitcoin",
+            Asset.EQUITY: "S&P 500",
         }[self]
 
     @classmethod

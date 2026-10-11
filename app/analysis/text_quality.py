@@ -32,16 +32,16 @@ NEGATION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("no", ("rate cut", "rate hike", "recession", "default", "sanction", "stimulus")),
     ("rules out", ("rate cut", "rate hike", "recession")),
     ("ruled out", ("rate cut", "rate hike", "recession")),
-    ("unlikely to", ("cut", "hike")),
+    ("unlikely to", ("cut", "hike", "raise", "lift", "tighten")),
     ("unlikely", ("recession", "to rise", "to fall")),
     ("dismissed", ("rate cut", "rate hike")),
     ("denies", ("rate cut", "rate hike", "default")),
     ("denied", ("rate cut", "rate hike", "default")),
-    ("not expected", ("cut", "hike")),
+    ("not expected", ("cut", "hike", "raise", "lift", "tighten")),
     ("no longer", ("cut", "hike", "expected")),
     ("hopes fade", ("rate cut", "cut")),
-    ("won't", ("cut", "hike")),
-    ("will not", ("cut", "hike")),
+    ("won't", ("cut", "hike", "raise", "lift", "tighten")),
+    ("will not", ("cut", "hike", "raise", "lift", "tighten")),
     ("without", ("a rate cut", "a rate hike", "approval")),
     ("abandoned", ("rate cut", "rate hike")),
     ("scrapped", ("rate cut", "rate hike")),
@@ -51,6 +51,11 @@ NEGATION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("rate cut hopes fade", ()),
     ("cut hopes fade", ()),
     ("hopes of a cut fade", ()),
+    # Added rules for explicit negation of rate actions
+    ("did not", ("raise", "lift", "tighten", "hike", "increase")),
+    ("didn't", ("raise", "lift", "tighten", "hike", "increase")),
+    ("not raise", ("rates",)),
+    ("not hike", ("rates",)),
 )
 
 _TOKEN_RE = re.compile(r"[a-z0-9']+")

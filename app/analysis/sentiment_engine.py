@@ -59,7 +59,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+import re
 
+from app.analysis.text_match import contains_cue
 from app.config import settings
 from app.logging_conf import get_logger
 from app.models.enums import (
@@ -123,6 +125,13 @@ QUALITY_MULT = {
     "TIER_4_OTHER": 0.90,
 }
 
+# Earnings mega-cap name patterns (Item 6).
+# Compiled once at module load from settings.
+_earnings_mega_cap_names = [n.strip().lower() for n in settings.earnings_mega_cap_names.split(",")]
+_EARNINGS_MEGA_CAP_PATTERNS = [
+    re.compile(rf"(?<!\w){re.escape(name)}(?!\w)") for name in _earnings_mega_cap_names
+]
+
 # ---------------------------------------------------------------------------
 # BINARY BIAS (label = sign of the net news score)
 # ---------------------------------------------------------------------------
@@ -145,6 +154,10 @@ TIEBREAK_LEAN = 2.0
 # A tie-break is the weakest call the engine can make, so its confidence is
 # capped low: the payload keeps saying "weak" next to the label.
 TIEBREAK_MAX_CONFIDENCE = 0.30
+
+# Minimum total directional weight (bull + bear) to produce a directional
+# verdict. Below this the evidence is too thin and the engine returns NO_BIAS.
+MIN_TOTAL_WEIGHT = 0.15
 
 
 def payload_score(raw_score: float, bias) -> float:
@@ -502,9 +515,21 @@ def event_tier(s: WeightedSignal) -> str:
         return ("TIER_1" if s.importance is EconomicImportance.HIGH
                 else "TIER_2")
     title = (s.title or "").lower()
-    is_opinion = any(k in title for k in (
-        "analyst", "opinion", "preview", "commentary",
-        "forecast", "comment", "outlook"))
+    
+    # Result words that indicate a factual data release (beats/misses) - if present,
+    # "forecast"/"forecasts" should NOT be treated as opinion words.
+    result_words = ("beats", "beat", "misses", "missed", "miss", "tops", "topped",
+                    "exceeds", "exceeded", "falls short", "fall short", "below", "above",
+                    "than expected")
+    has_result_word = any(contains_cue(title, w) for w in result_words)
+    
+    opinion_words = ("analyst", "opinion", "preview", "commentary",
+                     "forecast", "comment", "outlook")
+    if has_result_word:
+        # Ignore "forecast"/"forecasts" for is_opinion test only
+        opinion_words = tuple(w for w in opinion_words if w not in ("forecast", "forecasts"))
+    
+    is_opinion = any(contains_cue(title, k) for k in opinion_words)
     if is_opinion or s.report_kind is ReportKind.PREP:
         return "TIER_3"
     if s.importance in (EconomicImportance.HIGH, EconomicImportance.MEDIUM):
@@ -535,6 +560,7 @@ def _signal_weight(s: WeightedSignal, now: datetime | None) -> float:
 
     from app.analysis.cue_rules import detect_verification
     from app.analysis.release_surprise import MAX_SURPRISE_WEIGHT
+    from app.analysis.transmission_map import detect_event_types
     from app.config import (
         CONFIRMED_BOOST,
         RUMOR_MULTIPLIER,
@@ -573,7 +599,19 @@ def _signal_weight(s: WeightedSignal, now: datetime | None) -> float:
     elif detect_verification(s.title) is Verification.CONFIRMED:
         tier *= CONFIRMED_BOOST
 
-    return decay * rel * per * qual * sess * corr * surprise * tier * metal_mult
+    # Earnings mega-cap / unnamed multiplier (Item 6).
+    # Detect event types from the headline and category.
+    earnings_event_types = {"EARNINGS_BEAT", "EARNINGS_MISS", "GUIDANCE_RAISED", "GUIDANCE_CUT"}
+    detected = detect_event_types(s.title, s.category)
+    earnings_mult = 1.0
+    if any(et.value in earnings_event_types for et in detected):
+        lowered = (s.title or "").lower()
+        if any(p.search(lowered) for p in _EARNINGS_MEGA_CAP_PATTERNS):
+            earnings_mult = settings.earnings_mega_cap_mult
+        else:
+            earnings_mult = settings.earnings_unnamed_mult
+
+    return decay * rel * per * qual * sess * corr * surprise * tier * metal_mult * earnings_mult
 
 
 def _mode_for(signals: Sequence[WeightedSignal]) -> str:
@@ -903,6 +941,20 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
     # Total directional weight for dampening
     total_weight = bull + bear
 
+    # NO_BIAS gate: total weight below minimum returns neutral without
+    # writing to remember_bias or overwriting the last real bias.
+    if total_weight < MIN_TOTAL_WEIGHT:
+        return SentimentResult(
+            asset=asset, score=0.0, raw_score=0.0, damped_score=0.0, confidence=0.0,
+            bias=Bias.NO_BIAS, mode=mode,
+            contributing_articles=agg["used"], contributing_clusters=agg["clusters"],
+            event_risk=event_risk, event_risk_note=event_risk_note,
+            stale=False, signal_count=len(relevant),
+            burst_bull=agg["burst_bull"], burst_bear=agg["burst_bear"],
+            note="No directional signal (total weight below minimum)",
+            contradiction_detected=contradiction_detected,
+        )
+
     # BINARY BIAS: label = sign of the net news score. Inside EPS the sign is
     # not trustworthy, so the heaviest, newest directional signal breaks the
     # tie. Confidence is reported but never gates the label.
@@ -915,23 +967,23 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
         # still reads as weak once the label is forced to name a side.
         confidence = min(confidence, TIEBREAK_MAX_CONFIDENCE)
 
-    # STABILITY (Task 8): check if we should flip from the last published bias
+# STABILITY (Task 8): check if we should flip from the last published bias
     last_bias = recall_bias(key)
-    should_flip, final_bias = _should_flip(
+    should_flip, flipped_bias = _should_flip(
         bull, bear, last_bias, relevant, now, key,
         flip_margin_override=effective_flip_margin)
     
     if not should_flip and last_bias is not None:
         # Hold the previous bias - payload score must match the held label
         final_bias = last_bias
-        # Use payload_score to ensure score sign matches the held bias
+        # Use payload_score to ensure score sign matches the held label
         score = payload_score(raw, final_bias)
         # Held-but-weak call: cap confidence low
         confidence = min(confidence, TIEBREAK_MAX_CONFIDENCE)
         note = f"Bias held (stability): {last_bias.value} maintained despite raw score {raw:.1f}."
     else:
-        # Flip to computed bias (or first-run bias)
-        final_bias = computed_bias
+        # Flip to computed bias (or first-run bias), or use flipped_bias from Tier-1 bypass
+        final_bias = flipped_bias if last_bias is not None else computed_bias
         score = payload_score(raw, final_bias)
         if last_bias is not None and final_bias != last_bias:
             _record_flip_time(key, now or datetime.now())

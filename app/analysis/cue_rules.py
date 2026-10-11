@@ -39,6 +39,7 @@ BULLISH_CUES: list[tuple[str, int]] = [
     ("surge", 2), ("jumped", 2), ("rally", 2), ("boost", 2), ("upbeat", 2),
     ("beats expectations", 2), ("beat expectations", 2), ("beats forecast", 2), ("beat forecast", 2), ("approval", 2), ("stimulus", 2), ("fall", 1),
     ("lower", 1), ("down", 1), ("support", 1), ("record", 1),
+    ("beats earnings", 2), ("raises guidance", 2),
 ]
 BEARISH_CUES: list[tuple[str, int]] = [
     ("rate hike", 3), ("raises rates", 3), ("hawkish", 3), ("tightening", 2),
@@ -47,6 +48,9 @@ BEARISH_CUES: list[tuple[str, int]] = [
     ("plunge", 3), ("selloff", 3), ("sell-off", 3), ("slump", 2), ("tumble", 2),
     ("outflow", 2), ("outflows", 2), ("sanction", 2), ("escalat", 2), ("default", 3),
     ("downgrade", 2), ("weak", 1), ("concerns", 1), ("uncertainty", 1),
+    ("collapses", 2),
+    ("liquidation", 6), ("liquidated", 4),
+    ("hacked", 4), ("exploit", 4), ("stolen", 4),
 ]
 
 PRECIOUS_CUES = ["fed", "rate", "yield", "dollar", "inflation", "safe haven", "gold",

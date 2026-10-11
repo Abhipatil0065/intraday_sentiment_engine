@@ -199,6 +199,7 @@ intraday_sentiment_engine/
 ```
 FINAL NEWS WEIGHT = Recency x Economic Importance x Asset Relevance
                     x Expected Persistence x Source Quality x Session Relevance
+                    x Corroboration x Surprise x Event Tier
 ```
 
 * **Recency** — 100% (0-15 min), 90% (15-30), 80% (30-60), 65% (1-2 h),
@@ -212,6 +213,38 @@ FINAL NEWS WEIGHT = Recency x Economic Importance x Asset Relevance
 * **Source quality** — TIER_1_OFFICIAL 1.15 ... TIER_4_OTHER 0.82.
 * **Session relevance** — e.g. US data matters more in the US session; China
   data matters more in Asia.
+* **Corroboration** — one cluster of same-day headlines counts as one vote.
+* **Surprise** — scheduled releases are weighted by how far the actual print
+  moved away from the forecast.
+* **Event tier** — TIER_1 (official data, confirmed shocks, ETF flows) weighs
+  more than TIER_2 (speeches, secondary data) and TIER_3 (opinion, previews).
+
+### Per-asset baseline (item 1)
+
+Financial news is structurally negative-heavy, so raw cue scores carry a
+persistent per-asset skew. Each asset gets a **rolling baseline** of its own
+recent raw scores (default: median of the last 20 persisted ticks, starting only
+after 5 ticks exist). The published score is `adjusted = raw - baseline_mean`,
+and the bias sign is decided on the adjusted score. The unadjusted level is kept
+in `raw_score` for audit. The median is used rather than the mean because a mean
+is dragged down by an extreme negative tail and inverts the distribution; the
+window, minimum ticks, statistic and on/off switch are all `.env` tunables.
+
+### Confidence and flips (item 5)
+
+Confidence is reported but **never gates the label** — the engine always names a
+side, because a trader cannot act on "I do not know". A computed flip is refused
+when confidence is below `FLIP_MIN_CONFIDENCE` (default 0.35): the previous bias
+is held and the note records a "low confidence hold". Binary output preserved —
+the label is still BULLISH or BEARISH, never a third state.
+
+### LLM classification (item 5)
+
+Unclassified articles are sorted by **(event tier x source quality x importance)**
+before the LLM cap binds, so the most market-relevant articles get model
+attention when the cap binds rather than the first to arrive. The cap is
+`LLM_BATCH_LIMIT` (default 40, `.env` tunable); the remainder are still ingested
+and scored deterministically.
 
 Sentiment is **binary: BULLISH or BEARISH**. Bullish and Bearish percentages are
 summed, normalised, and **always sum to exactly 100%** - there is no third

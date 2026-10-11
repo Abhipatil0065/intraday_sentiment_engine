@@ -143,7 +143,7 @@ def region_signals(signals: Sequence[WeightedSignal],
             if s.relevance == 0.0:
                 equity_rel = 0.0
             out.append(WeightedSignal(
-                asset=Asset.BITCOIN,  # proxy asset for scoring engine
+                asset=Asset.EQUITY,  # proxy asset for scoring engine
                 title=s.title,
                 direction=s.direction,
                 strength=s.strength,
@@ -172,11 +172,9 @@ def neutral_card(session: SessionName, reason: str = "") -> EquityCardResult:
     Directional fallback for an empty region - never a 50/50 card, never NO_BIAS.
 
     The bias ALWAYS carries forward the last verdict published for THIS region
-    (stale=True). If no region history exists yet, the answer is DEFAULT_BIAS
-    (BULLISH) - a documented directional default, never a withheld verdict. The
-    result is guaranteed to be one of BULLISH / BEARISH: a carried value that
-    somehow resolved to anything else is coerced to DEFAULT_BIAS before it can
-    reach the payload.
+    (stale=True). If no region history exists yet, the answer is NO_BIAS
+    (a documented withheld verdict), which to_display() renders as NEUTRAL
+    with a 50/50 split.
     """
     info = EQUITY_SESSION_MAP.get(session, {})
     region = _region_of(session)
@@ -184,7 +182,7 @@ def neutral_card(session: SessionName, reason: str = "") -> EquityCardResult:
     if carried is not None and carried in (Bias.BULLISH, Bias.BEARISH):
         bias = carried
     else:
-        bias = DEFAULT_BIAS
+        bias = Bias.NO_BIAS
     return EquityCardResult(
         region=region,
         title=str(info.get("title", region + " EQUITY")),
@@ -226,7 +224,7 @@ def build_equity_card(all_signals: Sequence[WeightedSignal],
             prints = parse_all(text)
             if prints:
                 direction, _ = combine_prints_for_asset(
-                    Asset.BITCOIN, prints, s.direction,
+                    Asset.EQUITY, prints, s.direction,
                     use_equity_column=True, text=text)
             else:
                 direction = s.direction
@@ -244,7 +242,7 @@ def build_equity_card(all_signals: Sequence[WeightedSignal],
             else:
                 direction = equity_dir
         proxy.append(WeightedSignal(
-            asset=Asset.BITCOIN, title=s.title, direction=direction,
+            asset=Asset.EQUITY, title=s.title, direction=direction,
             strength=s.strength, importance=s.importance,
             published_at=s.published_at, relevance=s.relevance,
             persistence=s.persistence, source_quality=s.source_quality,
@@ -258,7 +256,7 @@ def build_equity_card(all_signals: Sequence[WeightedSignal],
     # and applies it once per signal, via sentiment_engine._signal_weight
     # (compute). No duplicate tier logic here, so importance and tier never
     # double-count.
-    result = compute_sentiment(proxy, Asset.BITCOIN, now=now,
+    result = compute_sentiment(proxy, Asset.EQUITY, now=now,
                                history_key=_state_key(_region_of(active)))
     info = EQUITY_SESSION_MAP.get(active, {})
     region = _region_of(active)

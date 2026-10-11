@@ -182,3 +182,86 @@ def equity_keywords(session: SessionName) -> tuple[str, ...]:
 def session_relevance(session: SessionName, category: str) -> float:
     """Multiplier applied to asset relevance for the active session."""
     return CATEGORY_SESSION_WEIGHT.get(session, {}).get(category, 1.0)
+
+
+# ---------------------------------------------------------------------------
+# Per-asset session profiles (Item 3).
+# ---------------------------------------------------------------------------
+# A session profile decides how much the ACTIVE SESSION's clock should move
+# an asset's signal weight. It is a property of the INSTRUMENT, not the news:
+# gold is thinly traded outside London/New York, so an Asia-session headline
+# is discounted; bitcoin trades 24 hours a day, so its session clock is flat.
+#
+# Profiles:
+#   "metal"   - the standard curve in CATEGORY_SESSION_WEIGHT, plus a weekend
+#               discount (Friday evening -> Sunday close are low-liquidity for
+#               physical metals). This is what XAUUSD / XAGUSD inherit.
+#   "flat"    - multiplier 1.0 in every session and on every weekday. Used for
+#               BTCUSD: a 24/7 market with deep overnight and weekend liquidity,
+#               so discounting an Asia or weekend headline would be wrong.
+#   "weekend_tolerant" - the metal curve for sessions, but weekends lift to
+#               1.0 instead of being discounted. Kept as a documented option
+#               rather than the default: BTC weekend volume is real but thinner
+#               than weekday, so whether it deserves full weight is a tuning
+#               call, not a fact.
+ASSET_SESSION_PROFILES: dict[str, str] = {
+    "XAUUSD": "metal",
+    "XAGUSD": "metal",
+    "BTCUSD": "flat",
+    "EQUITY": "metal",
+}
+
+WEEKEND_MULTIPLIER: dict[str, float] = {
+    "metal": 0.70,
+    "flat": 1.00,
+    "weekend_tolerant": 1.00,
+}
+
+# Override per asset via env, e.g. BTC_SESSION_PROFILE=weekend_tolerant.
+# The override key may be the short symbol ("BTC", "XAG") or the full asset
+# string ("BTCUSD", "XAGUSD"); both are accepted so the .env line reads
+# naturally either way. Exact match wins; otherwise the longest key that the
+# asset string starts with is used, so "BTC" matches "BTCUSD".
+def _profile_for(asset: str) -> str:
+    from app.config import settings
+
+    override = settings.asset_session_profile_map
+    if asset in override:
+        return override[asset]
+    best_key = None
+    for key in override:
+        if asset.startswith(key) and (best_key is None or len(key) > len(best_key)):
+            best_key = key
+    if best_key is not None:
+        return override[best_key]
+    return ASSET_SESSION_PROFILES.get(asset, "metal")
+
+
+def _clamp_profile(profile: str) -> str:
+    """Never let a bad config value leave the session detector."""
+    return profile if profile in WEEKEND_MULTIPLIER else "metal"
+
+
+def asset_session_multiplier(asset: str, session: SessionName,
+                             category: str, now: datetime | None = None) -> float:
+    """
+    Session multiplier for one asset, honouring that asset's session profile.
+
+    A flat-profile asset (BTCUSD) returns 1.0 regardless of session or weekday.
+    A metal-profile asset returns the CATEGORY_SESSION_WEIGHT curve, with the
+    weekend discount applied. This is the ONLY place a weekend discount exists:
+    it is a property of the instrument, applied after the session curve, and
+    never a property of the news category.
+    """
+    profile = _clamp_profile(_profile_for(asset))
+    if profile == "flat":
+        return 1.0
+    base = session_relevance(session, category)
+    if profile == "weekend_tolerant":
+        return base
+    # metal: apply the weekend discount on top of the session curve.
+    if now is None:
+        now = T.now_utc()
+    if now.weekday() >= 5:  # Saturday=5, Sunday=6
+        base *= WEEKEND_MULTIPLIER["metal"]
+    return base

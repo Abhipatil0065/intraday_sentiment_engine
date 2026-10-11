@@ -101,6 +101,7 @@ class EventType(str, Enum):
     STRONG_JOBS = "STRONG_JOBS"
     WEAK_JOBS = "WEAK_JOBS"
     GEOPOLITICAL_RISK = "GEOPOLITICAL_RISK"
+    GEOPOLITICAL_DEESCALATION = "GEOPOLITICAL_DEESCALATION"
     BANKING_STRESS = "BANKING_STRESS"
     RISK_ON = "RISK_ON"
     RISK_OFF = "RISK_OFF"
@@ -108,6 +109,7 @@ class EventType(str, Enum):
     BTC_ETF_FLOW = "BTC_ETF_FLOW"
     CRYPTO_REGULATION = "CRYPTO_REGULATION"
     CRYPTO_LIQUIDATION = "CRYPTO_LIQUIDATION"
+    CRYPTO_HACK = "CRYPTO_HACK"
     CHINA_DEMAND = "CHINA_DEMAND"
     INDUSTRIAL_DEMAND = "INDUSTRIAL_DEMAND"
     COMMODITY_SUPPLY = "COMMODITY_SUPPLY"
@@ -117,6 +119,60 @@ class EventType(str, Enum):
     OIL_SUPPLY_TIGHTNESS = "OIL_SUPPLY_TIGHTNESS"
     OIL_SUPPLY_GLUT = "OIL_SUPPLY_GLUT"
     GENERAL_MACRO = "GENERAL_MACRO"
+    # Item 2: S&P 500 as a first-class asset. These event types name equity's
+    # OWN causal mechanisms - earnings, guidance, index flows, sector rotation,
+    # rate repricing and the VIX - so equity is not merely a proxy for bitcoin.
+    # Detection still needs keywords (see EVENT_SIGNALS below); the direction
+    # decision is data here, in the map.
+    EARNINGS_BEAT = "EARNINGS_BEAT"
+    EARNINGS_MISS = "EARNINGS_MISS"
+    GUIDANCE_RAISED = "GUIDANCE_RAISED"
+    GUIDANCE_CUT = "GUIDANCE_CUT"
+    INDEX_FLOW = "INDEX_FLOW"
+    SECTOR_ROTATION = "SECTOR_ROTATION"
+    RATE_REPRICING = "RATE_REPRICING"
+    STOCK_RALLY = "STOCK_RALLY"
+    STOCK_PLUNGE = "STOCK_PLUNGE"
+    VIX_SPIKE = "VIX_SPIKE"
+    VIX_COMPRESSION = "VIX_COMPRESSION"
+    CORP_EARNINGS_SEASON = "CORP_EARNINGS_SEASON"
+    # ---- Item 3: crypto regulation is ONE category but TWO mechanisms. ----
+    # A single CRYPTO_REGULATION event type could not express the difference
+    # between a ban and an approval, so every regulation headline was stamped
+    # with the same sign. These two split on the actual policy action:
+    #   REGULATION_CLAMP   - bearish: ban, enforce, litigation, suit, crackdown
+    #   REGULATION_CLARITY - bullish: approve, framework, legal clarity, ETF approval
+    # The bare words "regulation"/"regulatory" are deliberately NOT in either
+    # keyword set: they are ambiguous and must fall through to GENERAL_MACRO
+    # rather than be guessed at. Detection is keyword-driven; direction is data.
+    REGULATION_CLAMP = "REGULATION_CLAMP"
+    REGULATION_CLARITY = "REGULATION_CLARITY"
+    # ---- Item 3: liquidity events. ----
+    # QE/QT/balance-sheet/TGA/reserve moves reach BTC through the liquidity
+    # channel (stablecoin DeFi collateral, exchange order books, risk appetite)
+    # far more than they reach the metals, which are priced off real yields.
+    #
+    # Split into two event types because QE and QT are OPPOSITE actions: a
+    # single LIQUIDITY_CHANGE with one sign could not express both. Detection
+    # is keyword-driven; direction is data, in the map.
+    LIQUIDITY_EASING = "LIQUIDITY_EASING"
+    LIQUIDITY_TIGHTENING = "LIQUIDITY_TIGHTENING"
+    # ---- Item 4: silver's industrial demand. ----
+    # Silver is both a precious and an industrial metal, and the industrial half
+    # was under-served: "solar" and "electronics" were listed but the vocabulary
+    # stopped there, so a photovoltaic or EV headline often fell through to
+    # GENERAL_MACRO and silver got no signal of its own. SILVER_INDUSTRIAL_DEMAND
+    # is the XAGUSD-specific supply-chain mechanism.
+    SILVER_INDUSTRIAL_DEMAND = "SILVER_INDUSTRIAL_DEMAND"
+    SILVER_CHINA_DEMAND = "SILVER_CHINA_DEMAND"
+    # ---- Item 4: gold-silver ratio. ----
+    # When the ratio is historically HIGH, gold is expensive relative to silver,
+    # so money rotates into the cheaper metal: that is bullish XAGUSD. The ratio
+    # itself is a price relationship, not a news event, so it is detected from
+    # the wording and given its own event type with a fixed sign for silver.
+    # Detection is keyword-driven; direction is data, in the map.
+    GOLD_SILVER_RATIO_HIGH = "GOLD_SILVER_RATIO_HIGH"
+    GOLD_SILVER_RATIO_LOW = "GOLD_SILVER_RATIO_LOW"
 
 
 @dataclass(frozen=True)
@@ -261,11 +317,48 @@ def _has_resolved_polarity(text: str) -> bool:
 _INTRINSIC_RULES: tuple[tuple[EventType, tuple[str, ...]], ...] = (
     (EventType.CRYPTO_REGULATION,
      ("approves", "approved", "clears", "cleared", "passes", "passed",
-      "wins approval", "legalized", "adopts", "enacts", "institutionalises")),
+       "wins approval", "legalized", "adopts", "enacts", "institutionalises")),
+(EventType.REGULATION_CLAMP,
+     ("sues", "sued", "suing", "lawsuit", "charges", "charged", "ban", "bans",
+       "banned", "crackdown", "enforcement action")),
+    (EventType.CRYPTO_HACK,
+     ("hacked", "hack", "exploited", "exploit",
+       "drained", "security breach", "stolen")),
+    (EventType.LIQUIDITY_EASING,
+     ("qe", "quantitative easing", "balance sheet expansion", "asset purchases",
+       "liquidity injection", "rate cut")),
+    (EventType.LIQUIDITY_TIGHTENING,
+     ("qt", "quantitative tightening", "balance sheet reduction",
+       "balance sheet runoff", "liquidity drain", "reserves fall")),
+    (EventType.GEOPOLITICAL_RISK,
+     ("missile strike", "missile strikes", "airstrike", "airstrikes",
+       "invasion", "invades", "invaded", "declares war",
+       "military strike", "military strikes")),
+    (EventType.REGULATION_CLARITY,
+     ("approves", "approved", "approval", "passes", "passed", "signs into law",
+      "signed into law", "enacts", "enacted", "legalizes", "legalized",
+      "adopts", "adopted", "framework", "green light")),
     (EventType.BTC_ETF_FLOW,
      ("inflow", "inflows", "approval", "approved")),
+(EventType.BTC_ETF_FLOW,
+      ("outflow", "outflows", "redemption", "redemptions", "rejection", "rejected", "denied")),
+    (EventType.EARNINGS_BEAT, ("beats earnings", "earnings beat",
+      "beats estimates", "beats expectations", "tops estimates",
+      "record profit")),
+    (EventType.EARNINGS_MISS, ("misses earnings", "earnings miss",
+      "misses estimates", "misses expectations", "profit warning",
+      "warns on profit", "falls short")),
+    (EventType.GUIDANCE_RAISED, ("raises guidance", "raises outlook",
+      "raises forecast", "lifts guidance", "lifts forecast")),
+    (EventType.GUIDANCE_CUT, ("cuts guidance", "cuts outlook",
+      "cuts forecast", "lowers guidance", "lowers forecast")),
     (EventType.GOLD_ETF_FLOW,
-     ("inflow", "inflows")),
+      ("inflow", "inflows")),
+    (EventType.GOLD_ETF_FLOW,
+      ("outflow", "outflows", "redemption", "redemptions")),
+    (EventType.BANKING_STRESS,
+      ("bank collapse", "bank collapses", "bank fails", "bank failure",
+       "bank run", "bank runs", "banking crisis", "bank seized", "bailout")),
     # A supply cut, an inventory draw or an outage is directional IN ITSELF: the
     # headline needs no bullish adjective ("OPEC+ extends output cuts") to be a
     # bullish crude story, and without this floor it would measure zero magnitude
@@ -288,6 +381,17 @@ _INTRINSIC_RULES: tuple[tuple[EventType, tuple[str, ...]], ...] = (
       "demand worries", "demand weakness", "consumption falls")),
 )
 _INTRINSIC_WEIGHT = 6.0
+
+# Demand events where a "down" verb (plunge, slump, fall, etc.) flips the
+# normal bullish sign to bearish: demand falling is bad, not good.
+_DEMAND_EVENTS = (EventType.CHINA_DEMAND, EventType.SILVER_CHINA_DEMAND,
+                  EventType.INDUSTRIAL_DEMAND, EventType.SILVER_INDUSTRIAL_DEMAND)
+_DEMAND_DOWN_VERBS = ("plunge", "plunges", "plunged", "slump", "slumps",
+                      "slumped", "contracts", "contracted", "contraction",
+                      "falls", "fell", "drops", "dropped", "declines",
+                      "declined", "slows", "slowed", "weakens", "weakened",
+                      "misses", "missed", "tumbles", "tumbled",
+                      "shrinks", "shrank")
 
 # FLOW events need their sign read from the flow wording itself: an inflow is
 # buying and an outflow is selling, even though both are the "same" event type.
@@ -328,9 +432,9 @@ def _flow_sign(text: str) -> int:
 # Ordered so a SPECIFIC mechanism beats a generic category fallback.
 # Entry = (EventType, required-any-of, required-all-of).
 EVENT_SIGNALS: tuple[tuple[EventType, tuple[str, ...], tuple[str, ...]], ...] = (
-    (EventType.HAWKISH_POLICY, ("hawkish", "rate hike", "raises rates",
+(EventType.HAWKISH_POLICY, ("hawkish", "rate hike", "raises rates",
                                  "raise rates", "higher for longer", "tightening",
-                                 "fewer rate cuts", "more rate cuts",
+                                 "fewer rate cuts",
                                  "rate increase", "lift rates"), ()),
     (EventType.RECESSION_CUT, ("rate cut", "cut rates", "cuts rates", "dovish",
                                "easing", "stimulus"),
@@ -350,25 +454,30 @@ EVENT_SIGNALS: tuple[tuple[EventType, tuple[str, ...], tuple[str, ...]], ...] = 
     (EventType.WEAK_USD, ("dollar weakens", "dollar falls", "dollar slides",
                           "weaker dollar", "dollar declines", "dxy falls"), ()),
     (EventType.HOT_INFLATION, ("hotter than expected", "hot inflation",
-                               "inflation accelerates", "cpi accelerates",
-                               "above expectations"), ()),
-    (EventType.COOL_INFLATION, ("inflation cools", "cooling inflation",
-                                "disinflation", "cpi eases", "below expectations",
-                                "inflation slows"), ()),
+                               "inflation accelerates", "cpi accelerates"), ()),
+(EventType.COOL_INFLATION, ("inflation cools", "cooling inflation",
+                                 "disinflation", "cpi eases",
+                                 "inflation slows"), ()),
     (EventType.STRONG_JOBS, ("strong payrolls", "payrolls beat", "jobs beat",
                              "strong employment", "record jobs",
                              "hiring surge"), ()),
     (EventType.WEAK_JOBS, ("weak payrolls", "payrolls miss", "jobs report misses",
                            "unemployment rises", "jobless claims surge",
                            "layoffs announced"), ()),
+(EventType.GEOPOLITICAL_DEESCALATION,
+     ("ceasefire", "cease-fire", "peace talks", "peace deal", "peace agreement",
+      "de-escalation", "de-escalate", "tension eases", "tensions ease", "truce",
+      "talks resume"), ()),
     (EventType.GEOPOLITICAL_RISK, ("missile", "invasion", "war", "conflict",
-                                   "ceasefire", "tension", "escalation",
-                                   "border clash", "coup", "sanctions",
-                                   "embargo"), ()),
+                                   "escalation", "border clash", "coup",
+                                   "sanctions", "embargo"), ()),
     (EventType.BANKING_STRESS, ("banking crisis", "bank fails", "bank collapse",
                                 "default", "insolvency", "credit crunch",
                                 "liquidity crisis", "contagion", "margin calls",
                                 "bank stress"), ()),
+    (EventType.CRYPTO_HACK, ("exchange hacked", "exchange hack", "crypto hack", "hacked",
+                               "exploit", "exploited", "drained", "security breach", "stolen"),
+      ("crypto", "bitcoin", "btc", "exchange", "defi", "wallet", "token", "stablecoin")),
     (EventType.CRYPTO_LIQUIDATION, ("liquidations", "liquidated", "cascade",
                                     "forced selling"), ()),
     (EventType.CRYPTO_REGULATION, ("sec", "cftc", "crypto regulation",
@@ -390,11 +499,87 @@ EVENT_SIGNALS: tuple[tuple[EventType, tuple[str, ...], tuple[str, ...]], ...] = 
     (EventType.RISK_OFF, ("risk-off", "risk aversion", "flight to quality",
                           "panic selling", "safe haven demand",
                           "safe-haven demand"), ()),
-    (EventType.CHINA_DEMAND, ("china", "chinese", "beijing", "yuan", "caixin",
-                              "shanghai", "renminbi", "pboc"), ()),
+(EventType.CHINA_DEMAND, ("china", "chinese", "beijing", "yuan", "caixin",
+                                 "shanghai", "renminbi", "pboc"),
+      ("pmi", "factory", "manufacturing", "industrial", "output", "exports",
+       "imports", "demand", "gdp", "growth", "stimulus", "property",
+       "construction", "caixin", "pboc", "yuan", "economy", "retail sales")),
+    # ---- Item 4: silver's China-demand cues. ----
+    # The bare China keywords above were too narrow: a "China PMI prints
+    # strong factory output" headline carried no silver-specific vocabulary and
+    # often fell through to GENERAL_MACRO even though China is the world's
+    # largest physical silver buyer. These add the demand-side language that
+    # actually moves XAGUSD: PMI, factory gate, imports, offtake, the yuan.
+    (EventType.SILVER_CHINA_DEMAND,
+     ("china pmi", "china manufacturing pmi", "pmi reading", "factory output",
+      "factory gate", "industrial output", "industrial production",
+      "manufacturing expansion", "manufacturing contraction", "caixin pmi",
+      "official pmi", "services pmi", "new export orders", "new orders",
+      "imports rise", "imports fell", "imports declined", "import demand",
+      "offtake", "offtakes", "physical demand", "physical offtake",
+      "silver offtake", "silver demand", "demand for silver",
+      "silver imports", "silver inventories", "warehouse stocks",
+      "exchange stocks", "comex stocks", "shanghai gold exchange",
+      "shanghai silver", "yuan depreciation", "yuan appreciation",
+      "yuan devaluation", "yuan revaluation", "pboc easing",
+      "pboc cut", "people's bank of china", "stimulus package",
+      "fiscal stimulus", "infrastructure spending", "property sector",
+      "real estate", "construction", "construction activity",
+      "grid investment", "power grid", "electricity demand",
+      "electricity consumption", "power consumption"), ()),
     (EventType.INDUSTRIAL_DEMAND, ("pmi", "manufacturing", "factory output",
-                                   "industrial production", "solar",
-                                   "electronics", "copper"), ()),
+                                    "industrial production", "solar",
+                                    "electronics", "copper"), ()),
+    # ---- Item 4: silver's industrial demand cues. ----
+    # Silver is both a precious and an industrial metal, and the industrial
+    # half was under-served: "solar" and "electronics" were listed but the
+    # vocabulary stopped there, so a photovoltaic or EV headline often fell
+    # through to GENERAL_MACRO and silver got no signal of its own. These add
+    # the actual supply-chain language that moves XAGUSD intraday.
+    (EventType.SILVER_INDUSTRIAL_DEMAND,
+     ("solar", "photovoltaic", "pv ", "solar panel", "solar cell",
+      "solar farm", "solar capacity", "wind turbine", "wind farm",
+      "wind capacity", "electric vehicle", "ev ", "evs", "ev battery",
+      "battery", "battery storage", "grid storage", "energy storage",
+      "power electronics", "semiconductor", "chip ", "chips",
+      "5g", "data centre", "data center", "server", "server farm",
+      "appliance", "consumer electronics", "smart grid", "grid modernisation",
+      "grid modernization", "charging station", "ev charging",
+      "solar demand", "silver industrial demand", "industrial silver",
+      "silver fabrication", "fabrication demand", "silver consumption",
+      "demand for silver", "silver offtake", "industrial offtake",
+      "renewable", "renewables", "clean energy", "green energy",
+      "net zero", "net-zero", "climate target", "emissions target",
+      "copper demand", "copper supply"), ()),
+    # ---- Item 4: gold-silver ratio. ----
+    # When the ratio is historically HIGH, gold is expensive relative to silver,
+    # so money rotates into the cheaper metal: that is bullish XAGUSD. The
+    # ratio itself is a price relationship, not a news event, so it is detected
+    # from the wording and given its own event type with a fixed bullish sign
+    # for silver. Detection requires a ratio word; direction is data here.
+    (EventType.GOLD_SILVER_RATIO_HIGH,
+     ("gold silver ratio", "gold-to-silver ratio", "gold/silver ratio",
+      "gold silver ratio high", "ratio elevated", "ratio at historic highs",
+      "ratio hits record", "ratio record high", "ratio peaks",
+      "ratio spikes", "ratio surge", "gold silver ratio spike",
+      "gold silver ratio surge", "ratio above 80", "ratio above 90",
+      "ratio above 100", "gold silver spread widens",
+      "gold silver spread widening", "gold outperforms silver",
+      "gold outperforming silver", "silver lags gold", "silver lagging gold",
+      "silver cheap relative to gold", "silver looks cheap vs gold",
+      "silver undervalued vs gold", "silver cheap vs gold",
+      "ratio mean reversion", "ratio reversion", "ratio normalises",
+      "ratio normalization", "ratio to revert", "ratio to mean revert",
+      "ratio to normalise", "ratio to normalize"), ()),
+    (EventType.GOLD_SILVER_RATIO_LOW,
+     ("gold silver ratio low", "gold-to-silver ratio low",
+      "ratio compressed", "ratio compression", "ratio tight",
+      "ratio at historic lows", "ratio record low", "ratio lows",
+      "gold silver ratio falls", "gold silver ratio drops",
+      "ratio narrows", "ratio narrowing", "silver outperforms gold",
+      "silver outperforming gold", "silver leads gold", "silver leading gold",
+      "gold lags silver", "gold lagging silver", "gold cheap vs silver",
+      "ratio below 60", "ratio below 70", "ratio below 50"), ()),
     (EventType.COMMODITY_SUPPLY, ("mine", "mining", "refinery", "gold supply",
                                   "silver supply", "opec cuts"), ()),
     # Oil supply/demand. Ordered BEFORE COMMODITY_SUPPLY because these carry the
@@ -426,6 +611,150 @@ EVENT_SIGNALS: tuple[tuple[EventType, tuple[str, ...], tuple[str, ...]], ...] = 
       "build in inventories", "raises oil production", "raises crude output",
       "production target", "output target",
       "gluts", "ramping output"), ()),
+    # ---- Item 2: S&P 500's OWN mechanisms. Ordered BEFORE RISK_ON/RISK_OFF so
+    # an earnings headline is not swallowed by the generic risk-sentiment read.
+    # EARNINGS_BEAT / EARNINGS_MISS carry no qualifier: "revenue beats estimates"
+    # must fire even when the company name is absent.
+    (EventType.EARNINGS_BEAT, ("earnings beat", "profit beats", "revenue beat",
+                               "sales beat", "beats estimates", "beat estimate",
+                               "beat forecasts", "profit rise", "profit rose",
+                               "revenue rose", "sales rise", "strong quarter",
+                               "strong quarters", "record profit",
+                               "record profits", "earnings beat estimates",
+                               "beats expectations", "beats earnings expectations",
+                               "earnings beat", "beats estimates",
+                               "tops estimates", "tops forecasts",
+                               "beats forecasts"),
+     ("earnings", "profit", "revenue", "eps", "quarter", "guidance", "results")),
+    (EventType.EARNINGS_MISS, ("earnings miss", "profit miss", "revenue miss",
+                               "sales miss", "misses estimates", "miss estimate",
+                               "miss forecasts", "profit fall", "profit fell",
+                               "revenue fell", "sales fell", "weak quarter",
+                               "loss", "losses", "narrowed profit",
+                               "profit warning", "earnings warning",
+                               "cuts outlook", "misses expectations",
+                               "misses estimates", "profit warning", "warns on profit",
+                               "misses forecasts", "miss forecasts",
+                               "misses estimates", "miss estimates"),
+     ("earnings", "profit", "revenue", "eps", "quarter", "guidance", "results")),
+    (EventType.GUIDANCE_RAISED, ("raises guidance", "lifts guidance",
+                                 "guidance raised", "guidance increase",
+                                 "outlook raised", "outlook improved",
+                                 "raises outlook", "raises forecast",
+                                 "forecast raised"), ()),
+    (EventType.GUIDANCE_CUT, ("cuts guidance", "lowers guidance",
+                              "guidance cut", "guidance lowered",
+                              "outlook cut", "outlook lowered",
+                              "lowers outlook", "lowers forecast",
+                              "forecast cut", "profit warning",
+                              "reduces forecast"), ()),
+    # INDEX_FLOW: passive/index money moving in or out of the S&P 500.
+    (EventType.INDEX_FLOW, ("index inflow", "index inflows", "etf inflow",
+                            "etf inflows", "index fund", "index rebalance",
+                            "index weight", "passive inflow", "passive inflows",
+                            "s&p inflow", "s&p 500 inflow", "record inflows",
+                            "fund inflows", "fund inflow"), ()),
+    # SECTOR_ROTATION: money moving BETWEEN sectors. Directionless by itself -
+    # the sign is 0 in the map, so it contributes MIXED, not a lean.
+    (EventType.SECTOR_ROTATION, ("sector rotation", "rotation into",
+                                 "rotation out of", "sector shift",
+                                 "risk rotation", "rotation trade"), ()),
+    # RATE_REPRICING: equities reprice on a rate move. Same direction as the
+    # metals here (higher rates = lower equity multiples) but reached through
+    # its own keyword set rather than by inheriting HAWKISH_POLICY.
+    (EventType.RATE_REPRICING, ("rate hike", "raises rates", "raise rates",
+                                "rate increase", "higher rates", "hike rates",
+                                "fed hike", "rate rises", "rising rates",
+                                "real yields rise", "real yields rising"), ()),
+    (EventType.STOCK_RALLY, ("stocks rally", "stock rally", "equities surge",
+                             "equity surge", "s&p 500 rises", "s&p rises",
+                             "spx rises", "nasdaq rises", "record highs",
+                             "all-time highs", "stock market rally",
+                             "bull market", "melt-up", "market surge"), ()),
+    (EventType.STOCK_PLUNGE, ("stocks plunge", "stock plunge", "equities plunge",
+                              "equity plunge", "s&p 500 falls", "s&p falls",
+                              "spx falls", "nasdaq falls", "market crash",
+                              "crash", "sell-off", "selloff", "bear market",
+                              "market plunge", "plunge"), ()),
+    # VIX is equity-specific: it is the S&P 500's implied-volatility gauge.
+    (EventType.VIX_SPIKE, ("vix spikes", "vix spike", "vix surges", "vix surge",
+                           "vix rises", "vix rose", "vix higher",
+                           "fear gauge", "fear index", "vol spike",
+                           "volatility spike", "volatility surge"), ()),
+    (EventType.VIX_COMPRESSION, ("vix falls", "vix fell", "vix eases",
+                                 "vix declines", "vix lower", "vix calm",
+                                 "volatility eases", "volatility falls",
+                                 "fear gauge eases"), ()),
+    (EventType.CORP_EARNINGS_SEASON, ("earnings season", "reporting season",
+                                      "corporate earnings", "c-suite guidance",
+                                      "management guidance"), ()),
+    # ---- Item 3: crypto regulation split into two mechanisms. ----
+    # REGULATION_CLAMP = bearish: a ban, enforcement action, litigation or
+    # crackdown. Ordered BEFORE REGULATION_CLARITY because the clamp keywords
+    # ("ban", "lawsuit", "crackdown") are more specific than the clarity ones.
+    (EventType.REGULATION_CLAMP, ("ban", "bans", "ban on", "banned", "enforce",
+                                   "enforcement", "litigation", "lawsuit", "sued",
+                                   "suing", "sues", "crackdown", "crack down",
+                                   "raid", "indictment", "indicted", "criminal",
+                                   "prosecute", "prosecution", "subpoena",
+                                   "seizure", "seized", "block", "blockade",
+                                   "outlaw", "outlawed", "clamp down",
+                                   "clampdown", "restrict", "restrictions",
+                                   "tighten rules", "tightening rules"), ()),
+# REGULATION_CLARITY = bullish: approval, a framework, legal clarity, an
+    # ETF approval. "approve"/"approval" alone are too broad (a bank can be
+    # "approved"), so the clarity set also requires a crypto context word.
+    (EventType.REGULATION_CLARITY, ("approved", "approval", "approves",
+                                     "framework", "frameworks", "legal clarity",
+                                     "clear guidance", "regulatory clarity",
+                                     "green light", "green-light", "sign off",
+                                     "signed off", "rulebook", "rule book",
+                                     "path forward", "pathway", "guidance issued",
+                                     "clarified", "clarifies", "clarify",
+                                     "passes", "passed", "signs into law", "signed into law",
+                                     "enacts", "enacted", "legalizes", "legalized",
+                                     "adopts", "adopted"),
+     ("bitcoin", "btc", "crypto", "etf", "sec", "cftc", "coinbase", "exchange",
+      "custody", "stablecoin", "defi", "defi ")),
+# ---- Item 3: liquidity events. ----
+    # QE/QT/balance-sheet/TGA/reserve moves reach BTC through the liquidity
+    # channel (stablecoin DeFi collateral, exchange order books, risk appetite)
+    # far more than they reach the metals, which are priced off real yields.
+    #
+    # Split into two event types because QE and QT are OPPOSITE actions: a
+    # single LIQUIDITY_CHANGE with one sign could not express both. Detection
+    # is keyword-driven; direction is data, in the map.
+    #
+    # EASING = injecting liquidity: QE, asset purchases, TGA draw, reserve
+    # growth, balance-sheet expansion. Bullish BTC.
+    (EventType.LIQUIDITY_EASING,
+     ("quantitative easing", "quantitative easing programme",
+      "quantitative easing program", "qe", "asset purchase", "asset purchases",
+      "tga draw", "tga drawdown", "treasury general account draw",
+      "treasury general account drawdown", "reserves rise", "reserves rose",
+      "reserve balances rise", "reserve balances rose", "liquidity injection",
+      "injection of liquidity", "balance sheet expansion",
+      "balance sheet runoff begins", "balance sheet begins to expand",
+      "expansion of the balance sheet", "expand the balance sheet",
+      "net liquidity injection", "inject liquidity", "injecting liquidity",
+      "adds liquidity", "add liquidity", "loose monetary policy",
+      "monetary easing", "easing cycle", "easing path"), ()),
+    # TIGHTENING = draining liquidity: QT, runoff, TGA build, reserve decline.
+    # Bearish BTC. Ordered BEFORE LIQUIDITY_EASING so "balance sheet runoff"
+    # cannot be misread as expansion.
+    (EventType.LIQUIDITY_TIGHTENING,
+     ("quantitative tightening", "qt", "balance sheet runoff",
+      "balance sheet shrink", "balance sheet shrinking", "balance sheet reduction",
+      "runoff begins", "runoff of the balance sheet", "shrink the balance sheet",
+      "shrinking the balance sheet", "reduce the balance sheet",
+      "reducing the balance sheet", "taper", "tapering", "qe taper",
+      "end of asset purchases", "stop asset purchases", "reserves fall",
+      "reserves fell", "reserve balances fall", "reserve balances fell",
+      "liquidity drain", "drain liquidity", "draining liquidity",
+      "withdraw liquidity", "withdraws liquidity", "tightening cycle",
+      "tighten monetary policy", "monetary tightening", "quantitative "
+      "tightening begins", "balance sheet runoff begins as qt takes hold",
+      "runoff begins as qt takes hold"), ()),
 )
 
 # Category fallback: used ONLY when nothing else matched.
@@ -552,6 +881,19 @@ def resolve(text: str, category: NewsCategory,
 
     event_types = detect_event_types(text, category)
 
+    # If both escalation and de-escalation fire, the escalation wins:
+    # the market reads fresh escalation as the dominant signal.
+    if (EventType.GEOPOLITICAL_RISK in event_types
+            and EventType.GEOPOLITICAL_DEESCALATION in event_types):
+        event_types = [e for e in event_types
+                       if e is not EventType.GEOPOLITICAL_DEESCALATION]
+
+    # If a specific event type (not GENERAL_MACRO) is detected, enforce a
+    # minimum cue magnitude of 0.30 so that the signal has sufficient weight.
+    specific_event = any(et != EventType.GENERAL_MACRO for et in event_types)
+    if specific_event:
+        cue_magnitude = max(cue_magnitude if cue_magnitude is not None else 0.0, 0.30)
+
     # NEWS-ONLY bias (Task 2): the price-action flag no longer damps the
     # scale. Field `priced_in` stays on the schema but is a constant False
     # and never enters any weight/score math.
@@ -564,8 +906,8 @@ def resolve(text: str, category: NewsCategory,
     # statement about that asset. It is resolved FIRST and carried through the
     # empty-mechanism path below, because "Gold rose" matches no macro event at
     # all and previously exited here with a silent NEUTRAL / 0.0.
-    direct = direct_asset_moves(
-        neutralise_on_negation(text or "").lower())
+    lowered = neutralise_on_negation(text or "").lower()
+    direct = direct_asset_moves(lowered)
 
     if not event_types:
         out: dict = {}
@@ -593,6 +935,10 @@ def resolve(text: str, category: NewsCategory,
             if entry.magnitude <= 0.0:
                 continue
             sign = entry.sign
+            # Demand events flip sign on "down" verbs: demand falling is bad.
+            if (event_type in _DEMAND_EVENTS
+                    and any(contains_plural(lowered, v) for v in _DEMAND_DOWN_VERBS)):
+                sign = -sign
             if event_type in (EventType.BTC_ETF_FLOW, EventType.GOLD_ETF_FLOW):
                 if flow_sign != 0:
                     sign = flow_sign

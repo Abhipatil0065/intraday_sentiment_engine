@@ -91,16 +91,17 @@ class SentimentBlock(BaseModel):
     """
     One asset's directional read for a scope.
 
-    BINARY BIAS: ``bias`` is strictly BULLISH or BEARISH (the sign of the
-    net news score); ``stale`` marks a carried-forward verdict (no signals
-    in the window).
+    BIAS: ``bias`` is BULLISH, BEARISH, or NEUTRAL (the sign of the
+    net news score). NEUTRAL indicates the engine withheld a verdict
+    (no directional signal). ``stale`` marks a carried-forward verdict
+    (no signals in the window).
     """
 
     asset: Asset
     scope: str = "CURRENT"
     score: float = 0.0            # -100 .. +100
     confidence: float = 0.0       # 0 .. 1
-    bias: str = "BULLISH"         # BULLISH | BEARISH (binary, never NO_BIAS)
+    bias: str = "BULLISH"         # BULLISH | BEARISH | NEUTRAL
     mode: str = "heuristic"       # LLM/heuristic stamp on every result
     drivers: list[DriverOut] = Field(default_factory=list)
     conflict: DriverOut | None = None
@@ -140,9 +141,10 @@ class EquityCard(BaseModel):
 
     ``region`` is ASIA / EUROPE / US so the frontend can key flip state by
     region even when the title string changes; ``no_data`` marks the empty
-    50/50 fallback when no regional EQUITIES signals matched. BINARY BIAS:
-    ``bias`` is strictly BULLISH or BEARISH - on an empty region it carries
-    the region's last published bias forward, with ``stale`` set.
+    50/50 fallback when no regional EQUITIES signals matched. BIAS:
+    ``bias`` is BULLISH, BEARISH, or NEUTRAL - on an empty region it carries
+    the region's last published bias forward, with ``stale`` set. NEUTRAL
+    indicates the engine withheld a verdict for this region.
     """
 
     region: str = "US"
@@ -150,7 +152,7 @@ class EquityCard(BaseModel):
     symbol: str = "SPX / NDX"
     score: float = 0.0            # -100 .. +100
     confidence: float = 0.0       # 0 .. 1
-    bias: str = "BULLISH"         # BULLISH | BEARISH (binary, never NO_BIAS)
+    bias: str = "BULLISH"         # BULLISH | BEARISH | NEUTRAL
     mode: str = "heuristic"
     drivers: list[DriverOut] = Field(default_factory=list)
     contributing_articles: int = 0

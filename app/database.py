@@ -160,10 +160,122 @@ def _purge_legacy_snapshots() -> None:
         log.warning("Legacy snapshot migration skipped: %s", exc)
 
 
+def _add_missing_bias_snapshot_columns() -> None:
+    """
+    Item 1: add the baseline columns to ``bias_snapshots`` when absent.
+
+    Same idempotent pattern as the sentiment_snapshot migration above: PRAGMA
+    is read fresh each run, and a column is added only when genuinely missing.
+    The baseline is computed from this table's own history, so the columns
+    must exist before the first baseline-adjusted write.
+    """
+    from sqlalchemy import text
+
+    add_columns = {
+        "raw_score": "FLOAT",
+        "baseline_score": "FLOAT",
+        "adjusted": "BOOLEAN DEFAULT 0",
+    }
+    try:
+        with engine.begin() as conn:
+            present = {
+                row[1] for row in conn.execute(
+                    text("PRAGMA table_info(bias_snapshots)"))
+            }
+            if not present:
+                return  # table absent on a brand-new database
+            for column, ddl in add_columns.items():
+                if column not in present:
+                    conn.execute(text(
+                        f"ALTER TABLE bias_snapshots ADD COLUMN {column} {ddl}"))
+    except Exception as exc:  # noqa: BLE001 - never block startup
+        log.warning("bias_snapshots migration skipped: %s", exc)
+
+
+def _add_missing_sentiment_columns() -> None:
+    """
+    Item 1: add the raw_score / baseline_score columns to sentiment_snapshot.
+
+    Same idempotent PRAGMA-then-ALTER pattern as the migrations above: columns
+    are added only when genuinely absent, so an old database picks up the
+    baseline-audit fields without any data loss. New databases get them for free
+    from Base.metadata.create_all in init_db().
+    """
+    from sqlalchemy import text
+
+    add_columns = {
+        "raw_score": "FLOAT",
+        "baseline_score": "FLOAT",
+    }
+    try:
+        with engine.begin() as conn:
+            present = {
+                row[1] for row in conn.execute(
+                    text("PRAGMA table_info(sentiment_snapshot)"))
+            }
+            if not present:
+                return  # table absent on a brand-new database
+            for column, ddl in add_columns.items():
+                if column not in present:
+                    conn.execute(text(
+                        f"ALTER TABLE sentiment_snapshot ADD COLUMN {column} {ddl}"))
+    except Exception as exc:  # noqa: BLE001 - never block startup
+        log.warning("sentiment_snapshot migration skipped: %s", exc)
+
+
+def _add_missing_bias_outcome_table() -> None:
+    """
+    Item 6: create the ``bias_outcome`` calibration table when absent.
+
+    Same idempotent pattern as the migrations above: the table is created
+    only when PRAGMA reports it missing, so an existing database picks up the
+    calibration labels without any data loss. The table is DATA COLLECTION
+    ONLY - it never feeds a threshold at decision time.
+    """
+    from sqlalchemy import text
+
+    try:
+        with engine.begin() as conn:
+            tables = {row[0] for row in conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table'"))}
+            if "bias_outcome" in tables:
+                return
+            conn.execute(text(
+                "CREATE TABLE bias_outcome ("
+                "id INTEGER PRIMARY KEY, "
+                "bias_snapshot_id INTEGER REFERENCES bias_snapshots(id) "
+                "ON DELETE SET NULL, "
+                "asset VARCHAR(12) NOT NULL, "
+                "date_utc DATETIME NOT NULL, "
+                "bias VARCHAR(16) DEFAULT '', "
+                "score FLOAT DEFAULT 0.0, "
+                "confidence FLOAT DEFAULT 0.0, "
+                "outcome VARCHAR(16) DEFAULT '', "
+                "note TEXT DEFAULT '', "
+                "created_at DATETIME NOT NULL"
+                ")"
+            ))
+            conn.execute(text(
+                "CREATE INDEX ix_bias_outcome_asset ON bias_outcome(asset)"))
+            conn.execute(text(
+                "CREATE INDEX ix_bias_outcome_created ON bias_outcome(created_at)"))
+    except Exception as exc:  # noqa: BLE001 - never block startup
+        log.warning("bias_outcome table migration skipped: %s", exc)
+
+
 def init_db() -> None:
-    """Create tables if they do not exist."""
+    """Create tables if they do not exist.
+
+    ``Base.metadata.create_all`` creates every mapped table, including the
+    item-6 ``bias_outcome`` calibration table, so a brand-new database gets it
+    for free. Existing databases get it through the idempotent migration below
+    (the table is created only when absent, never dropped or rewritten).
+    """
     Base.metadata.create_all(bind=engine)
     _purge_legacy_snapshots()
+    _add_missing_bias_snapshot_columns()
+    _add_missing_sentiment_columns()
+    _add_missing_bias_outcome_table()
     log.info("Database ready: %s", _redact(settings.resolved_database_url()))
 
 

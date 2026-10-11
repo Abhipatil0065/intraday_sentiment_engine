@@ -173,10 +173,10 @@ class TestLLMBatchLimit:
         Base.metadata.create_all(bind=engine)
 
     def test_llm_batch_limit_respected(self):
-        """LLM_BATCH_LIMIT=15 limits concurrent LLM calls."""
+        """LLM_BATCH_LIMIT=40 limits concurrent LLM calls (Item 5)."""
         from app.services.pipeline import LLM_BATCH_LIMIT
 
-        assert LLM_BATCH_LIMIT == 15
+        assert LLM_BATCH_LIMIT == 40
 
         # Verify concurrency constant in news_classifier
         from app.analysis import news_classifier

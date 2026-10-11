@@ -70,9 +70,8 @@ def test_empty_region_returns_neutral_card():
     assert card.region == "ASIA"
     assert card.title == "ASIA EQUITY"
     assert card.score == 0.0
-    # Binary bias: an empty region is still directional - it carries the last
-    # published bias forward (stale) instead of withholding a verdict.
-    assert card.bias in ("BULLISH", "BEARISH")
+    # NO_BIAS: an empty region with no history returns NO_BIAS (rendered NEUTRAL 50/50)
+    assert card.bias == "NO_BIAS"
     assert card.stale is True
 
 
