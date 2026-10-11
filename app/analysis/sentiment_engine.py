@@ -564,7 +564,7 @@ def _signal_weight(s: WeightedSignal, now: datetime | None) -> float:
 
     from app.analysis.cue_rules import detect_verification
     from app.analysis.release_surprise import MAX_SURPRISE_WEIGHT
-    from app.analysis.transmission_map import detect_event_types
+    from app.analysis.transmission_map import detect_event_types, transmission
     from app.config import (
         CONFIRMED_BOOST,
         RUMOR_MULTIPLIER,
@@ -606,6 +606,7 @@ def _signal_weight(s: WeightedSignal, now: datetime | None) -> float:
     # Earnings mega-cap / unnamed multiplier (Item 6).
     # Detect event types from the headline and category.
     earnings_event_types = {"EARNINGS_BEAT", "EARNINGS_MISS", "GUIDANCE_RAISED", "GUIDANCE_CUT"}
+    flow_event_types = {"BTC_ETF_FLOW", "GOLD_ETF_FLOW"}
     detected = detect_event_types(s.title, s.category)
     earnings_mult = 1.0
     if any(et.value in earnings_event_types for et in detected):
@@ -615,7 +616,29 @@ def _signal_weight(s: WeightedSignal, now: datetime | None) -> float:
         else:
             earnings_mult = settings.earnings_unnamed_mult
 
-    return decay * rel * per * qual * sess * corr * surprise * tier * metal_mult * earnings_mult
+    # Asset sensitivity based on transmission map magnitude.
+    # ev = detect_event_types(s.title, s.category); if empty -> 1.0.
+    # m = transmission(ev[0], s.asset).magnitude.
+    # asset_sensitivity = min(1.0, max(0.3, m)).
+    # Skip (use 1.0) ONLY for EARNINGS_BEAT, EARNINGS_MISS,
+    # GUIDANCE_RAISED, GUIDANCE_CUT, BTC_ETF_FLOW and GOLD_ETF_FLOW.
+    # Events with sign 0 (GENERAL_MACRO and similar) must never be scaled.
+    flow_event_types = {"BTC_ETF_FLOW", "GOLD_ETF_FLOW"}
+    asset_sensitivity = 1.0
+    if not any(et.value in earnings_event_types for et in detected) \
+       and not any(et.value in flow_event_types for et in detected) \
+       and detected:
+        # Look at all detected events with non-zero sign, take max magnitude
+        max_m = 0.0
+        for et in detected:
+            entry = transmission(et, s.asset)
+            if entry.sign != 0 and entry.magnitude > 0:
+                if entry.magnitude > max_m:
+                    max_m = entry.magnitude
+        if max_m > 0:
+            asset_sensitivity = min(1.0, max(0.3, max_m))
+
+    return decay * rel * per * qual * sess * corr * surprise * tier * metal_mult * earnings_mult * asset_sensitivity
 
 
 def _mode_for(signals: Sequence[WeightedSignal]) -> str:
