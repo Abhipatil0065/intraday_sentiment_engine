@@ -53,7 +53,7 @@
     "XAUUSD": [1, 1.15], "XAGUSD": [1, 0.60], "BTCUSD": [0, 0.90], "EQUITY": [-1, 0.75]
   },
   "RISK_ON": {
-    "XAUUSD": [-1, 0.45], "XAGUSD": [1, 0.55], "BTCUSD": [1, 1.00], "EQUITY": [1, 0.90]
+    "XAUUSD": [-1, 0.45], "XAGUSD": [0, 0.55], "BTCUSD": [1, 1.00], "EQUITY": [1, 0.90]
   },
   "RISK_OFF": {
     "XAUUSD": [1, 0.65], "XAGUSD": [0, 0.35], "BTCUSD": [-1, 1.05], "EQUITY": [-1, 0.90]

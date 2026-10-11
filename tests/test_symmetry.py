@@ -365,16 +365,12 @@ def test_event_pairs_are_exact_mirrors(positive, negative):
             f"{pos.sign} vs {neg.sign}")
 
 
-def test_silver_is_bullish_in_both_risk_regimes():
-    """Documented exception (VAL-3), asserted so the intent is explicit.
-    
-    NOTE: As of the transmission map change, XAGUSD RISK_OFF now has sign=0
-    (no transmission path). This test documents the CURRENT behavior.
-    """
+def test_silver_has_no_direction_on_risk_regimes():
+    """Silver follows gold and the dollar; risk sentiment gives no direction."""
     on = tm.transmission(tm.EventType.RISK_ON, Asset.SILVER)
     off = tm.transmission(tm.EventType.RISK_OFF, Asset.SILVER)
-    assert on.sign == +1
-    assert off.sign == 0  # XAGUSD RISK_OFF has no transmission path (mixed)
+    assert on.sign == 0
+    assert off.sign == 0  # Silver follows gold and the dollar; risk sentiment gives no direction.
 
 
 def test_btc_etf_inflow_and_outflow_are_opposite():
@@ -470,8 +466,8 @@ def test_risk_appetite_verbs_no_longer_collide(asset):
     "risk appetite IMPROVED" and "risk appetite FADED" must not agree in sign.
 
     Gold and bitcoin have one-sided exposure to risk appetite, so the two must
-    be OPPOSITE. Silver has RISK_ON bullish and RISK_OFF mixed (no transmission
-    path), so it is asserted explicitly.
+    be OPPOSITE. Silver has no transmission path for risk sentiment, so it is
+    asserted explicitly as zero in both directions.
     """
     from tests.golden_runner import classify
 
@@ -479,9 +475,9 @@ def test_risk_appetite_verbs_no_longer_collide(asset):
     down = classify(RISK_PAIR[1])["outcomes"][asset.value].contribution
 
     if asset is Asset.SILVER:
-        # XAGUSD RISK_ON is bullish, RISK_OFF has no transmission (mixed/0)
-        assert up > 0, f"silver RISK_ON should be bullish, got {up:+.3f}"
-        assert down == 0, f"silver RISK_OFF should be mixed (0), got {down:+.3f}"
+        # XAGUSD has no transmission path for risk sentiment; both directions are 0
+        assert up == 0, f"silver RISK_ON should be zero, got {up:+.3f}"
+        assert down == 0, f"silver RISK_OFF should be zero, got {down:+.3f}"
         return
 
     assert up != 0.0 and down != 0.0, (
