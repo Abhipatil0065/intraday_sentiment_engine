@@ -106,7 +106,8 @@ async def lifespan(app: FastAPI):
     if not _testing:
         try:
             from app.analysis.sentiment_engine import warm_bias_history
-            with SessionLocal() as session:
+            from app.database import session_scope
+            with session_scope() as session:
                 rows = {}
                 for asset in Asset:
                     snap = session.scalar(
@@ -122,6 +123,7 @@ async def lifespan(app: FastAPI):
                         rows[asset.value] = snap.bias
                 if rows:
                     warm_bias_history(rows)
+                    log.info("Bias warm-up loaded: %s", {k: v for k, v in rows.items()})
         except Exception as exc:  # noqa: BLE001 - never block startup
             log.warning("Bias warm-up skipped: %s", exc)
 
