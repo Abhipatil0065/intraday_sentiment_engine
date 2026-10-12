@@ -49,7 +49,7 @@ def test_an_unlisted_country_gets_the_conservative_default():
     from app.analysis.economic_impact import _country_multiplier
 
     assert _country_multiplier(ev("X CPI", country="XYZ"),
-                               Asset.GOLD) == pytest.approx(0.25)
+                               Asset.GOLD) == pytest.approx(0.05)
 
 
 def test_china_outweighs_gold_but_not_silver():

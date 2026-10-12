@@ -422,11 +422,10 @@ class Settings(BaseSettings):
     # multipliers in 0..1 applied to relevance, keyed by country code.
     calendar_country_multipliers_enabled: bool = True
     calendar_country_multipliers: str = (
-        "USD=1.0,EUR=0.6,GBP=0.4,JPY=0.4,CNY=0.5,CHF=0.3,CAD=0.3,"
-        "AUD=0.3,NZD=0.3"
+        "USD=1.0,EUR=0.30,GBP=0.20,JPY=0.15,CNY=0.25,CHF=0.05,CAD=0.05,AUD=0.05,NZD=0.05"
     )
     # Anything not listed above.
-    calendar_country_multiplier_default: float = 0.25
+    calendar_country_multiplier_default: float = 0.05
     # Asset-specific overrides, keyed "COUNTRY:ASSET". CNY needs this because
     # silver and oil follow China's industrial cycle far more closely than
     # gold or bitcoin do.
