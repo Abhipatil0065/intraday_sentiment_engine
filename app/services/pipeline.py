@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import atexit
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import and_, delete, exists, func, or_, select
 
@@ -35,6 +35,7 @@ from app.database import session_scope
 from app.ingestion.base import RawArticle
 from app.ingestion.economic_calendar import fetch_calendar
 from app.ingestion.news_fetcher import fetch_all_news
+from app.ingestion.market_data import build_market_data_signals, market_data_signals_to_weighted
 from app.logging_conf import get_logger
 from app.market import market_prep, market_wrap
 from app.market import regime as regime_mod
@@ -79,11 +80,21 @@ _running = False
 _last_regime = None  # RegimeAssessment from the most recent recompute
 # Economic-calendar signals from the most recent fetch, shared with the API.
 _calendar_signals: list[CalendarSignal] = []
+# The raw calendar events behind those signals. Kept separately because the
+# imminent-release EVENT RISK warning must see un-released events too, even
+# though only RELEASED prints become signals (calendar_include_upcoming).
+_calendar_events: list = []
 
 # Down-weight news that duplicates a calendar release.
 CALENDAR_NEWS_DUP_FACTOR = 0.35
 # Session-aware global equity card from the most recent recompute (NOW-only).
 _last_equity_card: dict | None = None
+
+# CoinGlass snapshots (liquidation heatmap / CVD / footprint) from the most
+# recent recompute. Keyed by asset symbol. Rate-limited to at most one fetch
+# per coinglass_cache_ttl_seconds inside the scraper, so a recompute never
+# opens a browser on its own - it only reads what the cache decides is fresh.
+_coinglass_snapshots: dict = {}
 
 # Cached health metrics - written by the pipeline, read by /api/health without
 # touching the database so the endpoint stays instant even while a tick runs.
@@ -98,6 +109,11 @@ _tick_started_at: datetime | None = None
 
 # Maximum tick duration before considering it hung (10 minutes)
 MAX_TICK_DURATION_SECONDS = 600
+
+# No successful tick in this many minutes => the API reports the pipeline as
+# STALE (degraded). Lives next to the state it evaluates so /api/health and
+# the /api/dashboard payload builder can never drift apart on freshness.
+HEALTH_STALE_MINUTES = 15
 
 # Hard cap on LLM classifications started within a single tick. Beyond this the
 # classifier falls back to deterministic heuristics, keeping every tick under
@@ -272,6 +288,60 @@ def runtime_state() -> dict:
         "health_metrics": _health_metrics,
         "tick_started_at": _tick_started_at.isoformat() if _tick_started_at else None,
     }
+
+
+def compute_stale(
+    stale_after_minutes: int = HEALTH_STALE_MINUTES,
+) -> tuple[bool, str | None]:
+    """Single source of truth for pipeline freshness (STALE / DEGRADED).
+
+    Reads only in-memory state (no DB, no lock), so it is cheap enough for
+    ``/api/health`` to call while a tick holds the SQLite write lock.
+
+    A freshly restarted process has ``last_successful_tick = None`` until
+    its first tick completes. ``/api/health`` has always treated "a tick is
+    running and is not hung" as healthy in that window; the dashboard
+    payload builder used its own inline rule that did NOT, so every restart
+    flashed a red STALE banner for the first few minutes of legitimate
+    work. Both callers now share this helper, so they can never disagree.
+
+    Returns ``(stale, stale_reason)`` where reason is one of
+    ``tick_hung`` / ``no_successful_tick`` / ``no_tick_completed`` /
+    ``parse_error`` (stale) or ``None`` (healthy).
+    """
+    state = runtime_state()
+    tick_running = state.get("running", False)
+    tick_started = state.get("tick_started_at")
+    last_poll_ok = state.get("last_successful_tick")
+
+    # A tick running past the hard cap is hung. The scheduler has
+    # max_instances=1, so a hung tick also blocks every future tick - it is
+    # stale no matter how fresh the last completed tick was.
+    if tick_running and tick_started:
+        try:
+            tick_start_dt = datetime.fromisoformat(tick_started)
+            tick_age = datetime.now(timezone.utc) - tick_start_dt
+            if tick_age > timedelta(seconds=MAX_TICK_DURATION_SECONDS):
+                return True, "tick_hung"
+        except (ValueError, TypeError):
+            pass
+
+    if last_poll_ok:
+        try:
+            last_dt = datetime.fromisoformat(last_poll_ok)
+            age = datetime.now(timezone.utc) - last_dt
+            if age > timedelta(minutes=stale_after_minutes):
+                return True, "no_successful_tick"
+            return False, None
+        except (ValueError, TypeError):
+            return True, "parse_error"
+
+    # No tick has ever completed in this process. If one is running right now
+    # (and is not hung, per the check above) the startup tick is still in
+    # flight - that is normal startup, not staleness.
+    if tick_running:
+        return False, None
+    return True, "no_tick_completed"
 
 
 def last_successful_tick() -> str | None:
@@ -961,6 +1031,57 @@ def _recompute_sentiment(session, stats: IngestStats):
             category_weights.get(sig.profile.category, 0.0) + sig.relevance
         )
 
+    # --- Synthetic market data signals (DXY, real yields) ---
+    # These inject price-action information directly into sentiment when
+    # headlines are absent but capital flows are moving.
+    if settings.price_data_enabled:
+        try:
+            market_signals = build_market_data_signals()
+            if market_signals:
+                weighted_market = market_data_signals_to_weighted(market_signals)
+                signals.extend(weighted_market)
+                # Add to category weights for regime detection
+                for s in weighted_market:
+                    category_weights[s.category] = (
+                        category_weights.get(s.category, 0.0) + s.relevance
+                    )
+        except Exception as exc:  # noqa: BLE001 - never break the recompute
+            log.debug("Market data signal injection failed: %s", exc)
+
+    # --- CoinGlass scrapes (liquidation heatmap / CVD / footprint) ---
+    # Scraped from the public CoinGlass chart pages - no API key. The scraper
+    # owns its own rate limit (one fetch per coinglass_cache_ttl_seconds,
+    # default 5 min, persisted to disk), so on a fast tick this is a cache read
+    # and costs no browser. The CVD reading feeds the SAME scoring path as a
+    # headline, so it moves the bullish/bearish badge the dashboard shows.
+    #
+    # A failure here is not an error: the pool is skipped, the last good
+    # snapshot stays on the cache for the dashboard, and the verdict degrades
+    # to news + price confirmation exactly as documented.
+    global _coinglass_snapshots
+    try:
+        from app.ingestion import coinglass_scraper
+
+        snapshots = coinglass_scraper.scrape_all()
+        if snapshots:
+            _coinglass_snapshots = snapshots
+            cg_signals = coinglass_scraper.coinglass_signals_to_weighted(
+                snapshots)
+            signals.extend(cg_signals)
+            for s in cg_signals:
+                category_weights[s.category] = (
+                    category_weights.get(s.category, 0.0) + s.relevance
+                )
+            log.info("CoinGlass: %d CVD/footprint signal(s) injected from %d "
+                     "asset(s)", len(cg_signals), len(snapshots))
+        else:
+            # Keep the previous in-memory read so a skipped poll does not wipe
+            # the module state mid-session; the cached panel is unaffected.
+            log.debug("CoinGlass: no fresh snapshot this tick (cached, backed "
+                      "off, or unavailable) - sentiment unchanged")
+    except Exception as exc:  # noqa: BLE001 - never break the recompute
+        log.debug("CoinGlass signal injection failed: %s", exc)
+
     # IMPROVEMENT 4, Step 2: on the tick where the session changed, rewrite
     # every signal's session_multiplier IN MEMORY so the aggregation that
     # follows uses the new session's relevance weights. The new value is
@@ -997,13 +1118,44 @@ def _recompute_sentiment(session, stats: IngestStats):
     signals = cluster_signals(signals, window_hours=0.5)
 
     # Item 8: an imminent high-impact release makes any standing bias unreliable.
+    # Read from the RAW event list, not from the signals: only RELEASED prints
+    # become signals, but an unreleased high-impact print is exactly the thing
+    # the trader must be warned about.
     at_risk, risk_note = (False, "")
     try:
         from app.analysis.calendar_risk import event_risk_check
-        at_risk, risk_note = event_risk_check(
-            [s.event for s in _calendar_signals])
+        at_risk, risk_note = event_risk_check(_calendar_events)
     except Exception as exc:  # noqa: BLE001 - never break the recompute
         log.debug("event_risk_check failed: %s", exc)
+
+    # A liquidation cluster sitting within 1% of spot on either side is a
+    # caution flag on the same channel: the bias is still published, but the
+    # payload says a cascade is nearby. This is the ONLY way a CoinGlass read
+    # touches the verdict other than through the CVD signal above, and it is
+    # additive - an empty note leaves the calendar's verdict untouched.
+    try:
+        from app.ingestion.coinglass_scraper import (
+            LIQ_CAUTION_PCT,
+            cached_snapshot,
+        )
+
+        liq_notes = []
+        for asset in Asset:
+            snapshot = cached_snapshot(asset.value)
+            if snapshot is None:
+                continue
+            note = snapshot.caution_note()
+            if note:
+                liq_notes.append(note)
+        if liq_notes:
+            merged = " ".join(liq_notes)
+            risk_note = f"{risk_note} {merged}".strip()
+            at_risk = True
+            log.info("CoinGlass liquidation caution raised for %d asset(s) "
+                     "(within %.1f%% of spot)",
+                     len(liq_notes), LIQ_CAUTION_PCT * 100)
+    except Exception as exc:  # noqa: BLE001 - never break the recompute
+        log.debug("CoinGlass caution check failed: %s", exc)
 
     for asset in Asset:
         asset_signals = [s for s in signals if s.asset is asset]
@@ -1119,6 +1271,52 @@ note=result.note,
 def current_equity_card() -> dict | None:
     """Read-only view of the most recent equity card (a copied dict)."""
     return dict(_last_equity_card) if _last_equity_card else None
+
+
+def current_coinglass() -> dict:
+    """
+    Read-only view of the most recent CoinGlass scrapes, per asset.
+
+    Deliberately derived from the CACHE rather than the recompute's in-memory
+    snapshots: the dashboard must still show the last good reading after a
+    tick where the poll was skipped (cached, backed off, or deferred), instead
+    of blanking the panel the moment a fetch is not spent.
+
+    Returns a dict keyed by asset symbol, each value the serialisable
+    snapshot dict (spot, nearest clusters below/above, caution flags, CVD
+    divergence, footprint imbalance).
+    """
+    from app.ingestion.coinglass_scraper import cached_snapshot
+    from app.models.enums import Asset
+
+    out: dict = {}
+    for asset in Asset:
+        try:
+            snapshot = cached_snapshot(asset.value)
+        except Exception:  # noqa: BLE001 - the panel is best-effort
+            continue
+        if snapshot is not None:
+            out[asset.value] = snapshot.to_dict()
+    return out
+
+
+def coinglass_caution_note() -> str:
+    """Merged liquidation-cluster caution note across every cached asset."""
+    from app.ingestion.coinglass_scraper import cached_snapshot
+    from app.models.enums import Asset
+
+    notes = []
+    for asset in Asset:
+        try:
+            snapshot = cached_snapshot(asset.value)
+        except Exception:  # noqa: BLE001
+            continue
+        if snapshot is None:
+            continue
+        note = snapshot.caution_note()
+        if note:
+            notes.append(note)
+    return " ".join(notes)
 
 
 def _is_article_today_query(published: datetime | None) -> bool:
@@ -1316,7 +1514,7 @@ async def run_once() -> IngestStats:
     Never raises - errors are logged and returned in ``stats.errors`` so the
     scheduler keeps running.
     """
-    global _running, _last_update, _last_successful_tick, _news_since_update, _calendar_signals, _tick_started_at
+    global _running, _last_update, _last_successful_tick, _news_since_update, _calendar_signals, _calendar_events, _tick_started_at
 
     if _running:
         log.debug("Pipeline already running; skipping this tick")
@@ -1341,6 +1539,7 @@ async def run_once() -> IngestStats:
         # recorded and the pipeline continues with news-only sentiment.
         events, calendar_errors = await fetch_calendar()
         stats.errors.extend(calendar_errors)
+        _calendar_events = events
         _calendar_signals = signals_for_events(
             events, horizon_hours=settings.economic_calendar_horizon_hours
         )

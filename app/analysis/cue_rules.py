@@ -54,6 +54,12 @@ BULLISH_CUES: list[tuple[str, int]] = [
     ("gold etf inflow", 4), ("gld inflow", 3), ("gold fund inflow", 3),
     ("central bank buying", 5), ("central bank buys", 5), ("reserve accumulation", 4),
     ("gold reserves rise", 4), ("official sector buying", 4), ("central bank gold buying", 5),
+    # EQUITY/DAY TRADING microstructure cues (intraday)
+    ("0dte", 4), ("zero dte", 4), ("gamma squeeze", 5), ("call wall", 3),
+    ("vwap reclaim", 3), ("above vwap", 2), ("opening drive", 3),
+    ("opening range break", 4), ("breakout", 3), ("momentum", 2),
+    ("max pain", 2), ("pin risk", 3), ("call buying", 3),
+    ("put wall", 3), ("call wall broken", 4),
 ]
 BEARISH_CUES: list[tuple[str, int]] = [
     ("rate hike", 3), ("raises rates", 3), ("hawkish", 3), ("tightening", 2),
@@ -79,6 +85,12 @@ BEARISH_CUES: list[tuple[str, int]] = [
     ("gold etf outflow", 4), ("gld outflow", 3), ("gold fund outflow", 3), ("gold etf redemption", 3),
     ("central bank selling", 5), ("central bank sells", 5), ("reserve reduction", 4),
     ("gold reserves fall", 4), ("official sector selling", 4), ("central bank gold selling", 5),
+    # EQUITY/DAY TRADING microstructure cues (intraday)
+    ("0dte", 4), ("zero dte", 4), ("gamma squeeze", 5), ("put wall", 3),
+    ("vwap reject", 3), ("below vwap", 2), ("opening drive", 3),
+    ("opening range break", 4), ("breakdown", 3), ("momentum", 2),
+    ("max pain", 2), ("pin risk", 3), ("put buying", 3),
+    ("call wall", 3), ("put wall broken", 4),
 ]
 
 PRECIOUS_CUES = ["fed", "rate", "yield", "dollar", "inflation", "safe haven", "gold",

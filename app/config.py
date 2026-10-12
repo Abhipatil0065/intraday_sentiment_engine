@@ -157,7 +157,9 @@ class Settings(BaseSettings):
     # Replaces the "same market-timezone calendar date" gate. A rolling window
     # admits the overnight US wrap by construction, which is why the old
     # FinancialJuice / IST date carve-out is no longer needed.
-    news_window_hours: float = 18.0
+    news_window_hours: float = Field(default=18.0, validation_alias="NEWS_WINDOW_HOURS")
+    # Hard cap on article age, independent of the window. Items older than this get weight 0.
+    trading_day_cutoff_hours: float = Field(default=2.0, validation_alias="TRADING_DAY_CUTOFF_HOURS")
     # Age within which a signal counts toward the "changed in last 60 min" delta.
     delta_window_minutes: int = 60
     # Hard cap on article age, independent of the window (0 = disabled).
@@ -178,10 +180,12 @@ class Settings(BaseSettings):
     # verdict (no previous bias to hold) is never refused. 0.35 is the
     # proposed default; raise it to make flips harder, lower to make them
     # easier.
-    flip_min_confidence: float = 0.35
+    # DAY TRADING: lower threshold for faster flips (was 0.35)
+    flip_min_confidence: float = 0.30
     # Dampening factor for display/cue strength. damped = raw * total_weight / (total_weight + k).
     # k=0 disables dampening (damped = raw). Default 0.5.
-    score_damping_k: float = Field(default=0.5, validation_alias="SCORE_DAMPING_K")
+    # DAY TRADING: less dampening for more responsive scores (was 0.5)
+    score_damping_k: float = Field(default=0.3, validation_alias="SCORE_DAMPING_K")
 
     # ---------------- per-asset baseline normalization (item 1) ----------------
     # Financial news is structurally negative-heavy, so raw cue scores carry a
@@ -243,7 +247,7 @@ class Settings(BaseSettings):
         "Geopolitics=8.0,Risk Sentiment=5.0,ETF Flows=24.0,Bitcoin ETF Flows=24.0,"
         "Crypto Market Flows=12.0,Crypto Regulation=72.0,China=12.0,"
         "Industrial Demand=12.0,Commodity Supply/Demand=10.0,Oil/Energy=8.0,"
-        "Equities=8.0,Other=6.0"
+        "Equities=8.0,Liquidation Heatmap=1.0,CVD=1.0,Footprint=1.0,Other=6.0"
     )
 
     # ---------------- economic calendar (item 8) ----------------
@@ -307,8 +311,137 @@ class Settings(BaseSettings):
     bias_snapshot_enabled: bool = True
 
     # ---------------- price confirmation ----------------
-    price_data_enabled: bool = False
+    price_data_enabled: bool = Field(default=False, validation_alias="PRICE_DATA_ENABLED")
     price_api_base_url: str = "https://api.coinbase.com/v2"
+    # Market data proxy polling interval (seconds). Used by market_data.py
+    # to poll DXY/TIP for synthetic STRONG_USD/WEAK_USD and REAL_YIELDS signals.
+    market_data_poll_seconds: int = Field(default=60, validation_alias="MARKET_DATA_POLL_SECONDS")
+
+    # ---------------- CoinGlass Scraper ----------------
+    # Enable/disable CoinGlass scraping for liquidation heatmap, CVD, and footprint data
+    coinglass_enabled: bool = Field(default=True, validation_alias="COINGLASS_ENABLED")
+    # Poll interval in seconds (default 300s = 5 minutes to respect rate limits)
+    coinglass_poll_seconds: int = Field(default=300, validation_alias="COINGLASS_POLL_SECONDS")
+
+    # NOTE ON THE URLS. The "legend" chart links
+    #   https://legend.coinglass.com/chart/<id>
+    # are SHARED chart links and now redirect to a login page
+    # (verified: coinglass.com/login?act=legend), so they cannot be scraped
+    # without an authenticated session. The public page that renders the same
+    # liquidation heatmap WITHOUT a login is used instead:
+    #   https://www.coinglass.com/pro/futures/LiquidationHeatMap
+    #
+    # VERIFIED CAPABILITY (2026-10):
+    #   * This page renders BTC and the BTC heatmap is readable end to end,
+    #     with NO key and NO login.
+    #   * It does NOT render XAU or XAG: no URL parameter switches the
+    #     instrument, the API is behind a plan wall, and driving the symbol
+    #     combobox changes the page state but never redraws the chart.
+    #
+    # GOLD / SILVER need a different page, and the one that has them is the
+    # "Legend" chart, which requires a login. The scraper therefore defaults to
+    # the public page above for BTC, and uses the Legend chart for the metals
+    # once a session is saved (see coinglass_profile_dir and
+    # tools/coinglass_login.py). A Legend chart holds several instruments as
+    # separate canvases in one render, and the extractor matches each asset to
+    # the canvas whose price axis belongs to it, so one shared chart id serves
+    # both metals.
+    #
+    # Override any of these to scrape a different CoinGlass page.
+    coinglass_gold_url: str = Field(
+        default="https://www.coinglass.com/pro/futures/LiquidationHeatMap",
+        validation_alias="COINGLASS_GOLD_URL"
+    )
+    coinglass_silver_url: str = Field(
+        default="https://www.coinglass.com/pro/futures/LiquidationHeatMap",
+        validation_alias="COINGLASS_SILVER_URL"
+    )
+    coinglass_btc_url: str = Field(
+        default="https://www.coinglass.com/pro/futures/LiquidationHeatMap",
+        validation_alias="COINGLASS_BTC_URL"
+    )
+    # Which assets to scrape from CoinGlass at all (comma-separated).
+    #
+    # DEFAULT IS BTC ONLY, and deliberately so. The public heatmap page renders
+    # BTC with no key and no login, so BTC is the one instrument that can be
+    # read end to end. Gold and Silver need a CoinGlass "Legend" chart, and
+    # those cannot be automated:
+    #   * the Legend chart redirects anonymous visitors to a login wall,
+    #   * CoinGlass's REST API answers "Upgrade plan" for every endpoint on
+    #     this key's plan - including free-tier ones,
+    #   * and, decisively, the auth session is a SESSION-ONLY COOKIE that
+    #     Chromium does not write to a persistent profile (verified: /account
+    #     returns 200 inside the run, then the cookie is gone once the browser
+    #     closes, so every fresh render lands on the login wall again).
+    #
+    # Listing an asset that cannot be read would cost a wasted browser render
+    # every poll and make noise that looks like bot traffic, so unreadable
+    # assets are simply not configured. Metals then fall back to news + price
+    # confirmation, which is the documented degradation.
+    coinglass_assets: str = Field(
+        default="BTCUSD", validation_alias="COINGLASS_ASSETS")
+    # Optional PERSISTENT BROWSER PROFILE directory for authenticated browsing.    #
+    # Why this exists: the "Legend" chart links (legend.coinglass.com/chart/<id>)
+    # redirect to coinglass.com/login?act=legend - CoinGlass requires an account
+    # to view a Legend chart, so the gold/silver links are NOT publicly readable
+    # (verified live). The BTC liquidation heatmap page IS public and needs no
+    # login.
+    #
+    # When this is set, renders reuse a real browser profile so a session saved
+    # by a one-time manual login (tools/coinglass_login.py) is used, and the
+    # Legend charts can be scraped with the crawler signed in. Leave it EMPTY to
+    # browse anonymously (the default, and the only keyless path).
+    coinglass_profile_dir: str = Field(
+        default="", validation_alias="COINGLASS_PROFILE_DIR")
+    # When true, the render runs HEADED (headed browser needed for the one-time
+    # login flow). Always keep False for scheduled scraping.
+    coinglass_headless: bool = Field(
+        default=True, validation_alias="COINGLASS_HEADLESS")
+
+    # CoinGlass REST API key (optional).
+    #
+    # TESTED AND NOT USABLE ON THIS PROJECT'S PLAN (verified 2026-10): the key
+    # is VALID - it is recognised, and a wrong header name yields "API key
+    # missing" - but every endpoint answers {"code":"401","msg":"Upgrade plan"},
+    # including free-tier basics such as /api/index/fear-greed-history and
+    # /api/futures/supported-coins. The v3 API (open-api.coinglass.com) is dead
+    # (404), and no endpoint is reachable, so the key buys nothing today. The
+    # liquidation-heatmap / CVD / footprint endpoints are among the blocked
+    # ones even if the tier were raised, so the metals still need the login
+    # path below.
+    #
+    # Left wired up so that a raised plan is a config change only: set the key
+    # and the client in coinglass_api.py (see _COINGLASS_API_ENDPOINTS) will
+    # start using it.
+    #
+    # NEVER commit it: .env is gitignored and is the right home for it.
+    coinglass_api_key: str = Field(
+        default="", validation_alias="COINGLASS_API_KEY")
+    # Cache TTL for scraped data (seconds) - avoid hitting the site too frequently
+    coinglass_cache_ttl_seconds: int = Field(default=300, validation_alias="COINGLASS_CACHE_TTL_SECONDS")
+    # Headless browser timeout (seconds). A chart page needs the app to hydrate
+    # and the canvas to draw, which measured ~20s usually but up to ~75s when
+    # CoinGlass is slow, so this is set with headroom rather than tight.
+    coinglass_browser_timeout_seconds: int = Field(
+        default=90, validation_alias="COINGLASS_BROWSER_TIMEOUT_SECONDS")
+    # User agent for scraping
+    coinglass_user_agent: str = Field(
+        default="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
+        validation_alias="COINGLASS_USER_AGENT"
+    )
+    # Fallback: if scraping fails, use liquidator-indicator or HyperData Terminal
+    coinglass_fallback_enabled: bool = Field(default=True, validation_alias="COINGLASS_FALLBACK_ENABLED")
+
+    # ---------------- stability / flip tuning ----------------
+    # Minimum margin by which the opposite side must exceed the current side
+    # to trigger a flip (unless a fresh Tier 1 item forces it).
+    flip_margin: float = Field(default=8.0, validation_alias="FLIP_MARGIN")
+    # Minimum minutes between bias flips for non-Tier-1 events.
+    flip_hold_minutes: int = Field(default=5, validation_alias="FLIP_HOLD_MINUTES")
+    # Anti-whipsaw cooling period after a flip (minutes).
+    cooling_minutes: int = Field(default=10, validation_alias="COOLING_MINUTES")
+    # Wider margin required during cooling period.
+    cooling_margin: float = Field(default=12.0, validation_alias="COOLING_MARGIN")
 
     # ---------------- alerts ----------------
     alert_on_importance: str = "VERY_HIGH"
@@ -450,6 +583,14 @@ class Settings(BaseSettings):
     calendar_awaiting_release_penalty: float = 0.35
     calendar_awaiting_release_enabled: bool = True
 
+    # Count only RELEASED prints. A print with no actual is a consensus
+    # expectation, not a realised move, so it must not reach the verdict, the
+    # card list, or the prep-card drivers until the provider publishes the
+    # number; it then enters on the next poll as a RELEASED print with its
+    # actual-vs-forecast surprise. Set True to restore the old behaviour where
+    # EXPECTED prints counted (damped by the awaiting-release rules below).
+    calendar_include_upcoming: bool = False
+
     # Phase 6: several prints share one timestamp (NFP + unemployment + wages).
     # They are combined into one composite release so a single macro moment is
     # not counted three times.
@@ -489,6 +630,38 @@ class Settings(BaseSettings):
     )
     earnings_mega_cap_mult: float = 2.0
     earnings_unnamed_mult: float = 0.3
+
+    # ---------------- overnight catch-up ("morning brief") ----------------
+    # The engine only runs while the laptop is on. Everything published in the
+    # shutdown gap is judged in ONE catch-up pass on the next boot: every
+    # article in the resolved off-window is sent through the LLM for a HIGH /
+    # MEDIUM / LOW impact verdict and the stored classification is refreshed
+    # (see app/services/overnight.py).
+    #
+    # MORNING_BRIEF_ON_BOOT              - run the pass automatically when the
+    #                                      app starts (also available as
+    #                                      `python run.py --morning-brief`,
+    #                                      which the Windows logon task calls).
+    # MORNING_BRIEF_MIN_GAP_MINUTES      - a gap shorter than this is a plain
+    #                                      restart, not an overnight - skip.
+    # OVERNIGHT_MAX_GAP_HOURS            - hard ceiling on the window so a
+    #                                      stale marker can never turn the
+    #                                      pass into an all-day crawl.
+    # MORNING_BRIEF_WAIT_IDLE_SECONDS    - how long the final rebuild pass
+    #                                      waits for an in-flight tick.
+    morning_brief_on_boot: bool = Field(
+        default=True, validation_alias="MORNING_BRIEF_ON_BOOT")
+    morning_brief_min_gap_minutes: int = Field(
+        default=90, validation_alias="MORNING_BRIEF_MIN_GAP_MINUTES")
+    overnight_max_gap_hours: int = Field(
+        default=24, validation_alias="OVERNIGHT_MAX_GAP_HOURS")
+    morning_brief_wait_idle_seconds: int = Field(
+        default=300, validation_alias="MORNING_BRIEF_WAIT_IDLE_SECONDS")
+    # Short pause before the pass starts, so a web process booting at the same
+    # moment can prime (and finish) its first ingest tick first. SQLite runs
+    # WAL with a 30s busy timeout, so this is politeness, not a lock.
+    morning_brief_startup_grace_seconds: int = Field(
+        default=15, validation_alias="MORNING_BRIEF_STARTUP_GRACE_SECONDS")
 
     # ---------------- ports ----------------
     dashboard_port: int = 8501
@@ -660,6 +833,15 @@ for _d in (BASE_DIR / "data", BASE_DIR / "logs"):
     os.makedirs(_d, exist_ok=True)
 
 # ---------------------------------------------------------------------------
+# Task 8: stability (no whipsaw) constants - module-level for backward compat.
+# These read from the instantiated settings object so .env values are respected.
+# ---------------------------------------------------------------------------
+FLIP_MARGIN = settings.flip_margin
+FLIP_HOLD_MINUTES = settings.flip_hold_minutes
+COOLING_MINUTES = settings.cooling_minutes
+COOLING_MARGIN = settings.cooling_margin
+
+# ---------------------------------------------------------------------------
 # Source trust tiers (Task 4).
 #
 # Tier 1 = highest-trust, confirmed/official items. Tier 3 = lowest-trust,
@@ -687,14 +869,20 @@ TIER_MULTIPLIERS = {
 
 # Task 5a: intraday recency decay half-lives by EVENT TIER (not category).
 # Exponential decay: weight = 0.5 ** (age_hours / half_life).
-# Tier 1 ~2h, Tier 2 ~45min, Tier 3 ~24min (BTC-optimized for intraday).
+# Tier 1 ~30min, Tier 2 ~15min, Tier 3 ~6min (DAY TRADING optimized).
 # TRADING_DAY_CUTOFF_HOURS: any item older than this gets weight 0.
+# DAY TRADING: faster decay, shorter cutoff (was 1.0/0.5/0.25/4.0)
 TIER_HALF_LIVES = {
-    "TIER_1": 2.0,
-    "TIER_2": 0.75,
-    "TIER_3": 0.4,
+    "TIER_1": 0.5,
+    "TIER_2": 0.25,
+    "TIER_3": 0.1,
 }
-TRADING_DAY_CUTOFF_HOURS = 8.0
+
+# Hard cap on article age, independent of the window. Reads from the
+# instantiated settings so the .env value is respected; exposed at module level
+# for backward compatibility with callers importing the constant.
+# DAY TRADING: .env ships 8h for live trading; the declared default is 2.0.
+TRADING_DAY_CUTOFF_HOURS = settings.trading_day_cutoff_hours
 
 # Task 3: one multiplier for rumors/unconfirmed items ("reportedly",
 # "sources say", "may", "could", "might", opinion pieces).
@@ -702,13 +890,6 @@ RUMOR_MULTIPLIER = 0.5
 
 # Task 3: slight boost for confirmed/official items.
 CONFIRMED_BOOST = 1.05
-
-# Task 8: stability (no whipsaw) constants.
-# Minimum margin by which the opposite side must exceed the current side
-# to trigger a flip (unless a fresh Tier 1 item forces it).
-FLIP_MARGIN = 15.0
-# Minimum minutes between bias flips for non-Tier-1 events.
-FLIP_HOLD_MINUTES = 15
 
 # ---------------------------------------------------------------------------
 # Per-asset driver rankings (Task 6).
@@ -736,7 +917,7 @@ DRIVER_RANKINGS: dict[str, dict[str, float]] = {
         "GEOPOLITICAL_DEESCALATION": 1.00,   # de-escalation = bearish gold
         "BANKING_STRESS": 0.95,      # safe-haven demand
         "RISK_OFF": 0.90,            # flight to quality
-        "RISK_ON": 0.50,             # risk-on hurts gold
+        "RISK_ON": 0.75,             # risk-on hurts gold (weaker than RISK_OFF)
         "GOLD_ETF_FLOW": 0.95,
         "BTC_ETF_FLOW": 0.05,
         "CRYPTO_REGULATION": 0.05,
@@ -747,6 +928,10 @@ DRIVER_RANKINGS: dict[str, dict[str, float]] = {
         "COMMODITY_SUPPLY": 0.60,
         "OIL_SUPPLY_TIGHTNESS": 0.15,
         "OIL_SUPPLY_GLUT": 0.10,
+        # CoinGlass derived signals (scraped)
+        "LIQUIDATION_HEATMAP": 0.90,   # high relevance: liquidation clusters drive price
+        "CVD": 0.85,                    # CVD divergence is a strong signal
+        "FOOTPRINT": 0.80,              # footprint shows aggressive buying/selling
         "GENERAL_MACRO": 0.30,
     },
     # SILVER: gold's drivers plus industrial demand and China data.
@@ -792,6 +977,10 @@ DRIVER_RANKINGS: dict[str, dict[str, float]] = {
         "COMMODITY_SUPPLY": 0.75,
         "OIL_SUPPLY_TIGHTNESS": 0.15,
         "OIL_SUPPLY_GLUT": 0.10,
+        # CoinGlass derived signals (scraped)
+        "LIQUIDATION_HEATMAP": 0.85,
+        "CVD": 0.80,
+        "FOOTPRINT": 0.75,
         "GENERAL_MACRO": 0.30,
     },
     # BITCOIN: ETF flows, liquidity / rate path, regulation, risk sentiment.
@@ -846,29 +1035,35 @@ DRIVER_RANKINGS: dict[str, dict[str, float]] = {
         "COMMODITY_SUPPLY": 0.10,
         "OIL_SUPPLY_TIGHTNESS": 0.10,
         "OIL_SUPPLY_GLUT": 0.05,
+        # CoinGlass derived signals (scraped)
+        "LIQUIDATION_HEATMAP": 1.00,   # critical for BTC - liquidation cascades
+        "CVD": 0.95,                    # CVD divergence very relevant for crypto
+        "FOOTPRINT": 0.90,              # footprint shows aggressive buying/selling
         "GENERAL_MACRO": 0.30,
     },
 }
 
 # ---------------------------------------------------------------------------
-# Equity card relevance matrix (Task 7).
+# Equity card relevance matrix (Task 7) - DAY TRADING OPTIMIZED.
 # The equity card has its OWN relevance table, separate from BITCOIN's slot.
 # Relevant categories: EQUITIES, central bank, macro data, geopolitical,
 # banking stress, risk sentiment. All scaled 0.0-1.0.
+# Day trading: higher relevance for actionable macro prints (CPI, NFP, FOMC,
+# yields, USD), lower for noisy/lagging categories (geopolitics, risk sentiment).
 # ---------------------------------------------------------------------------
 EQUITY_RELEVANCE: dict[str, float] = {
     NewsCategory.EQUITIES: 1.00,
     NewsCategory.CENTRAL_BANK: 0.95,
     NewsCategory.INTEREST_RATES: 0.95,
-    NewsCategory.INFLATION: 0.90,
-    NewsCategory.EMPLOYMENT: 0.90,
+    NewsCategory.INFLATION: 0.95,          # raised from 0.90 - CPI/PCE critical intraday
+    NewsCategory.EMPLOYMENT: 0.95,         # raised from 0.90 - NFP/jobless claims critical
     NewsCategory.GDP: 0.85,
-    NewsCategory.TREASURY_YIELDS: 0.95,
-    NewsCategory.USD_DXY: 0.90,
-    NewsCategory.GEOPOLITICS: 0.70,
-    NewsCategory.RISK_SENTIMENT: 0.80,
-    NewsCategory.BANKING_FINANCIAL_STRESS: 0.85,
-    NewsCategory.ETF_FLOWS: 0.55,
+    NewsCategory.TREASURY_YIELDS: 1.00,    # raised from 0.95 - real yields drive intraday
+    NewsCategory.USD_DXY: 0.95,            # raised from 0.90
+    NewsCategory.GEOPOLITICS: 0.50,        # lowered from 0.70 - less actionable intraday
+    NewsCategory.RISK_SENTIMENT: 0.60,     # lowered from 0.80
+    NewsCategory.BANKING_FINANCIAL_STRESS: 0.70,  # lowered from 0.85
+    NewsCategory.ETF_FLOWS: 0.70,          # raised from 0.55 - intraday flow data actionable
     NewsCategory.COMMODITY_SUPPLY_DEMAND: 0.30,
     NewsCategory.INDUSTRIAL_DEMAND: 0.25,
     NewsCategory.CHINA: 0.40,
@@ -876,6 +1071,9 @@ EQUITY_RELEVANCE: dict[str, float] = {
     NewsCategory.BITCOIN_ETF_FLOWS: 0.05,
     NewsCategory.CRYPTO_MARKET_FLOWS: 0.05,
     NewsCategory.OIL_ENERGY: 0.35,
+    NewsCategory.LIQUIDATION_HEATMAP: 0.10,
+    NewsCategory.CVD: 0.10,
+    NewsCategory.FOOTPRINT: 0.10,
     NewsCategory.OTHER: 0.10,
 }
 

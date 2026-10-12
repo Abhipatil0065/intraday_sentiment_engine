@@ -161,18 +161,19 @@ MIN_TOTAL_WEIGHT = 0.15
 
 # Minimum confidence before a computed flip is allowed (Item 5).
 # When confidence is below this, a flip is refused and the previous bias is held.
-FLIP_MIN_CONFIDENCE = 0.35
+# DAY TRADING: lower threshold for faster flips (was 0.35)
+FLIP_MIN_CONFIDENCE = 0.30
 
 
 def confidence_label_for(conf: float, low_quality: bool) -> str:
     """
     Map confidence to a label.
 
-    LOW   if low_quality (bias held or tie-broken) or conf < 0.35
+    LOW   if low_quality (bias held or tie-broken) or conf < 0.30
     MEDIUM if conf < 0.55
     HIGH  otherwise
     """
-    if low_quality or conf < 0.35:
+    if low_quality or conf < 0.30:
         return "LOW"
     if conf < 0.55:
         return "MEDIUM"
@@ -203,16 +204,20 @@ def payload_score(raw_score: float, bias) -> float:
     return float(raw_score)
 
 # Task 8: stability (no whipsaw) constants.
-from app.config import FLIP_HOLD_MINUTES, FLIP_MARGIN
+from app.config import settings
 
 # IMPROVEMENT 6: anti-whipsaw cooling period after a flip.
 # After a bias flips, the market needs COOLING_MINUTES before another flip is
-# allowed, and during that window the score must clear by COOLING_MARGIN (25,
-# wider than the normal FLIP_MARGIN of 15) so a re-test of the old level does
+# allowed, and during that window the score must clear by COOLING_MARGIN (12,
+# wider than the normal FLIP_MARGIN of 8) so a re-test of the old level does
 # not immediately flip it back. The Tier-1 override still bypasses this
 # entirely - it is checked first in _should_flip() and returns immediately.
-COOLING_MINUTES = 30
-COOLING_MARGIN = 25
+# DAY TRADING: shorter cooling period (was 30/25)
+COOLING_MINUTES = settings.COOLING_MINUTES if hasattr(settings, 'COOLING_MINUTES') else 10
+COOLING_MARGIN = settings.COOLING_MARGIN if hasattr(settings, 'COOLING_MARGIN') else 12
+
+FLIP_MARGIN = settings.FLIP_MARGIN if hasattr(settings, 'FLIP_MARGIN') else 8.0
+FLIP_HOLD_MINUTES = settings.FLIP_HOLD_MINUTES if hasattr(settings, 'FLIP_HOLD_MINUTES') else 5
 
 # Last published bias per state key: the asset symbol ("GOLD" ...) or
 # "EQUITY:<region>" for the session-aware equity card, so a signal-free poll
@@ -481,21 +486,22 @@ def decay_weight(published_at: datetime | None, tier: str,
     """
     Exponential decay with a per-event-tier half-life (Task 5a).
 
-    Replaces the per-category half-life. Tier 1 ~6h, Tier 2 ~2h, Tier 3 ~1h.
+    Replaces the per-category half-life. Tier 1 ~30min, Tier 2 ~15min, Tier 3 ~6min (DAY TRADING).
     ``weight = 0.5 ** (age_hours / half_life)``.
-    Items older than TRADING_DAY_CUTOFF_HOURS get weight 0.
+    Items older than settings.trading_day_cutoff_hours get weight 0.
     """
-    from app.config import TIER_HALF_LIVES, TRADING_DAY_CUTOFF_HOURS
+    from app.config import TIER_HALF_LIVES, settings
 
     half_life = TIER_HALF_LIVES.get(tier, 2.0)
-    half_life = max(0.25, float(half_life))
+    half_life = max(0.1, float(half_life))
 
     if published_at is None:
         return 0.15
     hours = _age_hours(published_at, now)
     if hours < 0:
         return 1.0  # within clock skew: treat as brand new
-    if hours >= TRADING_DAY_CUTOFF_HOURS:
+    cutoff = getattr(settings, 'trading_day_cutoff_hours', 2.0)
+    if hours >= cutoff:
         return 0.0
     return max(0.0, min(1.0, 0.5 ** (hours / half_life)))
 

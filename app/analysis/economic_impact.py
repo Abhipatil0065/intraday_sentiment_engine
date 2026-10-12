@@ -8,10 +8,17 @@ bullish/bearish verdict is decided.
 Two honest modes - the engine NEVER invents a print:
 
   RELEASED  an ``actual`` value exists. Direction comes from the realised
-            surprise versus forecast (actual above forecast = "hot").
+             surprise versus forecast (actual above forecast = "hot").
   EXPECTED  no ``actual`` yet. Direction comes only from the published
-            consensus (forecast versus previous). This is labelled an
-            expectation, never an outcome.
+             consensus (forecast versus previous). This is labelled an
+             expectation, never an outcome.
+
+By default the PIPELINE uses RELEASED prints only
+(``calendar_include_upcoming = False``): an un-released print is a consensus
+expectation, not a realised move, so it does not reach the bullish/bearish
+verdict, the economic-calendar cards, or the market-prep drivers until the
+provider publishes the actual. The moment the same release reappears with an
+``actual`` it is resolved through the RELEASED branch and counted then.
 
 Every event carries a transmission chain explaining HOW it reaches the
 asset (e.g. "hot CPI -> higher real yields -> bearish gold").
@@ -644,7 +651,10 @@ def signals_for_events(events: Sequence[CalendarEvent],
     Calendar signals for everything inside the forward-looking horizon.
 
     Events older than two hours are excluded: that print is history, and the
-    news feed already covers it.
+    news feed already covers it. Un-released events are excluded by default
+    (``calendar_include_upcoming``): only a print whose ``actual`` has been
+    published can carry the verdict, so an expectation never moves the score
+    before the release exists.
 
     Delegates to :func:`resolve_calendar_signals`, which applies the Phase 3
     and Phase 6 stages after resolution.
@@ -903,6 +913,12 @@ def resolve_calendar_signals(events: Sequence[CalendarEvent],
 
     ``signals_for_events`` is kept as the pre-Phase-3 entry point and delegates
     here, so existing callers pick the new behaviour up automatically.
+
+    UN-RELEASED EVENTS ARE SKIPPED unless ``calendar_include_upcoming`` is set.
+    The pipeline therefore counts a print only once its ``actual`` exists, which
+    is also what makes the release appear in the cards: the provider's next
+    poll re-reports the same release (same ``event_key``) with the number
+    filled in, and it is resolved then through the RELEASED branch.
     """
     reference = now or datetime.now(timezone.utc)
     # horizon_hours may arrive as a non-int (a test double, a string, a
@@ -924,6 +940,13 @@ def resolve_calendar_signals(events: Sequence[CalendarEvent],
         if event.when_utc < reference - timedelta(hours=2):
             continue
         if event.when_utc > cutoff:
+            continue
+        # An un-released print has no actual, so it is a consensus expectation
+        # rather than a realised move: it must not enter the aggregation, the
+        # cards, or the prep drivers before the number exists. With the flag
+        # off it is skipped here and resolves as a RELEASED signal on the poll
+        # that carries the actual.
+        if event.actual is None and not settings.calendar_include_upcoming:
             continue
         signals.extend(signals_for_event(event))
 

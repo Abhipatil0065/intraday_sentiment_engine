@@ -79,4 +79,14 @@ def test_zero_window_disables_the_time_gate():
 
 
 def test_default_window_is_eighteen_hours():
-    assert float(settings.news_window_hours) == 18.0
+    """
+    The DECLARED default is 18h.
+
+    The effective value follows NEWS_WINDOW_HOURS, and the shipped .env tunes
+    it to 24h for live day trading, so asserting on ``settings`` would test
+    the deployment's env rather than the default. Everything else in this
+    file reads the effective value on purpose.
+    """
+    from app.config import Settings
+
+    assert Settings.model_fields["news_window_hours"].default == 18.0

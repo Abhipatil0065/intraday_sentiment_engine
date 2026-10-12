@@ -276,6 +276,14 @@ The engine uses two modes and **never invents a print**:
 | `RELEASED` | an `actual` value exists | the realised surprise vs forecast |
 | `EXPECTED` | not released yet | published consensus (forecast vs previous), labelled *(expected)* |
 
+Only `RELEASED` prints are counted by default
+(`CALENDAR_INCLUDE_UPCOMING=false`): an un-released print is an expectation,
+not a realised move, so it does not touch the verdict, the calendar cards or the
+prep-card drivers until the provider publishes the number. It then enters on
+the next poll as `RELEASED`, with its actual-vs-forecast surprise. Set
+`CALENDAR_INCLUDE_UPCOMING=true` to count expected prints again (they are
+damped by the awaiting-release rules past their scheduled time).
+
 A print that lands exactly on forecast is reported as no material surprise, and
 an unrecognised event is skipped entirely rather than force-fitted. Configure in
 `.env`:

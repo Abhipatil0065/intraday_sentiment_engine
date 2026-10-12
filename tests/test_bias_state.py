@@ -237,8 +237,9 @@ def test_changed_in_last_60_min_delta_is_reported():
 def test_delta_ignores_signals_older_than_the_window():
     fresh = [make(direction=Direction.BULLISH, title=f"b{i}", cluster_id=f"c{i}")
              for i in range(3)]
+    # 90 minutes old: within 2h cutoff but outside 60min delta window
     old = [make(direction=Direction.BULLISH,
-                published_at=NOW - timedelta(hours=6),
+                published_at=NOW - timedelta(minutes=90),
                 title=f"o{i}", cluster_id=f"o{i}") for i in range(3)]
     assert compute(fresh + old, Asset.GOLD, now=NOW).delta_60m == 0.0
     assert compute(fresh, Asset.GOLD, now=NOW).delta_60m != 0.0

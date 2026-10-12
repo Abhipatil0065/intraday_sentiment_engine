@@ -24,6 +24,7 @@ feedparser==6.0.11
 beautifulsoup4==4.12.3
 lxml==5.3.0
 trafilatura==1.12.0
+tvDatafeed==2.1.1
 
 # Optional: headless rendering for JS-only sites (e.g. Financial Juice).
 # After installing, also run:  playwright install chromium

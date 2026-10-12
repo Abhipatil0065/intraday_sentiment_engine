@@ -187,6 +187,114 @@ def session_relevance(session: SessionName, category: str) -> float:
 
 
 # ---------------------------------------------------------------------------
+# US Equity sub-sessions (pre-market, regular, after-hours) for day trading.
+# These sub-sessions only apply to the US equity session (EQUITY asset).
+# Pre-market:  04:00-09:30 NY (low liquidity, higher volatility on news)
+# Regular:     09:30-16:00 NY (highest liquidity, institutional volume)
+# After-hours: 16:00-20:00 NY (lower liquidity, earnings/guidance moves)
+# ---------------------------------------------------------------------------
+class EquitySubSession(str):
+    PRE_MARKET = "PRE_MARKET"      # 04:00-09:30
+    REGULAR = "REGULAR"            # 09:30-16:00
+    AFTER_HOURS = "AFTER_HOURS"    # 16:00-20:00
+    CLOSED = "CLOSED"              # 20:00-04:00 (overnight)
+
+# Multipliers for EQUITY asset by sub-session and category.
+# Pre-market: news has outsized impact due to thin liquidity
+# Regular: standard weights, highest absolute volume
+# After-hours: earnings/guidance dominate, macro less relevant
+EQUITY_SUB_SESSION_WEIGHT: dict[str, dict[str, float]] = {
+    "PRE_MARKET": {
+        "Equities": 1.50,           # Pre-market movers, gap plays
+        "Central Bank": 1.30,       # Overnight central bank news
+        "Interest Rates": 1.30,
+        "Inflation": 1.25,          # Overnight CPI/PCE
+        "Employment": 1.25,         # Overnight jobless claims
+        "Treasury Yields": 1.35,    # Overnight yield moves
+        "USD/DXY": 1.25,
+        "Earnings": 1.40,           # Pre-market earnings
+        "Guidance": 1.40,           # Pre-market guidance
+        "ETF Flows": 1.20,
+        "Geopolitics": 1.10,
+        "Risk Sentiment": 1.15,
+        "Banking/Financial Stress": 1.15,
+    },
+    "REGULAR": {
+        "Equities": 1.00,           # Baseline
+        "Central Bank": 1.40,       # Fed speakers, FOMC
+        "Interest Rates": 1.40,
+        "Inflation": 1.40,          # CPI/PCE during session
+        "Employment": 1.35,         # NFP, jobless claims
+        "Treasury Yields": 1.35,
+        "USD/DXY": 1.35,
+        "Earnings": 1.20,           # Intraday earnings
+        "Guidance": 1.20,
+        "ETF Flows": 1.20,
+        "Geopolitics": 1.00,
+        "Risk Sentiment": 1.00,
+        "Banking/Financial Stress": 1.20,
+    },
+    "AFTER_HOURS": {
+        "Equities": 1.30,           # After-hours movers
+        "Central Bank": 0.80,       # Less CB news after hours
+        "Interest Rates": 0.80,
+        "Inflation": 0.70,
+        "Employment": 0.70,
+        "Treasury Yields": 0.80,
+        "USD/DXY": 0.85,
+        "Earnings": 1.50,           # EARNINGS DOMINATE after hours
+        "Guidance": 1.50,           # Guidance updates
+        "ETF Flows": 0.70,
+        "Geopolitics": 0.90,
+        "Risk Sentiment": 1.00,
+        "Banking/Financial Stress": 0.90,
+    },
+    "CLOSED": {
+        "Equities": 0.50,
+        "Central Bank": 0.60,
+        "Interest Rates": 0.60,
+        "Inflation": 0.50,
+        "Employment": 0.50,
+        "Treasury Yields": 0.50,
+        "USD/DXY": 0.50,
+        "Earnings": 0.70,
+        "Guidance": 0.70,
+        "ETF Flows": 0.40,
+        "Geopolitics": 1.15,        # Overnight geopolitical risk
+        "Risk Sentiment": 1.10,
+        "Banking/Financial Stress": 0.70,
+    },
+}
+
+
+def equity_sub_session(now: datetime | None = None) -> EquitySubSession:
+    """Detect US equity sub-session based on NY time."""
+    from app.utils import timeutils as T
+    ref = (now or T.now_utc()).astimezone(T.market_tz())
+    hour = ref.hour
+    minute = ref.minute
+    total_minutes = hour * 60 + minute
+    
+    # Pre-market: 04:00 (240) - 09:30 (570)
+    if 240 <= total_minutes < 570:
+        return EquitySubSession.PRE_MARKET
+    # Regular: 09:30 (570) - 16:00 (960)
+    if 570 <= total_minutes < 960:
+        return EquitySubSession.REGULAR
+    # After-hours: 16:00 (960) - 20:00 (1200)
+    if 960 <= total_minutes < 1200:
+        return EquitySubSession.AFTER_HOURS
+    # Closed: 20:00 (1200) - 04:00 (240) next day
+    return EquitySubSession.CLOSED
+
+
+def equity_sub_session_multiplier(category: str, now: datetime | None = None) -> float:
+    """Get multiplier for equity asset based on US sub-session."""
+    sub = equity_sub_session(now)
+    return EQUITY_SUB_SESSION_WEIGHT.get(sub, {}).get(category, 1.0)
+
+
+# ---------------------------------------------------------------------------
 # Per-asset session profiles (Item 3).
 # ---------------------------------------------------------------------------
 # A session profile decides how much the ACTIVE SESSION's clock should move
@@ -254,12 +362,20 @@ def asset_session_multiplier(asset: str, session: SessionName,
     weekend discount applied. This is the ONLY place a weekend discount exists:
     it is a property of the instrument, applied after the session curve, and
     never a property of the news category.
+    
+    For EQUITY asset, applies US equity sub-session multipliers (pre-market,
+    regular, after-hours) for intraday precision.
     """
     from app.analysis.cue_rules import GOLD_SESSION_BOOST
     
     profile = _clamp_profile(_profile_for(asset))
     if profile == "flat":
         return 1.0
+    
+    # EQUITY asset: use US equity sub-session multipliers for intraday precision
+    if asset == "EQUITY":
+        return equity_sub_session_multiplier(category, now)
+    
     base = session_relevance(session, category)
     
     # Apply gold-specific session boosts for XAUUSD

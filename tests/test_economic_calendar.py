@@ -24,6 +24,7 @@ from app.analysis.economic_impact import (
     to_calendar_summary,
     to_float,
 )
+from app.config import settings
 from app.models.enums import (
     Asset,
     Direction,
@@ -229,14 +230,53 @@ def test_events_beyond_horizon_are_excluded():
     assert signals_for_events([far], horizon_hours=48) == []
 
 
-def test_summary_puts_released_before_expected():
+def test_summary_puts_released_before_expected(monkeypatch):
     released = _event(title="CPI y/y", forecast=3.0, previous=2.9, actual=3.6)
     expected = _event(title="FOMC Interest Rate Decision",
                       forecast=5.5, previous=4.75, actual=None)
-    rows = to_calendar_summary(signals_for_events([released, expected]),
+    # EXPECTED rows only exist when upcoming prints are counted; released
+    # prints are the default and always sort first.
+    monkeypatch.setattr(settings, "calendar_include_upcoming", True)
+    rows = to_calendar_summary(signals_for_events([expected, released]),
                                Asset.GOLD)
     assert rows
     assert rows[0]["mode"] == "RELEASED"
+
+
+# --------------------------------------------------------------------------
+# Un-released prints count only once the actual exists
+# --------------------------------------------------------------------------
+def test_an_unreleased_print_produces_no_signals():
+    """A consensus expectation must not move the verdict before release."""
+    expected = _event(title="Core CPI m/m", forecast=0.179, previous=0.1,
+                      actual=None)
+    assert signals_for_events([expected]) == []
+
+
+def test_the_same_print_counts_once_the_actual_arrives():
+    """
+    The provider's next poll re-reports the release with the actual filled in
+    (same event_key), and it is resolved as RELEASED then.
+    """
+    scheduled = _event(title="Core CPI m/m", forecast=0.179, previous=0.1)
+    released = _event(title="Core CPI m/m", forecast=0.179, previous=0.1,
+                      actual=0.3)
+    assert signals_for_events([scheduled]) == []
+    signals = signals_for_events([released])
+    assert signals
+    for sig in signals:
+        assert sig.mode == "RELEASED"
+        assert sig.event.event_key == scheduled.event_key
+
+
+def test_upcoming_prints_can_still_be_counted_on_request(monkeypatch):
+    """The flag restores the old behaviour for callers that want it."""
+    expected = _event(title="Core CPI m/m", forecast=0.179, previous=0.1)
+    assert signals_for_events([expected]) == []
+    monkeypatch.setattr(settings, "calendar_include_upcoming", True)
+    out = signals_for_events([expected])
+    assert out
+    assert all(s.mode == "EXPECTED" for s in out)
 
 
 def test_event_key_is_stable():

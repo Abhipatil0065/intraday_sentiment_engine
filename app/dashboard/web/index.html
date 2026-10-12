@@ -379,7 +379,7 @@
   <div class="status-strip" id="statusStrip">
     <span class="pill live" id="pLlm"><span class="dot"></span><span id="lLlm">LLM: LIVE</span></span>
     <span class="pill live" id="pPipe"><span class="dot"></span><span id="lPipe">Pipeline: RUNNING</span></span>
-    <span class="pill live" id="pDb"><span class="dot"></span><span id="lDb">DB: CONNECTED</span></span>
+    <span class="pill live" id="pDb"><span class="dot"></span><span id="lDb">Pipeline: OK</span></span>
     <span class="pill alert-pill" id="pAlert"><span class="dot"></span><span id="lAlert">⚠️ ALERT: LLM Engine Down - Fallback Active</span></span>
     <span class="ts" id="tsLastUpdated">Last Updated: n/a</span>
   </div>
@@ -409,12 +409,12 @@ let FEED={items:[],total:0,loaded:0,page:60,busy:false};
   let HEALTH={
     llmStatus:'LIVE',          // LIVE | STOPPED | IDLE
     pipelineStatus:'RUNNING',  // RUNNING | STOPPED
-    dbStatus:'CONNECTED',      // CONNECTED | DISCONNECTED
+    dbStatus:'OK',             // OK | STALE
     systemError:null,          // string | null
     lastUpdated:''
   };
   const LLMMAP={LIVE:'live',STOPPED:'stopped',IDLE:'idle'};
-  const STD_MAP={LIVE:'live',STOPPED:'stopped',RUNNING:'live',CONNECTED:'live',DISCONNECTED:'stopped'};
+  const STD_MAP={LIVE:'live',STOPPED:'stopped',RUNNING:'live',OK:'live',STALE:'stopped'};
   function pillClass(key,state){
     if(key==='llm') return LLMMAP[state]||'idle';
     return STD_MAP[state]||'idle';
@@ -974,14 +974,19 @@ function renderHeader(d){
   var llm = s.llm_enabled ? (s.llm_status || 'LIVE') : 'STOPPED';
 HEALTH.llmStatus = llm;
   HEALTH.pipelineStatus = st.running ? 'RUNNING' : 'STOPPED';
-  HEALTH.dbStatus = s.last_poll_ok ? 'CONNECTED' : 'DISCONNECTED';
+  HEALTH.dbStatus = s.last_poll_ok ? 'OK' : 'STALE';
   HEALTH.lastUpdated = st.last_updated || '';
-  /* Any red status => show the error pill with a specific message. */
-  var reds = [];
-  if(HEALTH.llmStatus==='STOPPED') reds.push('LLM Engine Down - Fallback Active');
-  if(HEALTH.newsFeedStatus==='STOPPED') reds.push('News Feed Stopped - No New Articles');
-  if(HEALTH.pipelineStatus==='STOPPED') reds.push('Pipeline Stopped - No Tick Running');
-  if(HEALTH.dbStatus==='DISCONNECTED') reds.push('Database Disconnected');
+   /* Any red status => show the error pill with a specific message.
+      NOTE: dbStatus is only ever 'OK' or 'STALE' (set above) - the label and
+      the alert branch below must test those exact values. An earlier version
+      tested 'CONNECTED'/'DISCONNECTED', which are never assigned, so the pill
+      always read "NO TICK" even on a healthy engine and the stale alert could
+      never fire. */
+   var reds = [];
+   if(HEALTH.llmStatus==='STOPPED') reds.push('LLM Engine Down - Fallback Active');
+   if(HEALTH.newsFeedStatus==='STOPPED') reds.push('News Feed Stopped - No New Articles');
+   if(HEALTH.pipelineStatus==='STOPPED') reds.push('Pipeline Stopped - No Tick Running');
+   if(HEALTH.dbStatus==='STALE') reds.push('Pipeline Stale - No Successful Tick');
   HEALTH.systemError = reds.length ? reds[0] : null;
 
   var setPill = function(id, state){
@@ -1005,7 +1010,7 @@ HEALTH.llmStatus = llm;
   var _lSent=document.getElementById('lSent'); if(_lSent) _lSent.textContent='Sentiment: '+HEALTH.globalSentiment+' | Session: '+HEALTH.activeSession;
   var _lNews=document.getElementById('lNews'); if(_lNews) _lNews.textContent='News Feed: '+HEALTH.newsFeedStatus;
   var _lPipe=document.getElementById('lPipe'); if(_lPipe) _lPipe.textContent='Pipeline: '+HEALTH.pipelineStatus;
-  var _lDb=document.getElementById('lDb'); if(_lDb) _lDb.textContent='DB: '+HEALTH.dbStatus;
+   var _lDb=document.getElementById('lDb'); if(_lDb) _lDb.textContent='Pipeline: '+(HEALTH.dbStatus==='OK'?'OK':'NO TICK');
   var _ts=document.getElementById('tsLastUpdated'); if(_ts) _ts.textContent='Last Updated: '+(HEALTH.lastUpdated||'n/a');
 
   var alertPill=document.getElementById('pAlert');

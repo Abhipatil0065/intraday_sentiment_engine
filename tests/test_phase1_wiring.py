@@ -41,13 +41,17 @@ def _weight_of(signal, asset=Asset.GOLD) -> float:
 # (a) Event tier decay: TIER_1 decays SLOWER than TIER_3
 # --------------------------------------------------------------------------
 def test_tier1_decays_slower_than_tier3():
-    """Task 5a: TIER_1 ~6h half-life vs TIER_3 ~1h half-life."""
+    """Task 5a: TIER_1 half-life 0.5h vs TIER_3 0.1h - Tier 1 decays slower.
+
+    The fixture age is 45 minutes: old relative to the day-trading half-lives,
+    yet inside BOTH the 2h declared cutoff and the 8h cutoff the shipped .env
+    uses, so the comparison never depends on the deployment's env.
+    """
     from app.config import TIER_HALF_LIVES
 
     assert TIER_HALF_LIVES["TIER_1"] > TIER_HALF_LIVES["TIER_3"]
 
-    old = NOW - timedelta(hours=10)
-    # Need to import decay_weight and pass tier keys
+    old = NOW - timedelta(minutes=45)
     from app.analysis.sentiment_engine import decay_weight
     tier1 = decay_weight(old, "TIER_1", NOW)
     tier3 = decay_weight(old, "TIER_3", NOW)
@@ -66,20 +70,25 @@ def test_category_survives_the_factory():
 
 
 def test_old_tier1_outweighs_an_old_tier3_headline():
-    """End-to-end: same age and everything else, long-lived tier wins."""
-    from app.analysis.sentiment_engine import decay_weight
+    """
+    End-to-end: same age and everything else, long-lived tier wins.
+
+    45 minutes old - inside every age cutoff, so the only difference between
+    the two signals is the tier their CATEGORY routes to (ETF flow data ->
+    TIER_1, an unrated story -> TIER_3). LOW importance is what routes to
+    TIER_3; MEDIUM would route to TIER_2, which is not what this asserts.
+    """
     common = dict(
         asset=Asset.BITCOIN, direction=Direction.BEARISH,
         strength=ImpactStrength.HIGH, relevance=0.88, persistence=0.95,
-        source_quality="TIER_2_MAJOR", published_at=NOW - timedelta(hours=10),
+        source_quality="TIER_2_MAJOR", published_at=NOW - timedelta(minutes=45),
         event_key="evt-x", title="Crypto regulator finalises custody rules",
     )
     # TIER_1 signal (ETF flow data)
     tier1 = build_signal(category=NewsCategory.BITCOIN_ETF_FLOWS, **common)
-    # TIER_3 signal (analyst opinion)
-    tier3 = build_signal(category=NewsCategory.CRYPTO_REGULATION, **common)
-    # Manually set importance to MEDIUM to avoid TIER_2, and make sure not ACTUAL
-    tier3.importance = EconomicImportance.MEDIUM
+    # TIER_3 signal (unrated commentary)
+    tier3 = build_signal(category=NewsCategory.CRYPTO_REGULATION,
+                         importance=EconomicImportance.LOW, **common)
     tier3.report_kind = ReportKind.GENERAL
 
     assert _weight_of(tier1, Asset.BITCOIN) > _weight_of(tier3, Asset.BITCOIN)

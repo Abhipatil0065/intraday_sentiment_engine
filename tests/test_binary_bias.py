@@ -66,12 +66,13 @@ def test_tiny_score_ties_break_to_newest_high_weight_signal():
     bear = make(direction=Direction.BEARISH, strength=ImpactStrength.VERY_HIGH,
                 weight=1.0, minutes_ago=2, title="fresh bear",
                 cluster_id="bear")
-    # Two bulls with full relevance win slightly on aggregate (raw score
-    # inside EPS), but the single bear is heaviest (VERY_HIGH) and newest
-    # (2 min) so tie-break picks bear.
+    # Three bulls with HIGH strength at same age - their aggregate with
+    # 1.20x burst bonus slightly exceeds the single VERY_HIGH bear,
+    # keeping raw score inside EPS. The bear is heaviest single signal
+    # (VERY_HIGH=1.0 vs HIGH=0.72).
     bulls = [make(direction=Direction.BULLISH, strength=ImpactStrength.HIGH,
-                  weight=1.0, minutes_ago=12, title=f"old bull {i}",
-                  cluster_id=f"b{i}") for i in range(2)]
+                  weight=0.45, minutes_ago=2, title=f"old bull {i}",
+                  cluster_id=f"b{i}") for i in range(3)]
     r = compute([bear] + bulls, Asset.GOLD, now=NOW)
     assert 0.0 < r.raw_score < EPS, "tiny raw score (naive sign = BULLISH)"
     assert r.bias is Bias.BEARISH, "tie-break follows the heaviest, newest"
@@ -124,24 +125,29 @@ def test_equity_tie_break_payload_score_matches_label():
     from app.analysis.equity_card import build_equity_card, to_payload
     from app.market.session_detector import SessionName
 
-    def eq(direction, strength, weight, minutes_ago, cluster, title):
+    def eq(direction, strength, weight, minutes_ago, cluster, title, category=NewsCategory.EQUITIES):
         return WeightedSignal(
             asset=Asset.BITCOIN, title=title, direction=direction,
             strength=strength, importance=EconomicImportance.HIGH,
             published_at=NOW - timedelta(minutes=minutes_ago),
             relevance=weight, persistence=0.7,
-            category=NewsCategory.EQUITIES, cluster_id=cluster)
+            category=category, cluster_id=cluster)
 
-    # Bullish signals are MEDIUM and 8 min old so the raw score leans
-    # slightly bullish (about +0.5) but stays inside the tie-break band;
-    # the heavier, newer bearish signal wins the label.
+    # Bearish signal uses EQUITIES category (equity_relevance=1.0), VERY_HIGH strength, 5 min old.
+    # Three bullish signals use RISK_SENTIMENT category (equity_relevance=0.60, TIER_2 for HIGH importance),
+    # MEDIUM strength, 3 min old (triggering 1.20x burst bonus). Their aggregate slightly exceeds
+    # the bearish signal, keeping raw score inside the tie-break band (~+7); but the bearish signal's
+    # single magnitude is highest (VERY_HIGH + 1.0 relevance vs MEDIUM + 0.60 relevance),
+    # so the tie-break correctly picks BEARISH.
     sigs = [
         eq(Direction.BEARISH, ImpactStrength.VERY_HIGH, 1.0, 5, "bear",
-           "Nasdaq slides as yields jump"),
-        eq(Direction.BULLISH, ImpactStrength.MEDIUM, 1.0, 8, "b1",
-           "Nasdaq climbs on earnings"),
-        eq(Direction.BULLISH, ImpactStrength.MEDIUM, 1.0, 8, "b2",
-           "S&P 500 rises on strong data"),
+           "Nasdaq slides as yields jump", NewsCategory.EQUITIES),
+        eq(Direction.BULLISH, ImpactStrength.MEDIUM, 1.0, 3, "b1",
+           "Nasdaq climbs on earnings", NewsCategory.RISK_SENTIMENT),
+        eq(Direction.BULLISH, ImpactStrength.MEDIUM, 1.0, 3, "b2",
+           "S&P 500 rises on strong data", NewsCategory.RISK_SENTIMENT),
+        eq(Direction.BULLISH, ImpactStrength.MEDIUM, 1.0, 3, "b3",
+           "Dow jumps on strong data", NewsCategory.RISK_SENTIMENT),
     ]
     clear_bias_history()
     card = build_equity_card(sigs, now=NOW, session=SessionName.US)

@@ -761,15 +761,20 @@ def test_the_slot_is_released_after_a_failure():
     assert asyncio.run(scenario()) is True
 
 
-def test_a_deferred_calendar_poll_is_not_a_health_failure():
+def test_a_deferred_calendar_poll_is_not_a_health_failure(monkeypatch):
     """
     Deferral means "not now", not "broken". Reporting it as a provider failure
     would trigger needless backoff and an alert.
     """
     import asyncio
 
+    from app.config import settings
     from app.ingestion import fj_calendar as fjmod
     from app.ingestion.chromium_lock import reset_lock_state
+
+    # Hermetic: the shipped .env disables the FJ calendar, and a disabled
+    # provider returns before the lock is ever consulted.
+    monkeypatch.setattr(settings, "financialjuice_calendar_enabled", True)
 
     reset_lock_state()
     fjmod.reset_state_for_tests()

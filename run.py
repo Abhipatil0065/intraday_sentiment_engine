@@ -4,6 +4,9 @@ Unified entry point.
     python run.py --api           start the FastAPI service + background pipeline
     python run.py --streamlit     start the Streamlit dashboard
     python run.py --once          run one pipeline pass and print the console view
+    python run.py --morning-brief overnight catch-up: LLM-judge every headline
+                                  published while the laptop was off (HIGH /
+                                  MEDIUM / LOW impact) and print the brief
     python run.py --demo          offline demo (synthetic news, no API key needed)
 """
 
@@ -174,14 +177,58 @@ def check_llm() -> None:
     raise SystemExit(1)
 
 
+def run_morning_brief(*, force: bool = False, dry_run: bool = False,
+                      rejudge_all: bool = False) -> None:
+    """
+    Overnight catch-up: resolve the window the laptop was off, send every
+    headline in it through the LLM for a HIGH / MEDIUM / LOW impact verdict,
+    rebuild sentiment, and print the morning brief.
+
+    This is what the Windows logon task runs, so the pass also happens when
+    the engine server is started by hand later in the morning (the brief is
+    idempotent and cross-process locked, so it only ever pays once).
+
+    For window overrides (--since / --until) use the module CLI directly:
+    python -m app.services.overnight --help
+    """
+    import asyncio
+
+    from app.database import init_db
+    from app.services import overnight
+
+    setup_logging()
+    init_db()
+
+    report = asyncio.run(overnight.run_boot_catchup(
+        force=force, dry_run=dry_run, rejudge_all=rejudge_all))
+    print()
+    print(overnight.render_text(report))
+    if report.get("report_path"):
+        print(f"report: {report['report_path']}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--api", action="store_true", help="run the FastAPI service")
-    parser.add_argument("--streamlit", action="store_true", help="run the dashboard")
+    parser.add_argument("--streamlit", action="store_true", help="run the Streamlit dashboard")
     parser.add_argument("--once", action="store_true",
                         help="run one pipeline pass against live sources")
     parser.add_argument("--demo", action="store_true",
                         help="offline demo with synthetic news")
+    parser.add_argument("--morning-brief", action="store_true",
+                        help="overnight catch-up: LLM-judge every headline "
+                             "published while the laptop was off, then print "
+                             "the morning brief")
+    parser.add_argument("--force", action="store_true",
+                        help="with --morning-brief: run even if the window "
+                             "was already covered")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="with --morning-brief: report the window without "
+                             "contacting the LLM or writing rows")
+    parser.add_argument("--all", dest="morning_rejudge_all",
+                        action="store_true",
+                        help="with --morning-brief: re-judge even headlines "
+                             "the LLM already classified")
     parser.add_argument("--check-llm", action="store_true",
                         help="verify the configured LLM key/provider and exit")
     parser.add_argument("--host", default=None)
@@ -196,6 +243,9 @@ def main() -> None:
 
     if args.check_llm:
         check_llm()
+    elif args.morning_brief:
+        run_morning_brief(force=args.force, dry_run=args.dry_run,
+                          rejudge_all=args.morning_rejudge_all)
     elif args.streamlit:
         run_streamlit(settings.dashboard_port)
     elif args.demo:

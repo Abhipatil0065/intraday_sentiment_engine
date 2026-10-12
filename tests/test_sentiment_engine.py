@@ -146,8 +146,9 @@ def test_balanced_conflict_is_low_confidence():
 def test_recency_dominance_fresher_news_wins():
     fresh = [make(direction=Direction.BULLISH, title="fresh bullish",
                   minutes_ago=2)]
+    # 30 minutes old - well within 2h cutoff but significantly decayed
     stale = [make(direction=Direction.BEARISH, title="stale bearish",
-                  minutes_ago=600)]
+                  minutes_ago=30)]
     r_bull = compute(fresh, Asset.GOLD, now=NOW)
     r_bear = compute(fresh + stale, Asset.GOLD, now=NOW)
     # The stale bearish item must not overturn a very fresh bullish one.
@@ -156,12 +157,13 @@ def test_recency_dominance_fresher_news_wins():
 
 def test_tier_half_lives_differ():
     """Task 5a: TIER_1 decays slower than TIER_3."""
+    # Use 30 minutes - within 2h cutoff, shows tier difference
     # TIER_1: VERY_HIGH importance (e.g., hot CPI with VERY_HIGH)
-    cpi = [make(direction=Direction.BEARISH, title="hot cpi", minutes_ago=600,
+    cpi = [make(direction=Direction.BEARISH, title="hot cpi", minutes_ago=30,
                 importance=EconomicImportance.VERY_HIGH, cluster_id="c1")]
     # TIER_3: analyst opinion
     crypto = [make(direction=Direction.BEARISH, title="analyst: crypto may rally",
-                   minutes_ago=600, importance=EconomicImportance.MEDIUM,
+                   minutes_ago=30, importance=EconomicImportance.MEDIUM,
                    category=NewsCategory.CRYPTO_REGULATION, cluster_id="c1")]
     w_cpi = compute(cpi, Asset.GOLD, now=NOW).drivers[0].weight
     w_crypto = compute(crypto, Asset.GOLD, now=NOW).drivers[0].weight
@@ -171,9 +173,9 @@ def test_tier_half_lives_differ():
 def test_duplicate_event_coverage_is_damped():
     """One cluster is one vote: corroboration lifts it, never multiplies it."""
     solo = [make(direction=Direction.BULLISH, title="one story",
-                 cluster_id="a")]
+                 cluster_id="a", minutes_ago=5, relevance=1.0, importance=EconomicImportance.VERY_HIGH)]
     corroborated = [make(direction=Direction.BULLISH, title="one story",
-                         cluster_id="a", corroboration=1.30)]
+                         cluster_id="a", corroboration=1.30, minutes_ago=5, relevance=1.0, importance=EconomicImportance.VERY_HIGH)]
     s1 = compute(solo, Asset.GOLD, now=NOW).score
     s2 = compute(corroborated, Asset.GOLD, now=NOW).score
     assert s1 > 0 and s2 > 0
@@ -183,7 +185,8 @@ def test_assets_are_scored_independently():
     """One asset's flow must never leak into another's."""
     signals = [
         make(asset=Asset.BITCOIN, direction=Direction.BULLISH, title="btc etf"),
-        make(asset=Asset.GOLD, direction=Direction.BEARISH, title="hawkish fed"),
+        make(asset=Asset.GOLD, direction=Direction.BEARISH, title="hawkish fed",
+             relevance=1.0, importance=EconomicImportance.VERY_HIGH),
     ]
     assert compute(signals, Asset.GOLD, now=NOW).score < 0
     assert compute(signals, Asset.BITCOIN, now=NOW).score > 0
@@ -213,43 +216,52 @@ def test_tier3_10_hours_near_zero_weight():
 
 
 def test_tier1_5_hours_keeps_half():
-    """A 5-hour-old Tier 1 item keeps more than half of its fresh weight (half-life ~6h)."""
+    """A 30-minute-old Tier 1 item keeps at least half of its fresh weight (half-life ~30min)."""
     from app.analysis.sentiment_engine import decay_weight
     fresh = decay_weight(NOW, "TIER_1", NOW)
-    old = NOW - timedelta(hours=5)
+    old = NOW - timedelta(minutes=30)
     w = decay_weight(old, "TIER_1", NOW)
-    # 0.5 ** (5/6) = 0.5 ** 0.833 = 0.56
-    assert w > 0.5 * fresh, f"5h old TIER_1 should keep >50% fresh weight, got {w}/{fresh}"
+    # 0.5 ** (0.5/0.5) = 0.5 ** 1 = 0.5
+    assert w >= 0.5 * fresh, f"30min old TIER_1 should keep >=50% fresh weight, got {w}/{fresh}"
 
 
-def test_cutoff_older_than_16h_weight_zero():
-    """An item older than TRADING_DAY_CUTOFF_HOURS (16h) has weight exactly 0."""
+def test_item_older_than_the_cutoff_has_weight_zero(monkeypatch):
+    """An item older than the cutoff has weight exactly 0.
+
+    The cutoff is pinned to the declared default (2h): the shipped .env raises
+    it to 8h for live day trading, so an unpinned test would pass or fail on
+    the deployment's env rather than on the rule "past the cutoff -> 0".
+    """
     from app.analysis.sentiment_engine import decay_weight
-    old = NOW - timedelta(hours=17)
-    w = decay_weight(old, "TIER_1", NOW)
-    assert w == 0.0, f"Item older than cutoff should have weight 0, got {w}"
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "trading_day_cutoff_hours", 2.0,
+                        raising=False)
+    old = NOW - timedelta(hours=3)
+    assert decay_weight(old, "TIER_1", NOW) == 0.0
 
 
 def test_decay_applied_once_weight_ratio():
     """Decay is applied exactly once: TIER_1 vs TIER_3 weight ratio matches half-life ratio."""
     from app.analysis.sentiment_engine import decay_weight
-    # At same age, the ratio of weights should equal the ratio of 0.5**(age/half_life)
-    age = timedelta(hours=2)
+    # Use 30 minutes - within 2h cutoff, shows tier difference
+    # TIER_1 half-life = 0.5h, TIER_3 half-life = 0.1h
+    age = timedelta(minutes=30)
     fresh = NOW
     t1_fresh = decay_weight(fresh, "TIER_1", NOW)
     t3_fresh = decay_weight(fresh, "TIER_3", NOW)
     t1_old = decay_weight(NOW - age, "TIER_1", NOW)
     t3_old = decay_weight(NOW - age, "TIER_3", NOW)
 
-    # The decay factor for each tier at 2 hours:
-    # TIER_1: 0.5 ** (2/6) = 0.5 ** 0.333 = 0.79
-    # TIER_3: 0.5 ** (2/1) = 0.5 ** 2 = 0.25
-    expected_t1 = 0.5 ** (2 / 6.0)
-    expected_t3 = 0.5 ** (2 / 1.0)
+    # The decay factor for each tier at 30 minutes:
+    # TIER_1: 0.5 ** (0.5/0.5) = 0.5 ** 1 = 0.5
+    # TIER_3: 0.5 ** (0.5/0.1) = 0.5 ** 5 = 0.03125
+    expected_t1 = 0.5 ** (0.5 / 0.5)
+    expected_t3 = 0.5 ** (0.5 / 0.1)
 
     assert t1_old == pytest.approx(t1_fresh * expected_t1, rel=1e-3)
     assert t3_old == pytest.approx(t3_fresh * expected_t3, rel=1e-3)
-    # Ratio of decayed weights at 2h should match ratio of decay factors
+    # Ratio of decayed weights at 30min should match ratio of decay factors
     actual_ratio = t1_old / t3_old
     expected_ratio = expected_t1 / expected_t3
     assert actual_ratio == pytest.approx(expected_ratio, rel=1e-3)
@@ -264,21 +276,21 @@ def test_equity_card_respects_tier_decay():
     tier1 = WeightedSignal(
         asset=Asset.BITCOIN, title="Fed signals rate cut after jobs data", direction=Direction.BULLISH,
         strength=ImpactStrength.HIGH, importance=EconomicImportance.VERY_HIGH,
-        published_at=NOW - timedelta(minutes=30), relevance=0.9, persistence=0.7,
+        published_at=NOW - timedelta(minutes=5), relevance=0.9, persistence=0.7,
         category=NewsCategory.EQUITIES, cluster_id="t1", report_kind=ReportKind.ACTUAL
     )
-    # TIER_3 signal (5h old) - title matches US equity keywords ("fed")
+    # TIER_3 signal (30 min old) - title matches US equity keywords ("fed")
     tier3 = WeightedSignal(
         asset=Asset.BITCOIN, title="analyst: fed may cut rates soon", direction=Direction.BULLISH,
         strength=ImpactStrength.HIGH, importance=EconomicImportance.MEDIUM,
-        published_at=NOW - timedelta(hours=5), relevance=0.9, persistence=0.7,
+        published_at=NOW - timedelta(minutes=30), relevance=0.9, persistence=0.7,
         category=NewsCategory.EQUITIES, cluster_id="t3", report_kind=ReportKind.GENERAL
     )
 
     card1 = build_equity_card([tier1], now=NOW, session=SessionName.US)
     card3 = build_equity_card([tier3], now=NOW, session=SessionName.US)
 
-    # Fresh TIER_1 should have significantly higher weight than 5h old TIER_3
+    # Fresh TIER_1 should have significantly higher weight than 30min old TIER_3
     # (score is normalized to 100 for single-signal cases, so check weight)
     assert card1.drivers[0]["weight"] > card3.drivers[0]["weight"] * 5
 
@@ -523,14 +535,14 @@ def test_compute_returns_damped_score():
         WeightedSignal(
             asset=Asset.GOLD, title="Bullish gold news",
             direction=Direction.BULLISH, strength=ImpactStrength.HIGH,
-            importance=EconomicImportance.HIGH, relevance=0.8, persistence=0.7,
-            category=NewsCategory.CENTRAL_BANK, published_at=NOW - timedelta(minutes=10),
+            importance=EconomicImportance.VERY_HIGH, relevance=1.0, persistence=0.7,
+            category=NewsCategory.CENTRAL_BANK, published_at=NOW - timedelta(minutes=5),
         ),
         WeightedSignal(
             asset=Asset.GOLD, title="More bullish gold news",
-            direction=Direction.BULLISH, strength=ImpactStrength.MEDIUM,
-            importance=EconomicImportance.MEDIUM, relevance=0.6, persistence=0.5,
-            category=NewsCategory.INFLATION, published_at=NOW - timedelta(minutes=20),
+            direction=Direction.BULLISH, strength=ImpactStrength.HIGH,
+            importance=EconomicImportance.HIGH, relevance=0.9, persistence=0.7,
+            category=NewsCategory.INFLATION, published_at=NOW - timedelta(minutes=10),
         ),
     ]
     
