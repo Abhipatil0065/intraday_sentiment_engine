@@ -78,6 +78,9 @@ _running = False
 _last_regime = None  # RegimeAssessment from the most recent recompute
 # Economic-calendar signals from the most recent fetch, shared with the API.
 _calendar_signals: list[CalendarSignal] = []
+
+# Down-weight news that duplicates a calendar release.
+CALENDAR_NEWS_DUP_FACTOR = 0.35
 # Session-aware global equity card from the most recent recompute (NOW-only).
 _last_equity_card: dict | None = None
 
@@ -737,6 +740,71 @@ def _suppress_previews(signals: list[WeightedSignal]) -> list[WeightedSignal]:
     return signals
 
 
+def _downweight_news_duplicating_calendar(signals: list[WeightedSignal]) -> list[WeightedSignal]:
+    """
+    Down-weight news signals that duplicate a calendar release.
+
+    Calendar signals have a non-empty event_key and published_at <= now.
+    For each other signal s with empty event_key, same asset, same direction
+    (BULLISH or BEARISH only), same indicator family (and != "unknown"),
+    and published within 60 minutes of the calendar signal:
+    apply s.relevance *= CALENDAR_NEWS_DUP_FACTOR (once per signal, even
+    if several calendar signals match).
+    """
+    now = datetime.now(timezone.utc)
+    from app.analysis.release_surprise import indicator_family
+
+    # Collect calendar signals: non-empty event_key, released (published_at <= now)
+    calendar_signals = [
+        s for s in signals
+        if s.event_key and s.published_at and s.published_at <= now
+    ]
+
+    if not calendar_signals:
+        return signals
+
+    # Group calendar signals by (asset, family, time window)
+    # For each calendar signal, find matching news signals
+    downweighted: set[int] = set()
+
+    for cal in calendar_signals:
+        cal_family = indicator_family(cal.title)
+        if cal_family == "unknown":
+            continue
+
+        cal_asset = cal.asset
+        cal_direction = cal.direction
+        cal_time = cal.published_at
+
+        for i, s in enumerate(signals):
+            if i in downweighted:
+                continue
+            # Skip calendar signals themselves
+            if s.event_key:
+                continue
+            # Same asset
+            if s.asset != cal_asset:
+                continue
+            # Same direction (only BULLISH or BEARISH)
+            if s.direction not in (Direction.BULLISH, Direction.BEARISH):
+                continue
+            if s.direction != cal_direction:
+                continue
+            # Same indicator family
+            s_family = indicator_family(s.title)
+            if s_family == "unknown" or s_family != cal_family:
+                continue
+            # Within 60 minutes
+            if s.published_at is None:
+                continue
+            delta = abs(s.published_at - cal_time)
+            if delta.total_seconds() <= 3600:  # 60 minutes
+                s.relevance *= CALENDAR_NEWS_DUP_FACTOR
+                downweighted.add(i)
+
+    return signals
+
+
 def calendar_summary(asset: Asset, limit: int = 8) -> list[dict]:
     """Dashboard rows for one asset's economic calendar."""
     return to_calendar_summary(_calendar_signals, asset, limit=limit)
@@ -907,6 +975,9 @@ def _recompute_sentiment(session, stats: IngestStats):
 
     # Task 5b: suppress preview/forecast headlines when actual release arrives
     signals = _suppress_previews(signals)
+
+    # Down-weight news that duplicates a calendar release
+    signals = _downweight_news_duplicating_calendar(signals)
 
     # Near-duplicate clustering at scoring time (item 1 fix)
     # Collapse near-identical headlines within a 30-minute window across sources
