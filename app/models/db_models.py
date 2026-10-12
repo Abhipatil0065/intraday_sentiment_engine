@@ -124,6 +124,7 @@ class AssetImpact(Base):
     reason: Mapped[str] = mapped_column(Text, default="")
     transmission: Mapped[str] = mapped_column(Text, default="")
     metal_character: Mapped[str | None] = mapped_column(String(32))  # silver dual-demand
+    speaker_tier: Mapped[float] = mapped_column(Float, default=1.0)
 
     recency_weight: Mapped[float] = mapped_column(Float, default=0.0)
     importance_weight: Mapped[float] = mapped_column(Float, default=0.0)

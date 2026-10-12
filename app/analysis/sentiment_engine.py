@@ -408,6 +408,8 @@ class WeightedSignal:
     # Section 7: silver's dual nature. PRECIOUS/INDUSTRIAL/BOTH/null, carried
     # through so the weight path can reward a characterised silver story.
     metal_character: str | None = None
+    # Central bank speaker tier multiplier.
+    speaker_tier: float = 1.0
 
     # filled by compute()
     recency: float = 0.0
@@ -606,6 +608,21 @@ def _signal_weight(s: WeightedSignal, now: datetime | None) -> float:
     if s.category is NewsCategory.BITCOIN_ETF_FLOWS:
         qual = 1.0
     sess = max(0.5, min(1.5, s.session_multiplier))
+    # BTC-specific session multiplier (24/7 volume awareness)
+    if s.asset is Asset.BITCOIN and s.published_at is not None:
+        hour_utc = _ensure_aware(s.published_at).hour
+        # Asian session (00-08 UTC): lower vol, fade moves
+        if 0 <= hour_utc < 8:
+            sess *= 0.85
+        # London open (08-12): high vol, respect moves
+        elif 8 <= hour_utc < 12:
+            sess *= 1.15
+        # NY open (13-21): highest vol, strongest signals
+        elif 13 <= hour_utc < 21:
+            sess *= 1.25
+        # NY close/Asian pre-open (21-24): fading vol
+        else:
+            sess *= 0.95
     corr = max(1.0, float(s.corroboration or 1.0))
     surprise = max(0.0, min(MAX_SURPRISE_WEIGHT, float(s.surprise_weight or 0.0)))
 
@@ -663,7 +680,7 @@ def _signal_weight(s: WeightedSignal, now: datetime | None) -> float:
         if max_m > 0:
             asset_sensitivity = min(1.0, max(0.3, max_m))
 
-    return decay * rel * per * qual * sess * corr * surprise * tier * metal_mult * earnings_mult * asset_sensitivity
+    return decay * rel * per * qual * sess * corr * surprise * tier * metal_mult * earnings_mult * asset_sensitivity * s.speaker_tier
 
 
 def _mode_for(signals: Sequence[WeightedSignal]) -> str:

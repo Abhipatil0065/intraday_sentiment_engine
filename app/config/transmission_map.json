@@ -44,16 +44,16 @@
     "XAUUSD": [1, 0.85], "XAGUSD": [1, 0.80], "BTCUSD": [1, 0.82], "EQUITY": [-1, 0.80]
   },
   "GEOPOLITICAL_RISK": {
-    "XAUUSD": [1, 1.05], "XAGUSD": [1, 0.70], "BTCUSD": [-1, 0.35], "EQUITY": [-1, 0.30]
+    "XAUUSD": [1, 1.20], "XAGUSD": [1, 0.80], "BTCUSD": [-1, 0.35], "EQUITY": [-1, 0.30]
   },
   "GEOPOLITICAL_DEESCALATION": {
-    "XAUUSD": [-1, 0.70], "XAGUSD": [-1, 0.50], "BTCUSD": [1, 0.25], "EQUITY": [1, 0.30]
+    "XAUUSD": [-1, 0.80], "XAGUSD": [-1, 0.55], "BTCUSD": [1, 0.25], "EQUITY": [1, 0.30]
   },
   "BANKING_STRESS": {
     "XAUUSD": [1, 1.15], "XAGUSD": [1, 0.60], "BTCUSD": [0, 0.90], "EQUITY": [-1, 0.75]
   },
   "RISK_ON": {
-    "XAUUSD": [-1, 0.45], "XAGUSD": [0, 0.55], "BTCUSD": [1, 1.00], "EQUITY": [1, 0.90]
+    "XAUUSD": [-1, 0.30], "XAGUSD": [0, 0.55], "BTCUSD": [1, 1.00], "EQUITY": [1, 0.90]
   },
   "RISK_OFF": {
     "XAUUSD": [1, 0.65], "XAGUSD": [0, 0.35], "BTCUSD": [-1, 1.05], "EQUITY": [-1, 0.90]
@@ -150,5 +150,90 @@
   },
   "GENERAL_MACRO": {
     "XAUUSD": [0, 0.30], "XAGUSD": [0, 0.30], "BTCUSD": [0, 0.30]
+  },
+  "BTC_FUNDING_RATE_SPIKE": {
+    "XAUUSD": [0, 0.05], "XAGUSD": [0, 0.05], "BTCUSD": [-1, 1.00], "EQUITY": [0, 0.05]
+  },
+  "BTC_FUNDING_RATE_RESET": {
+    "XAUUSD": [0, 0.05], "XAGUSD": [0, 0.05], "BTCUSD": [1, 0.80], "EQUITY": [0, 0.05]
+  },
+  "BTC_OPEN_INTEREST_SURGE": {
+    "XAUUSD": [0, 0.05], "XAGUSD": [0, 0.05], "BTCUSD": [1, 0.70], "EQUITY": [0, 0.05]
+  },
+  "BTC_OPEN_INTEREST_DROP": {
+    "XAUUSD": [0, 0.05], "XAGUSD": [0, 0.05], "BTCUSD": [-1, 0.70], "EQUITY": [0, 0.05]
+  },
+  "BTC_LONG_LIQUIDATION": {
+    "XAUUSD": [0, 0.05], "XAGUSD": [0, 0.05], "BTCUSD": [-1, 1.10], "EQUITY": [0, 0.05]
+  },
+  "BTC_SHORT_SQUEEZE": {
+    "XAUUSD": [0, 0.05], "XAGUSD": [0, 0.05], "BTCUSD": [1, 1.00], "EQUITY": [0, 0.05]
+  },
+  "BTC_WHALE_ALERT": {
+    "XAUUSD": [0, 0.05], "XAGUSD": [0, 0.05], "BTCUSD": [0, 0.60], "EQUITY": [0, 0.05]
+  },
+  "BTC_EXCHANGE_INFLOW": {
+    "XAUUSD": [0, 0.05], "XAGUSD": [0, 0.05], "BTCUSD": [-1, 0.85], "EQUITY": [0, 0.05]
+  },
+  "BTC_EXCHANGE_OUTFLOW": {
+    "XAUUSD": [0, 0.05], "XAGUSD": [0, 0.05], "BTCUSD": [1, 0.85], "EQUITY": [0, 0.05]
+  },
+  "BTC_STABLECOIN_MINT": {
+    "XAUUSD": [0, 0.05], "XAGUSD": [0, 0.05], "BTCUSD": [1, 0.75], "EQUITY": [0, 0.05]
+  },
+  "BTC_STABLECOIN_REDEEM": {
+    "XAUUSD": [0, 0.05], "XAGUSD": [0, 0.05], "BTCUSD": [-1, 0.75], "EQUITY": [0, 0.05]
+  },
+
+  "GOLD_FUNDING_RATE_SPIKE": {
+    "XAUUSD": [-1, 0.80], "XAGUSD": [-1, 0.60], "BTCUSD": [0, 0.05], "EQUITY": [0, 0.05]
+  },
+  "GOLD_FUNDING_RATE_RESET": {
+    "XAUUSD": [1, 0.60], "XAGUSD": [1, 0.45], "BTCUSD": [0, 0.05], "EQUITY": [0, 0.05]
+  },
+  "GOLD_OPEN_INTEREST_SURGE": {
+    "XAUUSD": [1, 0.70], "XAGUSD": [1, 0.55], "BTCUSD": [0, 0.05], "EQUITY": [0, 0.05]
+  },
+  "GOLD_OPEN_INTEREST_DROP": {
+    "XAUUSD": [-1, 0.70], "XAGUSD": [-1, 0.55], "BTCUSD": [0, 0.05], "EQUITY": [0, 0.05]
+  },
+  "GOLD_LONG_LIQUIDATION": {
+    "XAUUSD": [-1, 0.90], "XAGUSD": [-1, 0.70], "BTCUSD": [0, 0.05], "EQUITY": [0, 0.05]
+  },
+  "GOLD_SHORT_SQUEEZE": {
+    "XAUUSD": [1, 0.85], "XAGUSD": [1, 0.65], "BTCUSD": [0, 0.05], "EQUITY": [0, 0.05]
+  },
+  "GOLD_EXCHANGE_INFLOW": {
+    "XAUUSD": [-1, 0.75], "XAGUSD": [-1, 0.55], "BTCUSD": [0, 0.05], "EQUITY": [0, 0.05]
+  },
+  "GOLD_EXCHANGE_OUTFLOW": {
+    "XAUUSD": [1, 0.75], "XAGUSD": [1, 0.55], "BTCUSD": [0, 0.05], "EQUITY": [0, 0.05]
+  },
+  "GOLD_ETF_FLOW_IN": {
+    "XAUUSD": [1, 1.10], "XAGUSD": [1, 0.30], "BTCUSD": [0, 0.05], "EQUITY": [0, 0.10]
+  },
+  "GOLD_ETF_FLOW_OUT": {
+    "XAUUSD": [-1, 1.10], "XAGUSD": [-1, 0.30], "BTCUSD": [0, 0.05], "EQUITY": [0, 0.10]
+  },
+  "CENTRAL_BANK_GOLD_BUYING": {
+    "XAUUSD": [1, 1.20], "XAGUSD": [1, 0.60], "BTCUSD": [0, 0.05], "EQUITY": [0, 0.05]
+  },
+  "CENTRAL_BANK_GOLD_SELLING": {
+    "XAUUSD": [-1, 1.20], "XAGUSD": [-1, 0.60], "BTCUSD": [0, 0.05], "EQUITY": [0, 0.05]
+  },
+  "REAL_YIELDS_RISING": {
+    "XAUUSD": [-1, 1.15], "XAGUSD": [-1, 1.00], "BTCUSD": [-1, 0.85], "EQUITY": [-1, 0.80]
+  },
+  "REAL_YIELDS_FALLING": {
+    "XAUUSD": [1, 1.10], "XAGUSD": [1, 0.95], "BTCUSD": [1, 0.80], "EQUITY": [1, 0.75]
+  },
+  "TIPS_AUCTION": {
+    "XAUUSD": [-1, 0.60], "XAGUSD": [-1, 0.50], "BTCUSD": [-1, 0.40], "EQUITY": [-1, 0.35]
+  },
+  "BREAKEVENS_RISING": {
+    "XAUUSD": [1, 0.70], "XAGUSD": [1, 0.65], "BTCUSD": [0, 0.10], "EQUITY": [0, 0.15]
+  },
+  "BREAKEVENS_FALLING": {
+    "XAUUSD": [-1, 0.70], "XAGUSD": [-1, 0.65], "BTCUSD": [0, 0.10], "EQUITY": [0, 0.15]
   }
 }

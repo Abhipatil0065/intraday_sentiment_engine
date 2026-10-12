@@ -173,6 +173,38 @@ class EventType(str, Enum):
     # Detection is keyword-driven; direction is data, in the map.
     GOLD_SILVER_RATIO_HIGH = "GOLD_SILVER_RATIO_HIGH"
     GOLD_SILVER_RATIO_LOW = "GOLD_SILVER_RATIO_LOW"
+    # ---- BTC-specific on-chain / derivatives mechanisms (intraday) ----
+    BTC_FUNDING_RATE_SPIKE = "BTC_FUNDING_RATE_SPIKE"
+    BTC_FUNDING_RATE_RESET = "BTC_FUNDING_RATE_RESET"
+    BTC_OPEN_INTEREST_SURGE = "BTC_OPEN_INTEREST_SURGE"
+    BTC_OPEN_INTEREST_DROP = "BTC_OPEN_INTEREST_DROP"
+    BTC_LONG_LIQUIDATION = "BTC_LONG_LIQUIDATION"
+    BTC_SHORT_SQUEEZE = "BTC_SHORT_SQUEEZE"
+    BTC_WHALE_ALERT = "BTC_WHALE_ALERT"
+    BTC_EXCHANGE_INFLOW = "BTC_EXCHANGE_INFLOW"
+    BTC_EXCHANGE_OUTFLOW = "BTC_EXCHANGE_OUTFLOW"
+    BTC_STABLECOIN_MINT = "BTC_STABLECOIN_MINT"
+    BTC_STABLECOIN_REDEEM = "BTC_STABLECOIN_REDEEM"
+
+    # ---- Gold-specific microstructure / derivatives mechanisms (intraday) ----
+    GOLD_FUNDING_RATE_SPIKE = "GOLD_FUNDING_RATE_SPIKE"
+    GOLD_FUNDING_RATE_RESET = "GOLD_FUNDING_RATE_RESET"
+    GOLD_OPEN_INTEREST_SURGE = "GOLD_OPEN_INTEREST_SURGE"
+    GOLD_OPEN_INTEREST_DROP = "GOLD_OPEN_INTEREST_DROP"
+    GOLD_LONG_LIQUIDATION = "GOLD_LONG_LIQUIDATION"
+    GOLD_SHORT_SQUEEZE = "GOLD_SHORT_SQUEEZE"
+    GOLD_EXCHANGE_INFLOW = "GOLD_EXCHANGE_INFLOW"
+    GOLD_EXCHANGE_OUTFLOW = "GOLD_EXCHANGE_OUTFLOW"
+    GOLD_ETF_FLOW_IN = "GOLD_ETF_FLOW_IN"
+    GOLD_ETF_FLOW_OUT = "GOLD_ETF_FLOW_OUT"
+    CENTRAL_BANK_GOLD_BUYING = "CENTRAL_BANK_GOLD_BUYING"
+    CENTRAL_BANK_GOLD_SELLING = "CENTRAL_BANK_GOLD_SELLING"
+    # ---- Real yields / TIPS / breakevens (gold's primary driver) ----
+    REAL_YIELDS_RISING = "REAL_YIELDS_RISING"
+    REAL_YIELDS_FALLING = "REAL_YIELDS_FALLING"
+    TIPS_AUCTION = "TIPS_AUCTION"
+    BREAKEVENS_RISING = "BREAKEVENS_RISING"
+    BREAKEVENS_FALLING = "BREAKEVENS_FALLING"
 
 
 @dataclass(frozen=True)
@@ -371,14 +403,70 @@ _INTRINSIC_RULES: tuple[tuple[EventType, tuple[str, ...]], ...] = (
       "crude draw", "crude stocks draw", "crude inventories fell",
       "draw in crude", "draw in oil", "output cuts", "production cuts",
       "extends cuts", "tighten supply", "tightening supply", "supply squeeze")),
-    (EventType.OIL_SUPPLY_GLUT,
-     ("raises output", "raises production", "output increase",
-      "production increase", "supply surge", "supply glut", "oversupply",
-      "surplus", "oil glut", "crude build", "crude stocks build",
-      "crude inventories rose", "build in crude", "build in oil",
-      "build in stocks", "supply increase", "boost output",
-      "raises oil production", "production target", "output target",
-      "demand worries", "demand weakness", "consumption falls")),
+(EventType.OIL_SUPPLY_GLUT,
+      ("raises output", "raises production", "output increase",
+       "production increase", "supply surge", "supply glut", "oversupply",
+       "surplus", "oil glut", "crude build", "crude stocks build",
+       "crude inventories rose", "build in crude", "build in oil",
+       "build in stocks", "supply increase", "boost output",
+       "raises oil production", "production target", "output target",
+       "demand worries", "demand weakness", "consumption falls")),
+    # BTC-specific intrinsic rules (sign fixed by event mechanism)
+    (EventType.BTC_FUNDING_RATE_SPIKE,
+     ("negative funding", "funding rate spike", "funding rate surges", "funding rate spikes", "funding turned negative")),
+    (EventType.BTC_FUNDING_RATE_RESET,
+     ("funding rate reset", "funding rate normalizes", "funding rate normalised", "funding back to neutral", "funding neutral")),
+    (EventType.BTC_OPEN_INTEREST_SURGE,
+     ("open interest surge", "open interest spikes", "oi surge", "oi spike", "open interest jumps")),
+    (EventType.BTC_OPEN_INTEREST_DROP,
+     ("open interest drop", "open interest falls", "oi drop", "oi falls", "open interest decline")),
+    (EventType.BTC_LONG_LIQUIDATION,
+     ("long liquidation", "longs liquidated", "long liquidations", "longs wiped", "long positions liquidated")),
+    (EventType.BTC_SHORT_SQUEEZE,
+     ("short squeeze", "shorts squeezed", "short covering", "shorts cover")),
+    (EventType.BTC_EXCHANGE_INFLOW,
+     ("exchange inflow", "exchange inflows", "binance inflow", "coinbase inflow", "deposits surge", "exchange deposit")),
+    (EventType.BTC_EXCHANGE_OUTFLOW,
+     ("exchange outflow", "exchange outflows", "binance outflow", "coinbase outflow", "withdrawals surge", "exchange withdrawal")),
+    (EventType.BTC_STABLECOIN_MINT,
+     ("usdt mint", "usdc mint", "tether mint", "stablecoin mint", "usdt printed", "usdc printed")),
+(EventType.BTC_STABLECOIN_REDEEM,
+      ("usdt redemption", "usdc redemption", "tether redemption", "stablecoin redemption", "usdt burned", "usdc burned")),
+    # Gold-specific intrinsic rules (sign fixed by event mechanism)
+    (EventType.GOLD_FUNDING_RATE_SPIKE,
+     ("negative funding", "funding rate spike", "funding rate surges", "funding rate spikes", "funding turned negative")),
+    (EventType.GOLD_FUNDING_RATE_RESET,
+     ("funding rate reset", "funding rate normalizes", "funding rate normalised", "funding back to neutral", "funding neutral")),
+    (EventType.GOLD_OPEN_INTEREST_SURGE,
+     ("open interest surge", "open interest spikes", "oi surge", "oi spike", "open interest jumps")),
+    (EventType.GOLD_OPEN_INTEREST_DROP,
+     ("open interest drop", "open interest falls", "oi drop", "oi falls", "open interest decline")),
+    (EventType.GOLD_LONG_LIQUIDATION,
+     ("long liquidation", "longs liquidated", "long liquidations", "longs wiped", "long positions liquidated")),
+    (EventType.GOLD_SHORT_SQUEEZE,
+     ("short squeeze", "shorts squeezed", "short covering", "shorts cover")),
+    (EventType.GOLD_EXCHANGE_INFLOW,
+     ("exchange inflow", "exchange inflows", "comex inflow", "gold inflow", "deposits surge", "exchange deposit")),
+    (EventType.GOLD_EXCHANGE_OUTFLOW,
+     ("exchange outflow", "exchange outflows", "comex outflow", "gold outflow", "withdrawals surge", "exchange withdrawal")),
+    (EventType.GOLD_ETF_FLOW_IN,
+     ("gold etf inflow", "gold etf inflows", "gld inflow", "gld inflows", "gold fund inflow", "gold fund inflows")),
+    (EventType.GOLD_ETF_FLOW_OUT,
+     ("gold etf outflow", "gold etf outflows", "gld outflow", "gld outflows", "gold fund outflow", "gold fund outflows", "gold etf redemption", "gold etf redemptions")),
+    (EventType.CENTRAL_BANK_GOLD_BUYING,
+     ("central bank buying", "central bank buys", "central bank purchase", "reserve accumulation", "gold reserves rise", "official sector buying", "cb buying", "central bank gold buying")),
+    (EventType.CENTRAL_BANK_GOLD_SELLING,
+     ("central bank selling", "central bank sells", "central bank sale", "reserve reduction", "gold reserves fall", "official sector selling", "cb selling", "central bank gold selling")),
+    (EventType.REAL_YIELDS_RISING,
+     ("real yields rise", "real yields rising", "real yields climbed", "real yields higher", "tips yields rise", "tips yields rising", "real yield climb", "real yield spike")),
+    (EventType.REAL_YIELDS_FALLING,
+     ("real yields fall", "real yields falling", "real yields dropped", "real yields lower", "tips yields fall", "tips yields falling", "real yield drop", "real yield decline")),
+    (EventType.TIPS_AUCTION,
+     ("tips auction", "tips sale", "treasury inflation protected", "real yield auction")),
+    (EventType.BREAKEVENS_RISING,
+     ("breakevens rise", "breakevens rising", "breakeven inflation rise", "inflation breakevens climb", "breakevens widen", "breakeven spread widens")),
+    (EventType.BREAKEVENS_FALLING,
+     ("breakevens fall", "breakevens falling", "breakeven inflation fall", "inflation breakevens drop", "breakevens narrow", "breakeven spread narrows")),
 )
 _INTRINSIC_WEIGHT = 6.0
 
@@ -398,9 +486,11 @@ _DEMAND_DOWN_VERBS = ("plunge", "plunges", "plunged", "slump", "slumps",
 # Without this, "Bitcoin ETF inflow" and "Bitcoin ETF outflow" would resolve
 # identically, which is exactly backwards.
 _FLOW_POSITIVE = ("inflow", "inflows", "in-flow", "demand", "buying",
-                  "accumulation", "inflows surge", "net buying", "creeps in")
+                  "accumulation", "inflows surge", "net buying", "creeps in",
+                  "mint", "minted", "printed", "issued")
 _FLOW_NEGATIVE = ("outflow", "outflows", "out-flow", "redemption",
-                  "redemptions", "out selling", "net selling", "liquidated")
+                  "redemptions", "out selling", "net selling", "liquidated",
+                  "redeem", "redeemed", "burned", "burnt", "destroyed")
 
 
 def _has_intrinsic_direction(text: str) -> bool:
@@ -439,15 +529,22 @@ EVENT_SIGNALS: tuple[tuple[EventType, tuple[str, ...], tuple[str, ...]], ...] = 
     (EventType.RECESSION_CUT, ("rate cut", "cut rates", "cuts rates", "dovish",
                                "easing", "stimulus"),
      ("recession", "slump", "slowdown", "contraction", "downturn")),
-    (EventType.DOVISH_POLICY, ("dovish", "rate cut", "cuts rates", "cut rates",
+(EventType.DOVISH_POLICY, ("dovish", "rate cut", "cuts rates", "cut rates",
                                "pivot", "easing", "stimulus"), ()),
+    # ---- Real yields / TIPS / breakevens (gold's primary driver) ----
+    # Must come BEFORE generic RISING_YIELDS/FALLING_YIELDS to avoid conflicts
+    (EventType.REAL_YIELDS_RISING, ("real yields rise", "real yields rising", "real yields climbed", "real yields higher", "real yields spike", "real yields spiked", "real yields surged", "tips yields rise", "tips yields rising", "real yield climb", "real yield spike", "real yield surge"), ("real", "yield", "tips", "inflation protected")),
+    (EventType.REAL_YIELDS_FALLING, ("real yields fall", "real yields falling", "real yields dropped", "real yields lower", "real yields drop", "real yields decline", "real yields ease", "tips yields fall", "tips yields falling", "real yield drop", "real yield decline", "real yields ease"), ("real", "yield", "tips", "inflation protected")),
+    (EventType.TIPS_AUCTION, ("tips auction", "tips sale", "treasury inflation protected", "real yield auction", "tips issuance"), ("tips", "treasury", "inflation protected")),
+    (EventType.BREAKEVENS_RISING, ("breakevens rise", "breakevens rising", "breakeven inflation rise", "inflation breakevens climb", "breakevens widen", "breakeven spread widens"), ("breakeven", "inflation expectation")),
+    (EventType.BREAKEVENS_FALLING, ("breakevens fall", "breakevens falling", "breakeven inflation fall", "inflation breakevens drop", "breakevens narrow", "breakeven spread narrows"), ("breakeven", "inflation expectation")),
     (EventType.RISING_YIELDS, ("yields rise", "yields rose", "yields climbed",
                                "yields climb", "yields higher", "yields surged",
                                "higher yields", "rising yields", "real yields",
                                "bond yield"), ()),
     (EventType.FALLING_YIELDS, ("yields fall", "yields fell", "yields eased",
-                                "yields decline", "lower yields",
-                                "falling yields"), ()),
+                                 "yields decline", "lower yields",
+                                 "falling yields"), ()),
     (EventType.STRONG_USD, ("dollar surges", "dollar rallies", "dollar index rose",
                             "dollar strengthens", "dollar climbed",
                             "stronger dollar", "dollar spikes", "dxy rises"), ()),
@@ -478,17 +575,42 @@ EVENT_SIGNALS: tuple[tuple[EventType, tuple[str, ...], tuple[str, ...]], ...] = 
     (EventType.CRYPTO_HACK, ("exchange hacked", "exchange hack", "crypto hack", "hacked",
                                "exploit", "exploited", "drained", "security breach", "stolen"),
       ("crypto", "bitcoin", "btc", "exchange", "defi", "wallet", "token", "stablecoin")),
-    (EventType.CRYPTO_LIQUIDATION, ("liquidations", "liquidated", "cascade",
-                                    "forced selling"), ()),
+(EventType.CRYPTO_LIQUIDATION, ("liquidations", "liquidated", "cascade",
+                                     "forced selling"), ()),
+    # ---- BTC-specific on-chain / derivatives mechanisms (intraday) ----
+    (EventType.BTC_FUNDING_RATE_SPIKE, ("funding rate spike", "funding rate surges", "funding rate spikes", "negative funding", "funding turned negative"), ("btc", "bitcoin", "perp", "perpetual")),
+    (EventType.BTC_FUNDING_RATE_RESET, ("funding rate reset", "funding rate normalizes", "funding rate normalised", "funding back to neutral"), ("btc", "bitcoin", "perp", "perpetual")),
+    (EventType.BTC_OPEN_INTEREST_SURGE, ("open interest surge", "open interest spikes", "oi surge", "oi spike", "open interest jumps"), ("btc", "bitcoin", "perp", "perpetual")),
+    (EventType.BTC_OPEN_INTEREST_DROP, ("open interest drop", "open interest falls", "oi drop", "oi falls", "open interest decline"), ("btc", "bitcoin", "perp", "perpetual")),
+    (EventType.BTC_LONG_LIQUIDATION, ("long liquidation", "longs liquidated", "long liquidations", "longs wiped", "long positions liquidated"), ("btc", "bitcoin", "crypto")),
+    (EventType.BTC_SHORT_SQUEEZE, ("short squeeze", "shorts squeezed", "short covering", "shorts cover"), ("btc", "bitcoin", "crypto")),
+    (EventType.BTC_WHALE_ALERT, ("whale alert", "whale transfer", "large transfer", "whale moved", "whale transaction"), ("btc", "bitcoin")),
+    (EventType.BTC_EXCHANGE_INFLOW, ("exchange inflow", "exchange inflows", "binance inflow", "coinbase inflow", "deposits surge", "exchange deposit"), ("btc", "bitcoin")),
+    (EventType.BTC_EXCHANGE_OUTFLOW, ("exchange outflow", "exchange outflows", "binance outflow", "coinbase outflow", "withdrawals surge", "exchange withdrawal"), ("btc", "bitcoin")),
+    (EventType.BTC_STABLECOIN_MINT, ("usdt mint", "usdc mint", "tether mint", "stablecoin mint", "usdt printed", "usdc printed"), ("btc", "bitcoin", "crypto")),
+    (EventType.BTC_STABLECOIN_REDEEM, ("usdt redemption", "usdc redemption", "tether redemption", "stablecoin redemption", "usdt burned", "usdc burned"), ("btc", "bitcoin", "crypto")),
     (EventType.CRYPTO_REGULATION, ("sec", "cftc", "crypto regulation",
                                    "stablecoin bill", "custody rule",
                                    "crypto bill", "ban on"), ()),
     (EventType.BTC_ETF_FLOW, ("bitcoin etf", "spot etf", "ibit", "fbtc",
                               "btco", "bitcoin fund", "etf inflow",
                               "etf outflow"), ("bitcoin", "btc", "crypto")),
-    (EventType.GOLD_ETF_FLOW, ("gold etf", "gld", "gold fund", "gold inflows",
+(EventType.GOLD_ETF_FLOW, ("gold etf", "gld", "gold fund", "gold inflows",
                                "gold outflows", "etf inflows", "etf outflows"),
-     ("gold", "bullion")),
+      ("gold", "bullion")),
+    # ---- Gold-specific microstructure / derivatives mechanisms (intraday) ----
+    (EventType.GOLD_FUNDING_RATE_SPIKE, ("gold funding rate spike", "gold funding rate surges", "gold funding rate spikes", "negative gold funding", "gold funding turned negative"), ("gold", "xau", "comex", "futures")),
+    (EventType.GOLD_FUNDING_RATE_RESET, ("gold funding rate reset", "gold funding rate normalizes", "gold funding rate normalised", "gold funding back to neutral"), ("gold", "xau", "comex", "futures")),
+    (EventType.GOLD_OPEN_INTEREST_SURGE, ("gold open interest surge", "gold open interest spikes", "gold oi surge", "gold oi spike", "gold open interest jumps"), ("gold", "xau", "comex", "futures")),
+    (EventType.GOLD_OPEN_INTEREST_DROP, ("gold open interest drop", "gold open interest falls", "gold oi drop", "gold oi falls", "gold open interest decline"), ("gold", "xau", "comex", "futures")),
+    (EventType.GOLD_LONG_LIQUIDATION, ("gold long liquidation", "gold longs liquidated", "gold long liquidations", "gold longs wiped", "gold long positions liquidated"), ("gold", "xau", "comex", "futures")),
+    (EventType.GOLD_SHORT_SQUEEZE, ("gold short squeeze", "gold shorts squeezed", "gold short covering", "gold shorts cover"), ("gold", "xau", "comex", "futures")),
+    (EventType.GOLD_EXCHANGE_INFLOW, ("gold exchange inflow", "gold exchange inflows", "comex inflow", "gold inflow", "gold deposits surge"), ("gold", "xau", "comex", "etf", "vault")),
+    (EventType.GOLD_EXCHANGE_OUTFLOW, ("gold exchange outflow", "gold exchange outflows", "comex outflow", "gold outflow", "gold withdrawals surge"), ("gold", "xau", "comex", "etf", "vault")),
+(EventType.GOLD_ETF_FLOW_IN, ("gold etf inflow", "gold etf inflows", "gld inflow", "gld inflows", "gold fund inflow", "gold fund inflows", "etf inflow", "etf inflows"), ("gold", "xau", "gld")),
+    (EventType.GOLD_ETF_FLOW_OUT, ("gold etf outflow", "gold etf outflows", "gld outflow", "gld outflows", "gold fund outflow", "gold fund outflows", "gold etf redemption", "gold etf redemptions", "etf outflow", "etf outflows"), ("gold", "xau", "gld")),
+    (EventType.CENTRAL_BANK_GOLD_BUYING, ("central bank buying", "central bank buys", "central bank purchase", "reserve accumulation", "gold reserves rise", "official sector buying", "cb buying", "central bank gold buying"), ("gold", "xau", "reserves", "central bank")),
+    (EventType.CENTRAL_BANK_GOLD_SELLING, ("central bank selling", "central bank sells", "central bank sale", "reserve reduction", "gold reserves fall", "official sector selling", "cb selling", "central bank gold selling"), ("gold", "xau", "reserves", "central bank")),
     # Risk sentiment. NOTE (VAL-4 fix): the bare subject "risk appetite" and
     # "investor sentiment improves" are deliberately REMOVED here. A subject
     # listed without a verb makes every polarity-blind match fire, so "risk
@@ -939,7 +1061,9 @@ def resolve(text: str, category: NewsCategory,
             if (event_type in _DEMAND_EVENTS
                     and any(contains_plural(lowered, v) for v in _DEMAND_DOWN_VERBS)):
                 sign = -sign
-            if event_type in (EventType.BTC_ETF_FLOW, EventType.GOLD_ETF_FLOW):
+            if event_type in (EventType.BTC_ETF_FLOW, EventType.GOLD_ETF_FLOW,
+                           EventType.BTC_EXCHANGE_INFLOW, EventType.BTC_EXCHANGE_OUTFLOW,
+                           EventType.BTC_STABLECOIN_MINT, EventType.BTC_STABLECOIN_REDEEM):
                 if flow_sign != 0:
                     sign = flow_sign
                 else:

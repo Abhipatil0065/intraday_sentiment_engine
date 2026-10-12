@@ -28,6 +28,7 @@ from app.analysis.cue_rules import (
     detect_metal_character,
     detect_report_kind,
     detect_verification,
+    detect_speaker_tier,
 )
 from app.config import settings
 from app.logging_conf import get_logger
@@ -74,6 +75,7 @@ class AssetAnalysis:
     reason: str = ""
     transmission: str = ""
     metal_character: str | None = None
+    speaker_tier: float = 1.0
 
 
 @dataclass
@@ -240,6 +242,7 @@ def heuristic_analyze(title: str, body: str = "") -> ArticleAnalysis:
     quality = tq.analyse(text)
 
     char = detect_metal_character(lowered)
+    speaker_tier = detect_speaker_tier(lowered)
     for asset in relevant_assets(result.category, text):
         rel = relevance_for(result.category, asset, text)
         impact = resolved[asset]
@@ -259,6 +262,7 @@ def heuristic_analyze(title: str, body: str = "") -> ArticleAnalysis:
                                      priced_in=False),
                 transmission=_transmission_for(asset, impact.direction),
                 metal_character=char if asset is Asset.SILVER else None,
+                speaker_tier=speaker_tier,
             )
         )
 

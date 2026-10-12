@@ -70,6 +70,7 @@ def build_signal(
     mode: str = "heuristic",
     surprise_weight: float = 1.0,
     metal_character: str | None = None,
+    speaker_tier: float = 1.0,
 ) -> object:
     """
     Build one correctly-populated ``WeightedSignal``.
@@ -110,6 +111,8 @@ def build_signal(
         # Section 7: silver's dual-nature character, carried through so the
         # weight path can reward a characterised silver story.
         metal_character=metal_character,
+        # Central bank speaker tier multiplier.
+        speaker_tier=speaker_tier,
     )
 
 

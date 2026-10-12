@@ -70,7 +70,7 @@ def test_tiny_score_ties_break_to_newest_high_weight_signal():
     # inside EPS), but the single bear is heaviest (VERY_HIGH) and newest
     # (2 min) so tie-break picks bear.
     bulls = [make(direction=Direction.BULLISH, strength=ImpactStrength.HIGH,
-                  weight=1.0, minutes_ago=40, title=f"old bull {i}",
+                  weight=1.0, minutes_ago=12, title=f"old bull {i}",
                   cluster_id=f"b{i}") for i in range(2)]
     r = compute([bear] + bulls, Asset.GOLD, now=NOW)
     assert 0.0 < r.raw_score < EPS, "tiny raw score (naive sign = BULLISH)"
@@ -132,15 +132,15 @@ def test_equity_tie_break_payload_score_matches_label():
             relevance=weight, persistence=0.7,
             category=NewsCategory.EQUITIES, cluster_id=cluster)
 
-    # Bullish signals are MEDIUM and 10 min old so the raw score leans
+    # Bullish signals are MEDIUM and 8 min old so the raw score leans
     # slightly bullish (about +0.5) but stays inside the tie-break band;
     # the heavier, newer bearish signal wins the label.
     sigs = [
-        eq(Direction.BEARISH, ImpactStrength.VERY_HIGH, 1.0, 2, "bear",
+        eq(Direction.BEARISH, ImpactStrength.VERY_HIGH, 1.0, 5, "bear",
            "Nasdaq slides as yields jump"),
-        eq(Direction.BULLISH, ImpactStrength.MEDIUM, 1.0, 10, "b1",
+        eq(Direction.BULLISH, ImpactStrength.MEDIUM, 1.0, 8, "b1",
            "Nasdaq climbs on earnings"),
-        eq(Direction.BULLISH, ImpactStrength.MEDIUM, 1.0, 10, "b2",
+        eq(Direction.BULLISH, ImpactStrength.MEDIUM, 1.0, 8, "b2",
            "S&P 500 rises on strong data"),
     ]
     clear_bias_history()

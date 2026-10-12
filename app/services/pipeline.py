@@ -41,6 +41,7 @@ from app.market import regime as regime_mod
 from app.market.session_detector import (
     detect_session,
     session_relevance,
+    asset_session_multiplier,
 )
 from app.models.db_models import (
     ArticleEvent,
@@ -613,6 +614,7 @@ async def _ingest_article(art: RawArticle, session, stats: IngestStats,
                 reason=asset_analysis.reason,
                 transmission=asset_analysis.transmission,
                 metal_character=asset_analysis.metal_character,
+                speaker_tier=asset_analysis.speaker_tier,
                 session=current_session.value,
                 importance_weight=_importance_weight(analysis.importance),
             )
@@ -754,10 +756,16 @@ def _downweight_news_duplicating_calendar(signals: list[WeightedSignal]) -> list
     now = datetime.now(timezone.utc)
     from app.analysis.release_surprise import indicator_family
 
+    def _as_aware_utc(dt: datetime) -> datetime:
+        """Ensure datetime is timezone-aware UTC for safe comparison."""
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
     # Collect calendar signals: non-empty event_key, released (published_at <= now)
     calendar_signals = [
         s for s in signals
-        if s.event_key and s.published_at and s.published_at <= now
+        if s.event_key and s.published_at and _as_aware_utc(s.published_at) <= now
     ]
 
     if not calendar_signals:
@@ -797,7 +805,9 @@ def _downweight_news_duplicating_calendar(signals: list[WeightedSignal]) -> list
             # Within 60 minutes
             if s.published_at is None:
                 continue
-            delta = abs(s.published_at - cal_time)
+            s_pub = _as_aware_utc(s.published_at)
+            cal_time_aware = _as_aware_utc(cal_time)
+            delta = abs(s_pub - cal_time_aware)
             if delta.total_seconds() <= 3600:  # 60 minutes
                 s.relevance *= CALENDAR_NEWS_DUP_FACTOR
                 downweighted.add(i)
@@ -912,12 +922,14 @@ def _recompute_sentiment(session, stats: IngestStats):
                 report_kind=kind,
                 surprise_weight=release_surprise.surprise_weight(
                     printed, release_text),
-                session_multiplier=session_relevance(
-                    detect_session(), cat_enum.value),
+                session_multiplier=asset_session_multiplier(
+                    asset_enum.value, detect_session(), cat_enum.value),
                 # Section 7: silver's dual-nature character, carried from
                 # the AssetImpact row so the weight path can reward a
                 # characterised XAGUSD story on every recompute.
                 metal_character=impact.metal_character,
+                # Central bank speaker tier multiplier.
+                speaker_tier=getattr(impact, "speaker_tier", 1.0),
             )
             signals.append(signal)
 
@@ -962,7 +974,7 @@ def _recompute_sentiment(session, stats: IngestStats):
     # session starts from the stored value again.
     if session_changed:
         for s in signals:
-            new_mult = session_relevance(current_session, s.category.value)
+            new_mult = asset_session_multiplier(s.asset.value, current_session, s.category.value)
             new_mult = max(0.5, min(1.5, new_mult))
             s.session_multiplier = new_mult
         log.info(

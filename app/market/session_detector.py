@@ -102,6 +102,8 @@ CATEGORY_SESSION_WEIGHT: dict[SessionName, dict[str, float]] = {
     SessionName.EUROPE: {
         "GDP": 1.20, "Central Bank": 1.15, "Oil/Energy": 1.10, "Equities": 1.10,
         "Crypto Market Flows": 1.05,
+        "Inflation": 1.15, "Interest Rates": 1.15, "Treasury Yields": 1.15,  # London open = rates focus
+        "ETF Flows": 1.20, "Bitcoin ETF Flows": 1.10,
     },
     SessionName.US: {
         "Central Bank": 1.40, "Interest Rates": 1.40, "Inflation": 1.40,
@@ -253,10 +255,19 @@ def asset_session_multiplier(asset: str, session: SessionName,
     it is a property of the instrument, applied after the session curve, and
     never a property of the news category.
     """
+    from app.analysis.cue_rules import GOLD_SESSION_BOOST
+    
     profile = _clamp_profile(_profile_for(asset))
     if profile == "flat":
         return 1.0
     base = session_relevance(session, category)
+    
+    # Apply gold-specific session boosts for XAUUSD
+    if asset == "XAUUSD":
+        session_name = session.value
+        if session_name in GOLD_SESSION_BOOST and category in GOLD_SESSION_BOOST[session_name]:
+            base *= GOLD_SESSION_BOOST[session_name][category]
+    
     if profile == "weekend_tolerant":
         return base
     # metal: apply the weekend discount on top of the session curve.

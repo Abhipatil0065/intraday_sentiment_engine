@@ -40,6 +40,20 @@ BULLISH_CUES: list[tuple[str, int]] = [
     ("beats expectations", 2), ("beat expectations", 2), ("beats forecast", 2), ("beat forecast", 2), ("approval", 2), ("stimulus", 2), ("fall", 1),
     ("lower", 1), ("down", 1), ("support", 1), ("record", 1),
     ("beats earnings", 2), ("raises guidance", 2),
+    # BTC-specific bullish cues
+    ("funding rate reset", 4), ("positive funding", 3), ("short squeeze", 5),
+    ("shorts squeezed", 4), ("exchange outflow", 4), ("whale withdrawal", 3),
+    ("stablecoin mint", 4), ("tether mint", 4), ("usdt mint", 4),
+    ("open interest surge", 3), ("oi surge", 3),
+    # GOLD-specific bullish cues (real yields, microstructure, central bank)
+    ("real yields fall", 4), ("real yields drop", 4), ("tips yields fall", 3), ("tips yields drop", 3),
+    ("real yield decline", 3), ("breakevens rise", 2), ("breakevens widen", 2), ("inflation expectations rise", 2),
+    ("gold funding rate reset", 3), ("gold positive funding", 2), ("gold short squeeze", 5),
+    ("gold shorts squeezed", 4), ("gold exchange outflow", 3), ("gold outflow", 3),
+    ("gold open interest surge", 3), ("gold oi surge", 3),
+    ("gold etf inflow", 4), ("gld inflow", 3), ("gold fund inflow", 3),
+    ("central bank buying", 5), ("central bank buys", 5), ("reserve accumulation", 4),
+    ("gold reserves rise", 4), ("official sector buying", 4), ("central bank gold buying", 5),
 ]
 BEARISH_CUES: list[tuple[str, int]] = [
     ("rate hike", 3), ("raises rates", 3), ("hawkish", 3), ("tightening", 2),
@@ -51,12 +65,98 @@ BEARISH_CUES: list[tuple[str, int]] = [
     ("collapses", 2),
     ("liquidation", 6), ("liquidated", 4),
     ("hacked", 4), ("exploit", 4), ("stolen", 4),
+    # BTC-specific bearish cues
+    ("funding rate spike", 5), ("negative funding", 4), ("long liquidation", 6),
+    ("longs liquidated", 5), ("exchange inflow", 4), ("whale deposit", 3),
+    ("stablecoin redemption", 4), ("tether redemption", 4),
+    ("open interest drop", 3), ("oi drop", 3), ("oi falls", 3),
+    # GOLD-specific bearish cues (real yields, microstructure, central bank)
+    ("real yields rise", 4), ("real yields climb", 4), ("tips yields rise", 3), ("tips yields climb", 3),
+    ("real yield increase", 3), ("real yield spike", 3), ("breakevens fall", 2), ("breakevens narrow", 2), ("inflation expectations fall", 2),
+    ("gold funding rate spike", 4), ("negative gold funding", 3), ("gold long liquidation", 6),
+    ("gold longs liquidated", 5), ("gold exchange inflow", 3), ("gold inflow", 3),
+    ("gold open interest drop", 3), ("gold oi drop", 3), ("gold oi falls", 3),
+    ("gold etf outflow", 4), ("gld outflow", 3), ("gold fund outflow", 3), ("gold etf redemption", 3),
+    ("central bank selling", 5), ("central bank sells", 5), ("reserve reduction", 4),
+    ("gold reserves fall", 4), ("official sector selling", 4), ("central bank gold selling", 5),
 ]
 
 PRECIOUS_CUES = ["fed", "rate", "yield", "dollar", "inflation", "safe haven", "gold",
                  "real yields", "etf", "geopolit"]
 INDUSTRIAL_CUES = ["china", "manufacturing", "factory", "pmi", "industrial", "solar",
                    "electronics", "copper", "growth", "construction", "demand"]
+
+# Central Bank Speaker Tiering (for gold/metals - highest impact speakers)
+# Multiplier applied to signal weight when a specific speaker is detected
+SPEAKER_TIER: dict[str, float] = {
+    # Fed - highest impact
+    "powell": 1.50, "chair powell": 1.50, "jerome powell": 1.50,
+    "williams": 1.20, "john williams": 1.20, "ny fed": 1.20, "new york fed": 1.20,
+    "barkin": 1.10, "thomas barkin": 1.10, "richmond fed": 1.10,
+    "bullard": 1.10, "james bullard": 1.10, "st louis fed": 1.10, "st. louis fed": 1.10,
+    "bostic": 1.10, "raphael bostic": 1.10, "atlanta fed": 1.10,
+    "daly": 1.10, "mary daly": 1.10, "san francisco fed": 1.10,
+    "goolsbee": 1.10, "austan goolsbee": 1.10, "chicago fed": 1.10,
+    "kashkari": 1.10, "neel kashkari": 1.10, "minneapolis fed": 1.10,
+    "collins": 1.10, "susan collins": 1.10, "boston fed": 1.10,
+    "harker": 1.05, "patrick harker": 1.05, "philadelphia fed": 1.05,
+    "schmid": 1.05, "jeffrey schmid": 1.05, "kansas city fed": 1.05,
+    "hammack": 1.05, "beth hammack": 1.05, "cleveland fed": 1.05,
+    "kugler": 1.05, "adriana kugler": 1.05, "governor": 1.05,
+    # ECB
+    "lagarde": 1.30, "christine lagarde": 1.30, "ecb president": 1.30,
+    "schnabel": 1.15, "isabel schnabel": 1.15, "ecb executive": 1.15,
+    "centeno": 1.10, "mario centeno": 1.10, "portugal central bank": 1.10,
+    "nagel": 1.10, "joachim nagel": 1.10, "bundesbank": 1.10,
+    "panetta": 1.10, "fabio panetta": 1.10, "italy central bank": 1.10,
+    "de guindos": 1.10, "luis de guindos": 1.10, "ecb vice": 1.10,
+    # BoE
+    "bailey": 1.20, "andrew bailey": 1.20, "boe governor": 1.20,
+    "pill": 1.15, "huw pill": 1.15, "boe chief economist": 1.15,
+    "ramsden": 1.10, "dave ramsden": 1.10, "boe deputy": 1.10,
+    "mann": 1.10, "catherine mann": 1.10, "boe mpc": 1.10,
+    "greene": 1.10, "megan greene": 1.10, "boe external": 1.10,
+    # BoJ
+    "ueda": 1.25, "kazuo ueda": 1.25, "boj governor": 1.25,
+    "himino": 1.15, "ryozo himino": 1.15, "boj deputy": 1.15,
+    "nakagawa": 1.10, "junko nakagawa": 1.10, "boj policy board": 1.10,
+    # PBOC / China
+    "pan gongsheng": 1.15, "pbgoc governor": 1.15, "pbgoc": 1.15,
+    "zhu hexin": 1.10, "pbgoc deputy": 1.10,
+    # General
+    "central banker": 1.00, "fed speaker": 1.05, "fed official": 1.05,
+    "ecb speaker": 1.05, "ecb official": 1.05,
+    "boe speaker": 1.05, "boe official": 1.05,
+    "boj speaker": 1.05, "boj official": 1.05,
+}
+
+# Gold-specific session profile enhancements
+# These are ADDITIONAL multipliers on top of CATEGORY_SESSION_WEIGHT
+GOLD_SESSION_BOOST: dict[str, dict[str, float]] = {
+    # SessionName -> Category -> multiplier
+    "EUROPE": {
+        "Central Bank": 1.15,      # London open = major CB speeches
+        "Interest Rates": 1.15,    # UK/EU rate decisions
+        "Inflation": 1.15,         # UK/EU CPI
+        "Treasury Yields": 1.15,   # Gilt/Bund moves
+        "ETF Flows": 1.20,         # London ETF trading
+    },
+    "US": {
+        "Central Bank": 1.25,      # Fed decisions/speeches
+        "Interest Rates": 1.25,    # FOMC, dot plot
+        "Inflation": 1.25,         # US CPI/PCE
+        "Employment": 1.20,        # NFP, jobless claims
+        "Treasury Yields": 1.25,   # US real yields / TIPS
+        "USD/DXY": 1.20,           # Dollar index
+        "ETF Flows": 1.25,         # GLD/IAU heavy US volume
+        "Banking/Financial Stress": 1.15,
+    },
+    "ASIA": {
+        "Central Bank": 1.05,      # BoJ, PBOC
+        "China": 1.20,             # China data
+        "Industrial Demand": 1.15, # Silver industrial
+    },
+}
 
 # Transmission chains used by the deterministic engine (sections 6-8).
 TRANSMISSION: dict[str, dict[Asset, str]] = {
@@ -374,3 +474,21 @@ def detect_metal_character(text: str) -> str | None:
     if industrial:
         return "INDUSTRIAL"
     return None
+
+
+def detect_speaker_tier(text: str) -> float:
+    """
+    Detect central bank speaker tier from text and return weight multiplier.
+    
+    Higher tier speakers (Fed Chair, ECB President, etc.) get larger multipliers
+    because their words move markets more.
+    """
+    if not text:
+        return 1.0
+    lowered = text.lower()
+    best_tier = 1.0
+    for speaker, tier in SPEAKER_TIER.items():
+        if speaker in lowered:
+            if tier > best_tier:
+                best_tier = tier
+    return best_tier

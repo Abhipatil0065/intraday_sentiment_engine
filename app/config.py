@@ -687,14 +687,14 @@ TIER_MULTIPLIERS = {
 
 # Task 5a: intraday recency decay half-lives by EVENT TIER (not category).
 # Exponential decay: weight = 0.5 ** (age_hours / half_life).
-# Tier 1 ~6h, Tier 2 ~2h, Tier 3 ~1h.
+# Tier 1 ~2h, Tier 2 ~45min, Tier 3 ~24min (BTC-optimized for intraday).
 # TRADING_DAY_CUTOFF_HOURS: any item older than this gets weight 0.
 TIER_HALF_LIVES = {
-    "TIER_1": 6.0,
-    "TIER_2": 2.0,
-    "TIER_3": 1.0,
+    "TIER_1": 2.0,
+    "TIER_2": 0.75,
+    "TIER_3": 0.4,
 }
-TRADING_DAY_CUTOFF_HOURS = 16.0
+TRADING_DAY_CUTOFF_HOURS = 8.0
 
 # Task 3: one multiplier for rumors/unconfirmed items ("reportedly",
 # "sources say", "may", "could", "might", opinion pieces).
@@ -829,6 +829,18 @@ DRIVER_RANKINGS: dict[str, dict[str, float]] = {
         # separate event types, each ranking 1.0.
         "LIQUIDITY_EASING": 1.00,
         "LIQUIDITY_TIGHTENING": 1.00,
+        # BTC-specific on-chain / derivatives mechanisms (intraday)
+        "BTC_FUNDING_RATE_SPIKE": 1.00,
+        "BTC_FUNDING_RATE_RESET": 0.90,
+        "BTC_OPEN_INTEREST_SURGE": 0.85,
+        "BTC_OPEN_INTEREST_DROP": 0.85,
+        "BTC_LONG_LIQUIDATION": 1.00,
+        "BTC_SHORT_SQUEEZE": 1.00,
+        "BTC_WHALE_ALERT": 0.70,
+        "BTC_EXCHANGE_INFLOW": 0.90,
+        "BTC_EXCHANGE_OUTFLOW": 0.90,
+        "BTC_STABLECOIN_MINT": 0.80,
+        "BTC_STABLECOIN_REDEEM": 0.80,
         "CHINA_DEMAND": 0.25,
         "INDUSTRIAL_DEMAND": 0.20,
         "COMMODITY_SUPPLY": 0.10,
