@@ -459,14 +459,19 @@ def _opposite(direction: Direction) -> Direction:
 
 
 def _strength_for(impact: str, importance: EconomicImportance,
-                  surprise: float | None) -> ImpactStrength:
+                  surprise: float | None, country: str | None = None) -> ImpactStrength:
     """
     Size the move by provider impact + importance + surprise magnitude.
 
     A small beat is not the same trade as a large one, so the magnitude of the
     surprise scales strength upward - but only for RELEASED prints, because an
     expected value has no realised magnitude to measure.
+
+    Non-USD countries are capped at MEDIUM to prevent quiet calendars from
+    producing outsized signals.
     """
+    if country and country.upper() not in USD_CURRENCY:
+        return ImpactStrength.MEDIUM
     tag = (impact or "").lower()
     if tag == "high":
         base = ImpactStrength.VERY_HIGH
@@ -573,7 +578,7 @@ def evaluate(event: CalendarEvent, asset: Asset,
 
         return CalendarSignal(
             event=event, profile=profile, asset=asset, direction=direction,
-            strength=_strength_for(event.impact, importance, z),
+            strength=_strength_for(event.impact, importance, z, event.country),
             importance=importance,
             relevance=min(1.0, weighted_relevance * (1.0 + core_bonus)),
             persistence=0.75, mode="RELEASED", reason=reason,
