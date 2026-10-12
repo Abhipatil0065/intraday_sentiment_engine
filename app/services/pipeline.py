@@ -941,7 +941,10 @@ def _recompute_sentiment(session, stats: IngestStats):
         # verdict. market_prep/market_wrap computed their own views above via
         # compute() and would otherwise be the last write to the shared
         # per-asset state.
-        remember_bias(asset.value, current_result.bias)
+        if (not current_result.stale
+                and current_result.confidence > 0.0
+                and current_result.confidence_label != "LOW"):
+            remember_bias(asset.value, current_result.bias)
 
         for scope, result in (
             ("CURRENT", current_result),

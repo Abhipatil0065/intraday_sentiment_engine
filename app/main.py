@@ -101,6 +101,30 @@ async def lifespan(app: FastAPI):
     # the test finishes. Set APP_TESTING=1 (see tests/conftest.py) to opt in.
     _testing = os.environ.get("APP_TESTING", "").strip() in ("1", "true", "yes")
 
+    # Warm bias memory from the database: load the last real biases
+    # (HIGH/MEDIUM confidence, non-stale) so the pipeline doesn't start cold.
+    if not _testing:
+        try:
+            from app.analysis.sentiment_engine import warm_bias_history
+            with SessionLocal() as session:
+                rows = {}
+                for asset in Asset:
+                    snap = session.scalar(
+                        select(SentimentSnapshot)
+                        .where(SentimentSnapshot.asset == asset.value)
+                        .where(SentimentSnapshot.scope == "CURRENT")
+                        .where(SentimentSnapshot.stale == False)
+                        .where(SentimentSnapshot.confidence_label.in_(("HIGH", "MEDIUM")))
+                        .order_by(SentimentSnapshot.computed_at.desc())
+                        .limit(1)
+                    )
+                    if snap:
+                        rows[asset.value] = snap.bias
+                if rows:
+                    warm_bias_history(rows)
+        except Exception as exc:  # noqa: BLE001 - never block startup
+            log.warning("Bias warm-up skipped: %s", exc)
+
     if not _testing and settings.poll_interval_seconds > 0:
         _scheduler = AsyncIOScheduler(timezone=settings.market_timezone)
         _scheduler.add_job(

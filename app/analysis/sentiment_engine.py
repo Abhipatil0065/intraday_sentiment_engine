@@ -253,6 +253,15 @@ def clear_bias_history() -> None:
     _LAST_FLIP_TIME.clear()
 
 
+def warm_bias_history(rows: dict[str, str]) -> None:
+    """Load last real biases (asset -> 'BULLISH'/'BEARISH') into
+    memory, without overwriting any existing entry."""
+    for asset, bias_str in rows.items():
+        if bias_str not in ("BULLISH", "BEARISH"):
+            continue
+        _LAST_BIAS.setdefault(asset, Bias(bias_str))
+
+
 def _ensure_aware(dt: datetime | None) -> datetime | None:
     """Force a datetime to aware UTC.
 

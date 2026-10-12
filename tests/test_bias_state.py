@@ -259,3 +259,25 @@ def test_confidence_never_gates_the_label(monkeypatch):
 def _min_conf() -> float:
     from app.config import settings
     return float(getattr(settings, "bias_min_confidence", 0.25))
+
+
+def test_warm_bias_history_loads_without_overwriting():
+    """warm_bias_history loads real biases without overwriting existing ones."""
+    from app.analysis.sentiment_engine import warm_bias_history, recall_bias, clear_bias_history
+    clear_bias_history()
+
+    # First call sets the bias
+    warm_bias_history({"XAUUSD": "BEARISH"})
+    assert recall_bias("XAUUSD") is Bias.BEARISH
+
+    # Second call with opposite bias does NOT overwrite (setdefault semantics)
+    warm_bias_history({"XAUUSD": "BULLISH"})
+    assert recall_bias("XAUUSD") is Bias.BEARISH
+
+    # NO_BIAS is ignored
+    warm_bias_history({"XAUUSD": "NO_BIAS"})
+    assert recall_bias("XAUUSD") is Bias.BEARISH
+
+    # Different asset works independently
+    warm_bias_history({"XAGUSD": "BULLISH"})
+    assert recall_bias("XAGUSD") is Bias.BULLISH
