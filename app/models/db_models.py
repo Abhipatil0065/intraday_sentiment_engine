@@ -302,3 +302,36 @@ class BiasOutcome(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     snapshot: Mapped[SentimentSnapshot] = relationship(back_populates="outcomes")
+
+
+class DroppedArticle(Base):
+    """A low-impact article deleted at ingest, suppressed for its trading day.
+
+    One row per guid deleted under the one-shot policy. Two jobs:
+
+    1. It makes the deletion SURVIVE the deletion. ``news_article`` is deduped
+       by ``guid``, so once the article row is gone the same guid looks brand
+       new on the next feed poll - the engine would pay for the same headline
+       and delete it again, forever. Checking this table first is what makes
+       "never comes back" true.
+    2. It is SCOPED BY TRADING DAY (``dropped_day``, the market-local date),
+       so a genuinely new day re-admits the story while a source that keeps
+       re-serving it today is skipped for free.
+
+    Purged by ``purge_old_news`` on the same retention window as the articles
+    themselves, so it cannot grow without bound.
+    """
+
+    __tablename__ = "dropped_article"
+
+    guid: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # Market-local trading-day key ("2026-10-13"). A suppression only lasts as
+    # long as its day: the row stops matching once the day rolls over.
+    dropped_day: Mapped[str] = mapped_column(String(12), index=True)
+    title: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(String(160), default="")
+    # Verdict that condemned it, for the audit trail.
+    importance: Mapped[str] = mapped_column(String(24), default="LOW")
+    llm_used: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True)

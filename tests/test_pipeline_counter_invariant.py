@@ -2,7 +2,12 @@
 REAL COUNTER PROOF: pytest that runs the real pipeline loop with a stub LLM.
 
 This test verifies the pipeline counter invariant:
-    llm_new_ok + llm_new_failed + llm_new_skipped_batch == new_today
+    llm_new_ok + llm_new_failed + llm_new_skipped_batch +
+    llm_new_dropped_low == new_today
+
+The last bucket is the one-shot policy: the stub classifies unmatched
+headlines LOW, and those articles are DELETED and suppressed rather than
+stored - still new_today articles, just in their own bucket.
 
 It uses a stub LLM that always succeeds, so we can verify the counters
 without depending on an external LLM provider.
@@ -119,28 +124,40 @@ async def test_pipeline_counter_invariant_with_stub_llm():
                 # Ensure LLM is enabled for this test
                 mock_settings.has_llm = True
                 mock_settings.llm_batch_limit = 100  # High limit so all articles use LLM
-                
+                # One-shot policy flags: read explicitly because the whole
+                # settings object is a mock here and any unknown attribute
+                # would come back truthy.
+                mock_settings.drop_low_impact_articles = True
+                mock_settings.only_llm_verdict_may_drop = True
+
                 stats = await run_once()
-    
-    # Verify the invariant
-    total_llm_accounted = stats.llm_new_ok + stats.llm_new_failed + stats.llm_new_skipped_batch
+
+    # Verify the invariant. Under the one-shot policy the stub's LOW-importance
+    # articles are DELETED, so they land in llm_new_dropped_low - a fifth
+    # mutually exclusive bucket - and the sum must still equal new_today.
+    total_llm_accounted = (stats.llm_new_ok + stats.llm_new_failed +
+                           stats.llm_new_skipped_batch +
+                           stats.llm_new_dropped_low)
     assert total_llm_accounted == stats.new_today, (
         f"Counter invariant violated: llm_new_ok({stats.llm_new_ok}) + "
         f"llm_new_failed({stats.llm_new_failed}) + "
-        f"llm_new_skipped_batch({stats.llm_new_skipped_batch}) = "
+        f"llm_new_skipped_batch({stats.llm_new_skipped_batch}) + "
+        f"llm_new_dropped_low({stats.llm_new_dropped_low}) = "
         f"{total_llm_accounted} != new_today({stats.new_today})"
     )
-    
-    # Also verify backlog counters are separate
-    assert stats.llm_backlog_ok + stats.llm_backlog_failed == stats.llm_backlog_reclassified
-    
+
+    # Backlog re-classification is retired with the one-shot policy: an
+    # article is classified at most once, so there is no second pass to count.
+    assert stats.llm_backlog_reclassified == 0
+
     # Verify we got some articles (stub LLM should classify them all)
     assert stats.fetched > 0, "Should have fetched articles"
     assert stats.new_today >= 0, "Should have processed articles"
-    
+
     print(f"Pipeline stats: fetched={stats.fetched} new={stats.new_today} "
           f"llm_ok={stats.llm_new_ok} llm_fail={stats.llm_new_failed} "
-          f"llm_skip_batch={stats.llm_new_skipped_batch}")
+          f"llm_skip_batch={stats.llm_new_skipped_batch} "
+          f"dropped_low={stats.llm_new_dropped_low}")
 
 
 @pytest.mark.asyncio
@@ -165,17 +182,22 @@ async def test_pipeline_counter_invariant_multiple_ticks():
             with patch('app.services.pipeline.settings') as mock_settings:
                 mock_settings.has_llm = True
                 mock_settings.llm_batch_limit = 100
-                
+                mock_settings.drop_low_impact_articles = True
+                mock_settings.only_llm_verdict_may_drop = True
+
                 for tick in range(3):
                     stats = await run_once()
-                    
+
                     # Verify invariant on each tick
-                    total_llm_accounted = stats.llm_new_ok + stats.llm_new_failed + stats.llm_new_skipped_batch
+                    total_llm_accounted = (
+                        stats.llm_new_ok + stats.llm_new_failed +
+                        stats.llm_new_skipped_batch +
+                        stats.llm_new_dropped_low)
                     assert total_llm_accounted == stats.new_today, (
                         f"Tick {tick+1}: Counter invariant violated: "
                         f"{total_llm_accounted} != {stats.new_today}"
                     )
-                    
+
                     print(f"Tick {tick+1}: fetched={stats.fetched} new={stats.new_today} "
                           f"llm_ok={stats.llm_new_ok} invariant=OK")
 

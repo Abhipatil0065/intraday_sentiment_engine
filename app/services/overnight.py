@@ -21,7 +21,12 @@ shutdown gap into ONE explicit catch-up pass:
   2. Collect every article published (or stored) inside that window.
   3. Send each one through the SAME ``analyze_article()`` LLM path the live
      pipeline uses, banded into HIGH / MEDIUM / LOW impact, and write the
-     verdict back to ``news_article`` + ``asset_impact``.
+     verdict back to ``news_article`` + ``asset_impact``. This is each of those
+     articles' FIRST model verdict - the live path only ever calls once, and
+     this pass fills that one call in.
+  4. A MEDIUM/LOW verdict now has the same outcome it has at ingest: the row is
+     DELETED and its guid suppressed for the trading day (the one-shot
+     policy), so "once the model says low, it is gone" holds here too.
   4. Run one final pipeline pass so every sentiment snapshot is rebuilt from
      the refreshed rows, and write a dated morning brief report.
 
@@ -428,6 +433,9 @@ class ClassificationOutcome:
     # configured, or --dry-run previewing the window). The report then bands
     # stored verdicts and says so, instead of claiming model output.
     llm_called: bool = True
+    # One-shot policy: judged and condemned - deleted and suppressed for the
+    # trading day, exactly as the live ingest path does.
+    dropped_low: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -437,6 +445,7 @@ class ClassificationOutcome:
             "kept_stored": self.kept_stored,
             "breaker_stopped": self.breaker_stopped,
             "rewrites": self.rewrites,
+            "dropped_low": self.dropped_low,
             "llm_called": self.llm_called,
             "errors": self.errors[:10],
         }
@@ -571,11 +580,27 @@ async def classify_articles(session, articles: list[NewsArticle], *,
 
         if llm_ok:
             outcome.llm_judged += 1
-            if not dry_run:
-                _apply_analysis(article, analysis)
-                _rewrite_impacts(session, article, analysis)
-                outcome.rewrites += 1
-                since_commit += 1
+            # ONE-SHOT POLICY: the same fate rule the live ingest path applies.
+            # A MEDIUM/LOW verdict deletes the row and suppresses its guid for
+            # the trading day instead of rewriting it, so "once the model says
+            # low, it is gone" holds on this path too. FinancialJuice session
+            # reports are Section A boxes, never news, and stay exempt.
+            from app.analysis.fj_sessions import is_financial_juice
+            from app.analysis.news_classifier import is_section_b_verdict
+
+            keep = is_section_b_verdict(analysis, llm_used=True) or is_financial_juice(
+                article.source or "")
+            if keep:
+                if not dry_run:
+                    _apply_analysis(article, analysis)
+                    _rewrite_impacts(session, article, analysis)
+                    outcome.rewrites += 1
+                    since_commit += 1
+            elif not dry_run:
+                from app.services.pipeline import _drop_low_impact_article
+
+                _drop_low_impact_article(session, article, analysis)
+                outcome.dropped_low += 1
         else:
             outcome.llm_failed += 1
             log.debug("Morning brief: LLM unavailable (%s) for %r - stored "
@@ -992,7 +1017,7 @@ async def run_boot_catchup(*, force: bool = False, dry_run: bool = False,
             "new_today": stats.new_today,
             "errors": len(stats.errors),
             "llm_new_ok": stats.llm_new_ok,
-            "llm_backlog_ok": stats.llm_backlog_ok,
+            "dropped_low": stats.llm_new_dropped_low,
         }
         if stats.errors:
             report["final_pass"]["error_list"] = stats.errors[:5]

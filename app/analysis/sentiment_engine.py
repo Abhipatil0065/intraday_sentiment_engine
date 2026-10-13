@@ -38,21 +38,28 @@ FINAL WEIGHT FORMULA (item 6 - one magnitude, one event weight)
                   (tier half-lives from config.TIER_HALF_LIVES, scaled by
                    config.ASSET_DECAY_MULTIPLIER - see decay_weight())
 
-    weight       = decay
-                 x relevance          (already independent of the cue score)
-                 x persistence        (derived from EVENT TYPE, not the cue
-                                      total, so it is not a second copy of
-                                      magnitude)
-                 x source_quality
-                 x session_multiplier
-                 x corroboration      (one cluster = one vote, item 4)
+     weight       = decay
+                  x relevance          (already independent of the cue score)
+                  x persistence        (derived from EVENT TYPE, not the cue
+                                       total, so it is not a second copy of
+                                       magnitude)
+                  x source_quality
+                  x session_multiplier
+                  x corroboration      (one cluster = one vote, item 4)
 
-    contribution = weight x strength_multiplier x direction_sign
+     contribution = weight x strength_multiplier x direction_sign
 
-    score        = 100 * (bull - bear) / (bull + bear)        -> -100..+100
+     score        = 100 * (bull - bear) / (bull + bear)        -> -100..+100
 
-    confidence   = f(conviction, breadth, agreement, certainty), gated so a
-                   thin or conflicted read can never report high confidence.
+     confidence   = f(conviction, breadth, agreement, certainty), gated so a
+                    thin or conflicted read can never report high confidence.
+
+   IMPACT GATE (config.only_high_impact_counts, default on)
+     A signal whose impact band is not VERY_HIGH/HIGH gets weight 0 at the ONE
+     choke point (_signal_weight), so it never enters bull/bear, never appears
+     in the driver boxes, never feeds the burst bonus or the tie-break. The
+     bullish/bearish split and the drivers on a card therefore come from
+     high-impact news alone.
 """
 
 from __future__ import annotations
@@ -120,6 +127,24 @@ STRENGTH_MULT = {
     ImpactStrength.MEDIUM: 0.45,
     ImpactStrength.LOW: 0.20,
 }
+
+# --- impact gate (config.only_high_impact_counts) -------------------------
+# The ONE rule for which news may reach a card: with the gate on, only the two
+# top bands are admissible. MEDIUM (0.45) and LOW (0.20) used to contribute at
+# a reduced scale; they are now dropped at the weight choke point, so they can
+# never enter the bullish/bearish totals, the driver boxes, the news-velocity
+# burst bonus or the tie-break. Set the flag false to restore the old scaled
+# behaviour everywhere without touching this module again.
+STRENGTH_GATE = frozenset({ImpactStrength.VERY_HIGH, ImpactStrength.HIGH})
+
+
+def _passes_impact_gate(s: WeightedSignal) -> bool:
+    """False when a signal's impact band may not reach any card."""
+    if not settings.only_high_impact_counts:
+        return True
+    return s.strength in STRENGTH_GATE
+
+
 QUALITY_MULT = {
     "TIER_1_OFFICIAL": 1.00,
     "TIER_2_MAJOR": 0.97,
@@ -600,6 +625,14 @@ def _signal_weight(s: WeightedSignal, now: datetime | None) -> float:
     multiplied separately here. Source quality (QUALITY_MULT, 0.9..1.0)
     is an independent trust factor, never the tier.
     """
+    # Impact gate, BEFORE any other factor: a MEDIUM/LOW impact signal may not
+    # reach a card at all. Returning 0.0 makes every caller drop the signal -
+    # _aggregate() skips weight <= 0, so it never enters bull/bear, never
+    # lands in bull_items/bear_items (hence no driver), and neither
+    # _tie_break_bias() nor _delta_60m() can resurrect it.
+    if not _passes_impact_gate(s):
+        return 0.0
+
     # Coerce a naive ``now`` to aware UTC: ``published_at`` is stored aware,
     # so a naive clock made the age subtraction raise TypeError and silently
     # skipped the freshness weighting below.
@@ -760,7 +793,8 @@ def _aggregate(signals: Sequence[WeightedSignal],
     # marginal FLIP_MARGIN. Conflicting bursts (both sides >= 2 in the
     # window) cancel the bonus entirely - that is a tug-of-war, not a trend.
     burst_signals = [s for s in signals
-                     if s.published_at is not None
+                     if _passes_impact_gate(s)
+                     and s.published_at is not None
                      and (now - _ensure_aware(s.published_at)).total_seconds() <= 900]
     burst_bull = sum(1 for s in burst_signals
                      if s.direction is Direction.BULLISH)

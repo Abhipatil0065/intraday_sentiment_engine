@@ -152,6 +152,25 @@ class Settings(BaseSettings):
     # Phase 1: when false, every signal keeps corroboration=1.0 exactly as it
     # did before the wiring fix, so the change can be switched off in one place.
     corroboration_enabled: bool = True
+    # Impact gate: when true, ONLY VERY_HIGH / HIGH impact news may reach a
+    # card. MEDIUM and LOW impact items used to contribute at a reduced scale
+    # (STRENGTH_MULT 0.45 / 0.20); with this on they are dropped at the single
+    # weight choke point in sentiment_engine._signal_weight, so they can never
+    # enter the bullish/bearish totals, the driver boxes, the burst bonus or
+    # the tie-break. Set false to restore the old scaled behaviour.
+    only_high_impact_counts: bool = True
+    # ONE-SHOT LLM POLICY: a classifier verdict decides the article's FATE at
+    # ingest. HIGH / VERY_HIGH impact - the article-level importance OR any
+    # per-asset impact strength - stays in the Section B news feed. MEDIUM /
+    # LOW is DELETED together with its events and impacts, and its guid is
+    # suppressed for the rest of the trading day, so a source re-serving the
+    # same story cannot make the engine pay for it a second time.
+    drop_low_impact_articles: bool = True
+    # Restrict the delete rule to articles the model actually judged. A
+    # heuristic row (batch cap / circuit breaker / no key) can never reach a
+    # card anyway - only_high_impact_counts already excludes it - so deleting
+    # those too would empty the feed exactly when the model is unavailable.
+    only_llm_verdict_may_drop: bool = True
 
     # ---------------- rolling news window (item 3) ----------------
     # Replaces the "same market-timezone calendar date" gate. A rolling window

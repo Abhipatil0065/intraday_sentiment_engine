@@ -78,6 +78,22 @@ def _reset_test_db():
     Base.metadata.drop_all(bind=_engine)
 
 
+@pytest.fixture(autouse=True)
+def _impact_gate_off_by_default():
+    """
+    Run the suite with the impact gate OFF.
+
+    Most tests predate ``only_high_impact_counts`` and use MEDIUM/LOW signals
+    as generic evidence while asserting something else (decay, tiers,
+    polarity, confidence). They keep that intent with the gate off; the gate
+    itself is covered with the flag ON in tests/test_impact_gate.py.
+    """
+    previous = settings.only_high_impact_counts
+    settings.only_high_impact_counts = False
+    yield
+    settings.only_high_impact_counts = previous
+
+
 def pytest_sessionfinish(session, exitstatus):
     """Clean up the temp DB directory created for this session."""
     try:

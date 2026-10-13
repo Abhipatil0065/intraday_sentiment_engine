@@ -266,6 +266,44 @@ def _add_missing_bias_outcome_table() -> None:
         log.warning("bias_outcome table migration skipped: %s", exc)
 
 
+def _add_missing_dropped_article_table() -> None:
+    """
+    One-shot policy: create ``dropped_article`` when absent.
+
+    Same idempotent pattern as the migrations above - the table is created
+    only when it genuinely does not exist, so an existing database picks up
+    the low-impact suppression log without any data loss. New databases get it
+    for free from ``Base.metadata.create_all`` in ``init_db()``.
+    """
+    from sqlalchemy import text
+
+    try:
+        with engine.begin() as conn:
+            tables = {row[0] for row in conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table'"))}
+            if "dropped_article" in tables:
+                return
+            conn.execute(text(
+                "CREATE TABLE dropped_article ("
+                "guid VARCHAR(64) NOT NULL PRIMARY KEY, "
+                "dropped_day VARCHAR(12) NOT NULL, "
+                "title TEXT DEFAULT '', "
+                "source VARCHAR(160) DEFAULT '', "
+                "importance VARCHAR(24) DEFAULT 'LOW', "
+                "llm_used BOOLEAN DEFAULT 0, "
+                "created_at DATETIME NOT NULL"
+                ")"
+            ))
+            conn.execute(text(
+                "CREATE INDEX ix_dropped_article_day "
+                "ON dropped_article(dropped_day)"))
+            conn.execute(text(
+                "CREATE INDEX ix_dropped_article_created "
+                "ON dropped_article(created_at)"))
+    except Exception as exc:  # noqa: BLE001 - never block startup
+        log.warning("dropped_article table migration skipped: %s", exc)
+
+
 def init_db() -> None:
     """Create tables if they do not exist.
 
@@ -279,6 +317,7 @@ def init_db() -> None:
     _add_missing_bias_snapshot_columns()
     _add_missing_sentiment_columns()
     _add_missing_bias_outcome_table()
+    _add_missing_dropped_article_table()
     log.info("Database ready: %s", _redact(settings.resolved_database_url()))
 
 

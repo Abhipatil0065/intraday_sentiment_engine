@@ -93,6 +93,49 @@ class ArticleAnalysis:
 
 
 # ==========================================================================
+# ONE-SHOT POLICY: may this verdict stay in the Section B feed?
+# ==========================================================================
+# The two impact bands that earn storage. Everything below them is noise: it
+# can never reach a card (sentiment_engine._passes_impact_gate drops it), so
+# under the one-shot policy it is deleted at ingest instead of stored.
+HIGH_IMPORTANCE = (EconomicImportance.HIGH, EconomicImportance.VERY_HIGH)
+HIGH_STRENGTH = (ImpactStrength.HIGH, ImpactStrength.VERY_HIGH)
+
+
+def is_section_b_verdict(analysis: ArticleAnalysis, *,
+                         llm_used: bool = True) -> bool:
+    """
+    True when a classified article may stay in the Section B news feed.
+
+    KEEP when EITHER the article-level ``importance`` OR any per-asset
+    ``strength`` is HIGH/VERY_HIGH. Both fields are read because the classifier
+    answers with both and they can legitimately disagree:
+
+    * ``importance`` MEDIUM/LOW with one HIGH-conviction asset is a REAL
+      driver - keeping it is the only way that headline can drive a card.
+    * ``importance`` HIGH with every asset LOW is a headline the model rates
+      highly but which moves nothing in this engine's universe; storing it
+      would be storage for nothing.
+
+    Three switches can widen the rule back: ``drop_low_impact_articles`` off
+    keeps everything, and ``only_llm_verdict_may_drop`` keeps any row the model
+    did not actually judge (heuristic fallback), because such a row can never
+    reach a card anyway and deleting it would only empty the feed on a day the
+    model is unavailable.
+    """
+    from app.config import settings
+
+    if not settings.drop_low_impact_articles:
+        return True
+    if settings.only_llm_verdict_may_drop and not llm_used:
+        return True
+    if analysis.importance in HIGH_IMPORTANCE:
+        return True
+    return any(a.strength in HIGH_STRENGTH
+               for a in (getattr(analysis, "assets", None) or []))
+
+
+# ==========================================================================
 # Heuristic engine (always available)
 # ==========================================================================
 def _strength_from(cue_magnitude: float, relevance: float,

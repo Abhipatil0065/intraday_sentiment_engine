@@ -27,7 +27,7 @@ from app.analysis.economic_impact import (
 )
 from app.analysis.event_deduplication import EventDeduplicator
 from app.analysis.fj_sessions import FINANCIAL_JUICE_SOURCE
-from app.analysis.news_classifier import analyze_article
+from app.analysis.news_classifier import analyze_article, is_section_b_verdict
 from app.analysis.sentiment_engine import WeightedSignal, remember_bias
 from app.analysis.signal_factory import build_bleed_signal, build_signal
 from app.config import settings
@@ -47,6 +47,7 @@ from app.market.session_detector import (
 from app.models.db_models import (
     ArticleEvent,
     AssetImpact,
+    DroppedArticle,
     NewsArticle,
     NewsEvent,
     PipelineRun,
@@ -208,79 +209,89 @@ def _parse_timestamp_rank(value: str | None) -> float:
     except ValueError:
         return 0.0
 
-# Backlog re-classification: how many heuristic articles to re-process with
-# LLM per tick (low priority, only when circuit breaker is closed).
-LLM_BACKLOG_PER_TICK = 5
+# ONE-SHOT LLM POLICY: articles are classified at MOST ONCE.
+#
+# The backlog re-classification loop that used to live here (re-sending up to
+# 5 previously-heuristic articles per tick) is GONE. It re-sent rows the
+# ingest path had already judged, and it re-classified them WITHOUT the
+# one-shot fate rule - a row it called LOW would have stayed in the feed
+# instead of being deleted and suppressed. The single LLM call an article
+# gets is the one at ingest (see ``_ingest_article``), where the verdict also
+# decides whether the row is stored in Section B or deleted.
+#
+# ``overnight.classify_articles`` keeps its catch-up pass for rows the
+# pipeline never got a model verdict for (batch cap / circuit breaker), and
+# applies the same keep-or-delete rule when it judges them.
 
 
-async def _reclassify_backlog(session, stats, tick_start: datetime) -> int:
+def _current_market_day_key() -> str:
+    """The market-local trading day as the suppression table's key."""
+    return T.market_today().isoformat()
+
+
+def _guid_suppressed(session, guid: str) -> bool:
     """
-    Re-classify up to LLM_BACKLOG_PER_TICK articles that were previously
-    processed with heuristics (llm_used=false), newest first.
+    True when this guid was deleted earlier TODAY under the one-shot policy.
 
-    Only runs when:
-    - LLM is configured (settings.has_llm)
-    - Circuit breaker is closed (llm_client.circuit_breaker().is_open == False)
-    - There are articles with llm_used=false and is_today=true
-    - Articles must have been created BEFORE this tick started (to avoid
-      re-processing articles that were just batch-capped in this tick).
+    The check that makes "never comes back" real. ``news_article`` is deduped
+    on ``guid``, so once a dropped article's row is gone the guid looks brand
+    new on the next feed poll; without this the engine would pay for the same
+    headline and delete it again on every tick.
 
-    Returns the number of articles successfully re-classified.
+    Scoped to the current trading day, so a new day re-admits the story.
     """
-    if not settings.has_llm:
-        return 0
-
-    cb = llm_client.circuit_breaker()
-    if cb.is_open:
-        log.debug("Circuit breaker open - skipping backlog re-classification")
-        return 0
-
-    # Find articles processed with heuristics today, newest first
-    # Exclude articles created in the current tick (batch-capped articles)
-    articles = session.execute(
-        select(NewsArticle)
-        .where(
-            and_(
-                NewsArticle.llm_used == False,
-                NewsArticle.is_today == True,
-                NewsArticle.created_at < tick_start,
-            )
+    found = session.scalar(
+        select(DroppedArticle.dropped_day).where(
+            DroppedArticle.guid == guid,
+            DroppedArticle.dropped_day == _current_market_day_key(),
         )
-        .order_by(NewsArticle.published_at_utc.desc())
-        .limit(LLM_BACKLOG_PER_TICK)
-    ).scalars().all()
+    )
+    return found is not None
 
-    if not articles:
-        return 0
 
-    log.info("Re-classifying %d backlog articles with LLM", len(articles))
-    reclassified = 0
+def _drop_low_impact_article(session, row, analysis,
+                             stats: "IngestStats | None" = None) -> None:
+    """
+    Delete one low-impact article and suppress its guid for the trading day.
 
-    for article in articles:
-        try:
-            analysis, llm_ok, skip_reason = await analyze_article(article.title, article.body or "")
-            if llm_ok:
-                # Update the article with new LLM analysis
-                article.category = analysis.category.value
-                article.importance = analysis.importance.value
-                article.report_kind = analysis.report_kind.value
-                article.verification = analysis.verification.value
-                article.relevance_score = analysis.relevance_score
-                article.analysis_mode = analysis.mode
-                article.analysis_note = analysis.note
-                article.llm_used = True
-                reclassified += 1
-                stats.llm_backlog_ok += 1
-            else:
-                stats.llm_backlog_failed += 1
-        except Exception as exc:  # noqa: BLE001 - isolate per-article
-            log.warning("Backlog re-classification failed for %s: %s", article.guid[:8], exc)
-            stats.llm_backlog_failed += 1
+    Called from every path that has just obtained a MEDIUM/LOW verdict from a
+    real model call (the ingest path in ``_ingest_article`` and the overnight
+    catch-up pass). Deleting the ``NewsArticle`` row cascades its
+    ``asset_impact`` and ``article_event`` links (both declare
+    ``cascade="all, delete-orphan"``), and no ``NewsEvent`` cluster is created
+    for it here at all.
 
-    if reclassified:
-        log.info("Successfully re-classified %d backlog articles", reclassified)
+    The suppression row is flushed in the same transaction, so a second copy of
+    the same story inside the same tick is already covered.
 
-    return reclassified
+    ``stats`` may be None for callers that keep their own tally (the overnight
+    pass); the row is deleted and suppressed either way.
+    """
+    if stats is not None:
+        stats.llm_new_dropped_low += 1
+        # A deleted article was still processed: new_today counts articles the
+        # pipeline judged this tick, not only the ones it kept.
+        stats.new_today += 1
+    log.info(
+        "ONE-SHOT DROP: %r guid=%s importance=%s mode=%s - deleted and "
+        "suppressed for trading day %s",
+        (row.title or "")[:80], row.guid, analysis.importance.value,
+        analysis.mode, _current_market_day_key(),
+    )
+    session.delete(row)
+    # MERGE, not add: the same guid can be condemned on two different trading
+    # days while its first suppression row is still inside the retention
+    # window. A plain INSERT would then break the guid primary key; a merge
+    # simply refreshes the row to the new day.
+    session.merge(DroppedArticle(
+        guid=row.guid,
+        dropped_day=_current_market_day_key(),
+        title=(row.title or "")[:300],
+        source=row.source or "",
+        importance=analysis.importance.value,
+        llm_used=bool(row.llm_used),
+    ))
+    session.flush()
 
 
 def runtime_state() -> dict:
@@ -432,7 +443,14 @@ class IngestStats:
     llm_new_failed: int = 0
     llm_new_skipped_batch: int = 0
     llm_new_skipped_breaker: int = 0
-    # Backlog re-classification outcomes (separate from new articles)
+    # One-shot policy: the model DID judge it and the verdict was MEDIUM /
+    # LOW, so the article was deleted and suppressed for the trading day.
+    llm_new_dropped_low: int = 0
+    # Articles skipped without any model call because their guid was already
+    # suppressed earlier today (a source re-serving a dropped story).
+    skipped_dropped: int = 0
+    # Backlog re-classification - RETIRED with the one-shot policy. The fields
+    # stay (schema back-compat, always 0) so no reader has to change today.
     llm_backlog_ok: int = 0
     llm_backlog_failed: int = 0
     llm_backlog_reclassified: int = 0
@@ -443,16 +461,21 @@ class IngestStats:
     purged: dict = field(default_factory=dict)
 
     def verify_new_article_counters(self) -> bool:
-        """Assert that the four new-article LLM buckets sum to new_today.
+        """Assert that the five new-article LLM buckets sum to new_today.
 
-        The buckets are mutually exclusive: each new article is counted
-        in exactly one of llm_new_ok / llm_new_failed /
-        llm_new_skipped_breaker / llm_new_skipped_batch. Their sum must
-        therefore equal new_today exactly.
+        The buckets are mutually exclusive: each new article is counted in
+        exactly one of llm_new_ok / llm_new_failed / llm_new_skipped_breaker /
+        llm_new_skipped_batch / llm_new_dropped_low. Their sum must therefore
+        equal new_today exactly.
+
+        ``llm_new_dropped_low`` is the one-shot fate rule: a model verdict of
+        MEDIUM/LOW impact is still a verdict, and the article still counts -
+        it just counts as DELETED.
         """
         total = (self.llm_new_ok + self.llm_new_failed +
                  self.llm_new_skipped_batch +
-                 self.llm_new_skipped_breaker)
+                 self.llm_new_skipped_breaker +
+                 self.llm_new_dropped_low)
         return total == self.new_today
 
 
@@ -529,9 +552,25 @@ def _fj_session_report_is_admissible(published: datetime,
 
 async def _ingest_article(art: RawArticle, session, stats: IngestStats,
                           use_llm: bool = True):
-    """Apply the TODAY filter, classify, cluster and store one article."""
+    """Apply the TODAY filter, classify, cluster and store one article.
+
+    ONE-SHOT: this is the only place an article is ever classified, and the
+    verdict also decides its fate - HIGH/VERY_HIGH impact is stored in the
+    Section B feed, MEDIUM/LOW is deleted here and suppressed for the rest of
+    the trading day (``_drop_low_impact_article`` / ``_guid_suppressed``).
+    """
     published, updated, tz_label = _parse_article_time(art)
     is_fj = _is_fj_session_report_sync(art)
+
+    # --- ONE-SHOT SUPPRESSION ---
+    # A guid deleted earlier today is skipped before ANY work is done: no
+    # model call, no row, no counters. FinancialJuice session reports are
+    # never dropped by the policy, so they are never suppressed either.
+    if not is_fj and _guid_suppressed(session, art.guid):
+        stats.skipped_dropped += 1
+        log.debug("ONE-SHOT SKIP (suppressed today): %r guid=%s",
+                  (art.title or "")[:80], art.guid)
+        return None
 
     # --- ROLLING-WINDOW FILTER (improvement item 3) ---
     # Replaces the "same market-timezone calendar date" gate. Admitting news on
@@ -613,13 +652,26 @@ async def _ingest_article(art: RawArticle, session, stats: IngestStats,
         analysis.note = "LLM batch cap reached; heuristic used for this article."
         llm_ok = False
         skip_reason = "batch_cap"
+
+    # --- ONE-SHOT FATE: keep in Section B, or delete and suppress ---
+    # Decided BEFORE the outcome bucket is chosen, so the buckets stay
+    # mutually exclusive: a dropped article is counted in exactly one of them
+    # (llm_new_dropped_low), never also in llm_new_ok / llm_new_failed.
+    # Runs before any event/impact row is created, so a dropped article leaves
+    # no cluster behind. Exempt: the FinancialJuice session reports (Section A)
+    # are the prep/wrap boxes, not news, and the policy does not apply.
+    if not is_fj and not is_section_b_verdict(analysis, llm_used=llm_ok):
+        _drop_low_impact_article(session, row, analysis, stats)
+        return None
+
     if use_llm:
-        # The four new-article buckets are MUTUALLY EXCLUSIVE: every new
-        # article lands in exactly one of llm_new_ok / llm_new_failed /
-        # llm_new_skipped_breaker / llm_new_skipped_batch, and their sum
-        # must equal new_today. A circuit-breaker skip is its own bucket,
-        # NOT a member of llm_new_failed - counting it in both double-counted
-        # the article and broke the invariant.
+        # The new-article buckets are MUTUALLY EXCLUSIVE: every new article
+        # lands in exactly one of llm_new_ok / llm_new_failed /
+        # llm_new_skipped_breaker / llm_new_skipped_batch (or, under the
+        # one-shot policy, llm_new_dropped_low above), and their sum must
+        # equal new_today. A circuit-breaker skip is its own bucket, NOT a
+        # member of llm_new_failed - counting it in both double-counted the
+        # article and broke the invariant.
         if llm_ok:
             stats.llm_new_ok += 1
         elif skip_reason == "circuit_breaker":
@@ -1410,10 +1462,13 @@ def purge_old_news(session, *, keep_days: int | None = None) -> dict:
     is a separate cluster row that many articles share - so events left with no
     articles are swept separately, otherwise they would accumulate forever.
 
+    ``dropped_article`` (the one-shot suppression log) is trimmed on the same
+    window: a suppression only has to outlive the trading day that wrote it.
+
     Never raises: a retention failure must not take the pipeline down.
     """
     keep = settings.news_retention_days if keep_days is None else keep_days
-    result = {"articles": 0, "events": 0, "cutoff": None}
+    result = {"articles": 0, "events": 0, "dropped_articles": 0, "cutoff": None}
     if keep <= 0:
         return result  # purging disabled
 
@@ -1442,6 +1497,14 @@ def purge_old_news(session, *, keep_days: int | None = None) -> dict:
                 delete(NewsArticle).where(NewsArticle.id.in_(ids))
             )
             result["articles"] = len(ids)
+
+        # One-shot suppression rows follow the same window. A suppression only
+        # has to outlive the trading day that wrote it; keeping them past the
+        # retention window would let the table grow without bound for no gain.
+        stale_drops = session.execute(
+            delete(DroppedArticle).where(DroppedArticle.created_at < cutoff_utc)
+        )
+        result["dropped_articles"] = stale_drops.rowcount or 0
 
         # FLUSH BEFORE looking for orphans. This purge runs in the same session
         # and transaction as ingestion, so brand-new articles have ArticleEvent
@@ -1651,11 +1714,13 @@ async def run_once() -> IngestStats:
             _news_since_update += len(new_articles)
             stats.articles_new = len(new_articles)
 
-            # 1b) BACKLOG RE-CLASSIFICATION --------------------------------
-            # Re-classify up to 5 articles per tick that were previously
-            # processed with heuristics (llm_used=false), newest first.
-            # Only runs when LLM is configured and circuit breaker is closed.
-            stats.llm_backlog_reclassified = await _reclassify_backlog(session, stats, started)
+            # 1b) ONE-SHOT POLICY ----------------------------------------------
+            # Nothing to do here: the re-classification loop that used to run
+            # at this point (up to 5 previously-heuristic articles per tick) is
+            # retired. An article is classified exactly once, in the loop
+            # above, and that verdict also decides whether it is stored or
+            # deleted - so there is no second pass to make. The same rule is
+            # applied by the overnight catch-up pass in services/overnight.py.
 
             # 1c) RETENTION -------------------------------------------------
             # Runs BEFORE alerts and the sentiment recompute so both work
@@ -1716,11 +1781,11 @@ async def run_once() -> IngestStats:
         log.info(
             "Pipeline complete: fetched=%d new=%d rejected=%d dup=%d "
             "llm_new_ok=%d llm_new_fail=%d llm_new_skip_batch=%d llm_new_skip_breaker=%d "
-            "llm_backlog_ok=%d llm_backlog_fail=%d llm_backlog_reclassified=%d purged=%d unroutable=%d",
+            "dropped_low=%d skipped_dropped=%d purged=%d unroutable=%d",
             stats.fetched, stats.new_today, stats.rejected, stats.duplicates,
             stats.llm_new_ok, stats.llm_new_failed, stats.llm_new_skipped_batch,
             stats.llm_new_skipped_breaker,
-            stats.llm_backlog_ok, stats.llm_backlog_failed, stats.llm_backlog_reclassified,
+            stats.llm_new_dropped_low, stats.skipped_dropped,
             stats.purged.get("articles", 0),
             stats.skipped_unroutable,
         )

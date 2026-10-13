@@ -75,11 +75,12 @@ async def _scheduled_tick() -> None:
         stats = await asyncio.to_thread(_run_pipeline_sync)
         log.info(
             "Tick %s done: fetched=%d new=%d rejected=%d dup=%d "
-            "unroutable=%d llm_new_ok=%d llm_new_fail=%d llm_backlog_ok=%d llm_backlog_fail=%d errors=%d purged=%d",
+            "unroutable=%d llm_new_ok=%d llm_new_fail=%d dropped_low=%d "
+            "skipped_dropped=%d errors=%d purged=%d",
             started, stats.fetched, stats.new_today, stats.rejected,
             stats.duplicates, stats.skipped_unroutable,
             stats.llm_new_ok, stats.llm_new_failed,
-            stats.llm_backlog_ok, stats.llm_backlog_failed,
+            stats.llm_new_dropped_low, stats.skipped_dropped,
             len(stats.errors), stats.purged.get("articles", 0),
         )
         if stats.errors:

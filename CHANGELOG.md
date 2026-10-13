@@ -4,6 +4,90 @@ All notable changes to the Intraday News Sentiment & Market Impact Engine.
 
 ---
 
+## ONE LLM CALL PER ARTICLE, THEN KEEP OR DELETE — one-shot policy (2026-10-13)
+
+### Feature — an article is classified at most once, and the verdict decides its fate
+- **Files:** `app/config.py` (`drop_low_impact_articles`, `only_llm_verdict_may_drop`),
+  `app/analysis/news_classifier.py` (`is_section_b_verdict`),
+  `app/services/pipeline.py` (`_ingest_article`, `_guid_suppressed`,
+  `_drop_low_impact_article`), `app/models/db_models.py` (`DroppedArticle`),
+  `app/database.py` (`_add_missing_dropped_article_table`),
+  `app/services/overnight.py`, `tests/test_one_shot_llm_policy.py` (new)
+- **What it does:** The single LLM call an article gets is the one at ingest,
+  and that verdict also decides its fate:
+  * **HIGH / VERY_HIGH impact** (article-level `importance` OR any per-asset
+    `strength`) is stored in the Section B news feed exactly as before - no
+    new storage anywhere, the feed already is Section B.
+  * **MEDIUM / LOW is DELETED** together with its events and impacts (the
+    cascade removes `asset_impact` / `article_event`), and its guid is
+    **suppressed for the rest of the trading day**, so a source re-serving the
+    same story is skipped with no model call, no row and no counters.
+- **Why the suppression table was needed:** `news_article` dedupes on `guid`,
+  so once a dropped row is gone the guid looks brand new on the next feed
+  poll. Without `DroppedArticle` the engine would pay for - and delete - the
+  identical headline on every tick forever. The table is scoped by trading day
+  (`dropped_day`), so a new day re-admits the story, and it is trimmed by
+  `purge_old_news` on the same retention window as the articles themselves.
+- **One call, ever:** the backlog re-classification loop (up to 5
+  previously-heuristic articles re-sent per tick) is retired - it re-sent rows
+  the ingest path had already handled and re-classified them outside this
+  policy. `overnight.classify_articles` keeps its catch-up pass for rows the
+  pipeline never got a verdict for (batch cap / breaker) and applies the same
+  keep-or-delete rule, so each article still spends exactly one call.
+- **Two guard rails:** FinancialJuice session reports (Section A prep/wrap
+  boxes) are never dropped, and rows without a model verdict (heuristic
+  fallback) are never dropped either - they can never reach a card, so deleting
+  them would only empty the feed on a day the model is unavailable. Either
+  guard is configurable.
+- **Counters:** `IngestStats` gains a fifth mutually exclusive bucket,
+  `llm_new_dropped_low` (plus `skipped_dropped` for free skips);
+  `verify_new_article_counters()` and both counter test files now sum five
+  buckets. The tick logs print `dropped_low=` / `skipped_dropped=`.
+- **Tests:** `tests/test_one_shot_llm_policy.py` drives the real
+  `_ingest_article` with a stubbed classifier: delete+suppress on a LOW
+  verdict, no second model call for a suppressed guid, re-admission on a new
+  trading day, heuristic rows kept, FJ reports exempt, flags off, retention
+  purge. Full suite: 1194 passed.
+
+---
+
+## ONLY HIGH-IMPACT NEWS REACHES A CARD — impact gate (2026-10-13)
+
+### Feature — MEDIUM/LOW impact news no longer counts towards any card
+- **Files:** `app/config.py` (`only_high_impact_counts`),
+  `app/analysis/sentiment_engine.py` (`STRENGTH_GATE`, `_passes_impact_gate`,
+  `_signal_weight`, `_aggregate`), `tests/test_impact_gate.py` (new)
+- **What it does:** The bullish/bearish split and the BULLISH DRIVERS /
+  BEARISH DRIVERS boxes on every card are built from the same two totals
+  (`bull`, `bear`) in `sentiment_engine.compute()`. `only_high_impact_counts`
+  (default **true**) drops every signal whose impact band is not `VERY_HIGH`
+  or `HIGH` at the ONE weight choke point — `_signal_weight()` now returns
+  `0.0` for them, and `_aggregate()` already skips weight <= 0, so such a
+  signal can never enter the totals, never appear in `bull_drivers` /
+  `bear_drivers`, never be named as the `conflict`, never feeds the
+  news-velocity burst bonus, and never breaks a tie-break. Verified on a mixed
+  bundle of classified headlines: three HIGH/VERY_HIGH bullish plus two LOW
+  bearish moved gold from 95%/5% (bearish box listing the two LOW headlines)
+  to 100%/0% with an empty bearish box.
+- **Scope:** the gate reads the per-asset **impact band**
+  (`AssetImpact.strength`, what actually scales the card), not the
+  article-level `importance`. The burst counts — which read the raw signal
+  list rather than `_signal_weight` — were the one bypass and are now filtered
+  by the same gate, so three fresh MEDIUM headlines no longer multiply their
+  side by 1.2x/1.3x. With the flag false the old scaled behaviour
+  (`STRENGTH_MULT` 0.45 / 0.20) returns unchanged.
+- **Thin days:** when nothing in the window is HIGH/VERY_HIGH the totals are
+  zero, so the card takes the existing weak-evidence branch (empty driver
+  boxes, label carried forward, split near 50/50) instead of inventing weight
+  for noise. `MIN_TOTAL_WEIGHT` is unchanged.
+- **Tests:** `tests/test_impact_gate.py` covers both sides of the flag. The
+  suite's autouse fixture (`tests/conftest.py`) runs existing tests with the
+  gate **off**, because they predate it and use MEDIUM signals as generic
+  evidence while asserting decay/tier/polarity behaviour. Full suite: 1180
+  passed.
+
+---
+
 ## NEWS IMPACT NO LONGER FADES IN MINUTES — decay retune + per-asset clocks (2026-10-13)
 
 ### Fix — event-tier half-lives were sized in minutes, not the trading day
