@@ -337,6 +337,10 @@ class Settings(BaseSettings):
     # ---------------- price confirmation ----------------
     price_data_enabled: bool = Field(default=False, validation_alias="PRICE_DATA_ENABLED")
     price_api_base_url: str = "https://api.coinbase.com/v2"
+    # TradingView leg of the price confirmation: GOLD/SILVER via OANDA
+    # XAUUSD/XAGUSD (tvDatafeed, free/keyless). Independent toggle so the
+    # metals feed can be disabled without turning the BTC (Coinbase) one off.
+    price_tv_enabled: bool = Field(default=True, validation_alias="PRICE_TV_ENABLED")
     # Market data proxy polling interval (seconds). Used by market_data.py
     # to poll DXY/TIP for synthetic STRONG_USD/WEAK_USD and REAL_YIELDS signals.
     market_data_poll_seconds: int = Field(default=60, validation_alias="MARKET_DATA_POLL_SECONDS")
