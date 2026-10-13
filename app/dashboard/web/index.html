@@ -59,7 +59,10 @@
    .conf-badge.high{border-color:var(--bull);color:var(--bull)}
    .conf-badge.medium{border-color:#d29922;color:#d29922}
    .verdict.weak{opacity:.45}
-   .split-weak{opacity:.55}
+   /* No .split-weak rule: the bull/bear boxes NEVER dim with confidence. They
+      keep the same green/red at every confidence level - only the verdict chip
+      above marks a weak or stale call. The boxes answer "what is the split",
+      and that answer does not change with confidence. */
    main{max-width:1500px;width:100%;margin:0 auto;padding:14px 18px 26px}
   h2{font-size:11px;letter-spacing:2px;color:var(--dim);font-weight:700;
      margin:22px 0 9px;display:flex;gap:9px;align-items:baseline}
@@ -657,9 +660,16 @@ function prepCard(a){
     +'</div>'
     +'<div class="msub">expected / forward-looking setup</div>'
     +mbar(b)
-    /* Second arg keys the flip tracking to this asset, so every card keeps its
-       own independent flip time. */
-    +(isWeak?'<div class="split-weak">'+msplit(b,a.symbol)+'</div>':msplit(b,a.symbol))
+     /* Second arg keys the flip tracking to this asset, so every card keeps its
+        own independent flip time.
+
+        Drawn at FULL strength on every card. A LOW-confidence or stale card
+        used to dim the whole row through a .split-weak wrapper, which read as
+        the boxes themselves changing colour with confidence; that wrapper is
+        gone. Only the verdict chip above carries the weak state
+        (.verdict.weak) - the green/red boxes keep the same colour at every
+        confidence level, including a stale one. */
+     +msplit(b,a.symbol)
     +'<div class="mdrv">'
     +mnote('bull','BULLISH DRIVERS',b.bull_drivers,3)
     +mnote('bear','BEARISH DRIVERS',b.bear_drivers,3)+'</div>'
@@ -712,8 +722,9 @@ function equityCard(){
     +(e.stale?' &middot; stale':'')
     +(e.contradiction_detected?' &middot; conflicting headlines':'')+'</div>'
     +mbar(e)
-    +(weak?'<div class="split-weak">'+msplit(e,'EQUITY:'+(region||''))+'</div>'
-          :msplit(e,'EQUITY:'+(region||'')))
+    /* Same rule as the asset cards: the boxes never dim with confidence. The
+       weak state stays on the verdict chip only. */
+    +msplit(e,'EQUITY:'+(region||''))
     +'<div class="mdrv">'
     +mnote('bull','BULLISH DRIVERS',bulls,3)
     +mnote('bear','BEARISH DRIVERS',bears,3)+'</div>'
