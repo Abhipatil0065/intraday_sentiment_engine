@@ -4,6 +4,106 @@ All notable changes to the Intraday News Sentiment & Market Impact Engine.
 
 ---
 
+## NEWS IMPACT NO LONGER FADES IN MINUTES — decay retune + per-asset clocks (2026-10-13)
+
+### Fix — event-tier half-lives were sized in minutes, not the trading day
+- **File:** `app/config.py` (`TIER_HALF_LIVES`)
+- **What it does:** The DAY TRADING retune (0.5/0.25/0.1h) halved a
+  headline's weight every 30/15/6 minutes, so a 12:30 UTC NFP print sat at
+  **6%** weight by the US close and an 08:45 UTC ECB speech was at 0.4% by the
+  13:30 US window — gold kept trading both for hours. Half-lives are now sized
+  to how long each tier actually drives price intraday:
+  `TIER_1 = 1.5h` (63% at 2h, 40% at 4h), `TIER_2 = 0.75h` (47% at 1h),
+  `TIER_3 = 0.25h` (25% at 30min, 6% at 1h — dead within the hour, but alive
+  long enough to combine with same-day cluster corroboration).
+
+### Feature — per-asset decay multipliers (GOLD/SILVER/BITCOIN/EQUITY)
+- **File:** `app/config.py` (`ASSET_DECAY_MULTIPLIER`),
+  `app/analysis/sentiment_engine.py` (`decay_weight`, `_signal_weight`)
+- **What it does:** `decay_weight()` takes the signal's asset and scales its
+  tier half-life by `ASSET_DECAY_MULTIPLIER`: `BITCOIN ×1.25` (24/7 — no
+  overnight reset, so a 03:00 UTC headline still matters at the London open),
+  `EQUITY ×0.75` (cash equities ~16h/day; earnings reacts pre-market and fades
+  into the close), `GOLD/SILVER ×1.0`. The equity card inherits it
+  automatically: `equity_card.py` already proxies signals with
+  `asset=Asset.EQUITY` before scoring. Only one call site changed.
+
+### Docs — the decay comments were lying
+- **Files:** `app/config.py`, `app/analysis/sentiment_engine.py`,
+  `.env.example`, `AUDIT.md`
+- **What it does:** Comments/docstrings claimed "TIER_1~6h, TIER_2~2h,
+  TIER_3~1h" (code) and "TIER_1~30min..." — both wrong. Now state the real
+  values. The dead per-category `DECAY_HALF_LIVES` fields are marked
+  SUPERSEDED (nothing reads them), and `test_decay_applied_once_weight_ratio`
+  now derives its expected factors from `TIER_HALF_LIVES` instead of
+  hardcoded exponents, so the next retune cannot break the test.
+
+---
+
+## SESSION-AWARE EQUITY CARD — switch the moment a session opens
+
+### Bug fix — session overlap was decided in list order, not priority
+- **File:** `app/market/session_detector.py` (`detect_session`)
+- **What it does:** `SESSION_WINDOWS` is declared `[ASIA, EUROPE, US]` and
+  `detect_session` walked it in that order, so the FIRST-matching session won
+  every shared hour. Asia's 20:00-04:00 tail swallowed 03:00-04:00 (Europe's
+  first hour) and Europe's 03:00-12:00 window swallowed 08:00-12:00 — the
+  whole first half of the US session. The windows are now checked in
+  priority order (US, then EUROPE, then ASIA), matching the comment that was
+  already in the function: the newest/highest-liquidity session wins, so the
+  switch happens when the next session OPENS. Asia owns 20:00-03:00,
+  Europe owns 03:00-08:00, US owns 08:00-17:00, 17:00-20:00 is off hours and
+  freezes on the previous session.
+
+### Bug fix — `next_session()` returned the current session
+- **File:** `app/market/session_detector.py` (`next_session`)
+- **What it does:** `SESSION_ORDER[idx % len]` is just `SESSION_ORDER[idx]`,
+  so the "next" label always echoed the current session (e.g. EUROPE ->
+  EUROPE). Now advances one step (`idx + 1`), wrapping to ASIA in OFF_HOURS.
+
+### Robustness — `equity_title(OFF_HOURS)` is reference-time aware
+- **File:** `app/market/session_detector.py` (`equity_title`)
+- **What it does:** OFF_HOURS resolves through `previous_session(now)` for the
+  passed reference time instead of wall-clock `now`, so the fallback title is
+  deterministic off-hours (US EQUITY) rather than depending on when it runs.
+
+### Dashboard — the 4th strip card is the SESSION-aware equity card
+- **File:** `app/dashboard/web/index.html` (`equityCard`, `renderPrepStrip`)
+- **What it does:** Item 2 made EQUITY a fourth asset, so the top strip was
+  rendering the EQUITY asset's MARKET PREP card ("S&P 500"), which aggregates
+  every region's news at once and can never follow a session. The strip now
+  renders the three metal/crypto prep cards plus the session-aware card from
+  the server's `equity` block: title `ASIA EQUITY` / `EUROPE EQUITY` /
+  `US EQUITY` with `NIKKEI / HSI`, `DAX / STOXX50`, `SPX / NDX`, verdict and
+  drivers re-scored for the active region. Flip state is keyed
+  `EQUITY:<region>` so each region keeps its own clock (mirroring the
+  backend's per-region bias state), and the card gains a region-coloured
+  accent (`.mcard.equity.region-asia|europe|us`). The strip grid moves to
+  four columns; the existing responsive steps are unchanged.
+
+### Latency — the card no longer waits for the next tick to switch
+- **Files:** `app/services/pipeline.py`, `app/main.py` (`build_payload`)
+- **What it does:** the equity card is rebuilt during the pipeline recompute,
+  which only runs every `poll_interval_seconds` (180s), so a session boundary
+  used to show the previous region for up to three minutes. The pipeline now
+  keeps the signal list behind the card (`current_equity_signals()`), and
+  `build_payload` re-scores the card from it whenever the active region
+  differs from the cached card's region. The switch therefore lands within
+  one dashboard poll (30s) of the session opening; a rebuild failure keeps
+  the last good card and never breaks the payload.
+
+### Tests
+- `tests/test_analysis.py`: session detection now pins the overlap rule at the
+  boundaries (03:00 -> EUROPE, 08:00 -> US while Europe runs, 17:00-20:00 ->
+  OFF_HOURS); `test_session_ordering` asserts prev/current/next per hour and
+  that `next_session` is never the current session.
+- `tests/test_equity_card.py`: end-to-end session switch — with all three
+  regions present in one signal pool, the card follows
+  `equity_session(now)` at 21:00/02:00 (ASIA), 03:00/07:00 (EUROPE) and
+  08:00/14:00 (US), including title/symbol and one-region-per-card isolation.
+
+---
+
 ## BIAS CALCULATION IMPROVEMENTS — Round 2
 
 ### Improvement 1 — News velocity burst bonus

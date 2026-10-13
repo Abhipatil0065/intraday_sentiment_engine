@@ -240,6 +240,11 @@ class Settings(BaseSettings):
 
     # ---------------- decay half-lives in hours, by category (item 7) ---
     # Exponential decay: weight = 0.5 ** (age_hours / half_life).
+    # SUPERSEDED (Task 5a, retuned 2026-10-13): decay now runs on the
+    # per-event-tier table TIER_HALF_LIVES scaled by ASSET_DECAY_MULTIPLIER
+    # (module level, bottom of this file; see sentiment_engine.decay_weight).
+    # These per-category fields are kept only for backward compatibility with
+    # old .env files - nothing in the scoring path reads them.
     decay_default_hours: float = 6.0
     decay_half_lives: str = (
         "Central Bank=3.0,Interest Rates=3.0,Inflation=3.0,Employment=3.0,"
@@ -869,13 +874,38 @@ TIER_MULTIPLIERS = {
 
 # Task 5a: intraday recency decay half-lives by EVENT TIER (not category).
 # Exponential decay: weight = 0.5 ** (age_hours / half_life).
-# Tier 1 ~30min, Tier 2 ~15min, Tier 3 ~6min (DAY TRADING optimized).
+# Tier 1 ~90min, Tier 2 ~45min, Tier 3 ~15min.
+# Retuned 2026-10-13: the DAY TRADING values (0.5/0.25/0.1h) faded real news
+# out in minutes - a 12:30 UTC NFP print was at 6% weight by the US close,
+# even though gold trades that print for hours. Tier 2 speeches from London
+# open were dead by the 13:30 US window. Half-lives are now sized to how long
+# each event tier actually drives price intraday:
+#   TIER_1 (CPI/FOMC/NFP/geopolitical): 1.5h -> 63% at 2h, 40% at 4h
+#   TIER_2 (speeches/secondary data):    0.75h -> 47% at 1h, 28% at 2h
+#   TIER_3 (commentary/previews):        0.25h -> 25% at 30min, 6% at 1h
 # TRADING_DAY_CUTOFF_HOURS: any item older than this gets weight 0.
-# DAY TRADING: faster decay, shorter cutoff (was 1.0/0.5/0.25/4.0)
 TIER_HALF_LIVES = {
-    "TIER_1": 0.5,
-    "TIER_2": 0.25,
-    "TIER_3": 0.1,
+    "TIER_1": 1.5,
+    "TIER_2": 0.75,
+    "TIER_3": 0.25,
+}
+
+# Per-asset decay multipliers applied ON TOP of the tier half-life
+# (half_life *= ASSET_DECAY_MULTIPLIER[asset]). Decay is about TIME, and the
+# four instruments have genuinely different clocks:
+#   GOLD / SILVER: 22h/day with a daily break; the 1.0 baseline matches the
+#                  tier table above.
+#   BITCOIN:       24/7 - no overnight reset, so a 03:00 UTC headline still
+#                  matters at the London open. Longer half-life (+25%).
+#   EQUITY:       cash equities trade ~16h/day; earnings and sector news react
+#                 pre-market and fade into the close. Shorter half-life (-25%).
+# The equity card picks this up automatically: it proxies signals with
+# asset=Asset.EQUITY before calling sentiment_engine.compute().
+ASSET_DECAY_MULTIPLIER = {
+    "GOLD": 1.0,
+    "SILVER": 1.0,
+    "BITCOIN": 1.25,
+    "EQUITY": 0.75,
 }
 
 # Hard cap on article age, independent of the window. Reads from the

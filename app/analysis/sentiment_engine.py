@@ -34,7 +34,9 @@ FINAL WEIGHT FORMULA (item 6 - one magnitude, one event weight)
                    (previously counted three times: strength, persistence and
                    importance were all derived from the same cue total)
 
-    decay        = 0.5 ** (age_hours / half_life(category))      <- item 7
+    decay        = 0.5 ** (age_hours / half_life(tier, asset))   <- item 7
+                  (tier half-lives from config.TIER_HALF_LIVES, scaled by
+                   config.ASSET_DECAY_MULTIPLIER - see decay_weight())
 
     weight       = decay
                  x relevance          (already independent of the cue score)
@@ -155,8 +157,12 @@ TIEBREAK_LEAN = 2.0
 # capped low: the payload keeps saying "weak" next to the label.
 TIEBREAK_MAX_CONFIDENCE = 0.30
 
-# Minimum total directional weight (bull + bear) to produce a directional
-# verdict. Below this the evidence is too thin and the engine returns NO_BIAS.
+# Minimum total directional weight (bull + bear) to run the FULL verdict path
+# (sign-of-score bias plus the flip / stability machinery). Below this the
+# evidence is too thin for that path, so compute() takes the weak-evidence
+# branch instead: a binary bias chosen from the same totals with confidence
+# capped low. The weighted lean is still PUBLISHED as the score there (see the
+# branch), so the gate selects the bias path - it never zeroes the score.
 MIN_TOTAL_WEIGHT = 0.15
 
 # Minimum confidence before a computed flip is allowed (Item 5).
@@ -482,17 +488,22 @@ class SentimentResult:
 
 
 def decay_weight(published_at: datetime | None, tier: str,
-                 now: datetime | None = None) -> float:
+                 now: datetime | None = None, asset: "Asset | None" = None) -> float:
     """
     Exponential decay with a per-event-tier half-life (Task 5a).
 
-    Replaces the per-category half-life. Tier 1 ~30min, Tier 2 ~15min, Tier 3 ~6min (DAY TRADING).
+    Tier 1 ~90min, Tier 2 ~45min, Tier 3 ~15min; the per-asset multiplier in
+    config.ASSET_DECAY_MULTIPLIER is applied on top (bitcoin +25% for its 24/7
+    clock, equities -25% because equity news fades into the close).
     ``weight = 0.5 ** (age_hours / half_life)``.
     Items older than settings.trading_day_cutoff_hours get weight 0.
     """
-    from app.config import TIER_HALF_LIVES, settings
+    from app.config import ASSET_DECAY_MULTIPLIER, TIER_HALF_LIVES, settings
 
     half_life = TIER_HALF_LIVES.get(tier, 2.0)
+    if asset is not None:
+        half_life *= ASSET_DECAY_MULTIPLIER.get(
+            getattr(asset, "name", str(asset)), 1.0)
     half_life = max(0.1, float(half_life))
 
     if published_at is None:
@@ -582,7 +593,7 @@ def _signal_weight(s: WeightedSignal, now: datetime | None) -> float:
                * session * corroboration * surprise * tier(event)
         where tier(event) = TIER_MULTIPLIERS[event_tier(s)]
         (possibly x RUMOR_MULTIPLIER / CONFIRMED_BOOST).
-        decay = 0.5 ** (age_hours / TIER_HALF_LIVES[tier]),
+        decay = 0.5 ** (age_hours / (TIER_HALF_LIVES[tier] * ASSET_DECAY_MULTIPLIER[asset])),
         tier = event_tier(s) in {TIER_1, TIER_2, TIER_3},
         age_hours >= TRADING_DAY_CUTOFF_HOURS -> weight = 0.
     Importance feeds the tier once via event_tier() and is never
@@ -604,10 +615,11 @@ def _signal_weight(s: WeightedSignal, now: datetime | None) -> float:
         TIER_MULTIPLIERS,
     )
 
-    # Task 5a: decay uses event tier half-life (TIER_1~6h, TIER_2~2h, TIER_3~1h),
-    # with TRADING_DAY_CUTOFF_HOURS (16h) giving weight 0.
+    # Task 5a: decay uses the event-tier half-life (TIER_1~1.5h, TIER_2~0.75h,
+    # TIER_3~0.25h) scaled by the per-asset multiplier, with
+    # TRADING_DAY_CUTOFF_HOURS giving weight 0.
     tier_key = event_tier(s)
-    decay = decay_weight(s.published_at, tier_key, now)
+    decay = decay_weight(s.published_at, tier_key, now, asset=s.asset)
     rel = max(0.0, min(1.0, s.relevance))
     per = max(0.05, min(1.0, s.persistence))
     qual = QUALITY_MULT.get((s.source_quality or "").upper(), 0.90)
@@ -1040,8 +1052,30 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
             weak_bias = carried if carried is not None else _tie_break_bias(relevant, history_key=key, now=now)
             is_stale = True
             stale_note = "No directional evidence; label carried over (stale)"
+        # The weighted lean is PUBLISHED, not discarded. This branch used to
+        # return score / raw_score / damped_score = 0.0, and the dashboard
+        # projects the score straight onto the card
+        # (bull_pct = round(50 + score / 2), display.to_display). Every poll
+        # whose evidence sat under the weight floor therefore froze every card
+        # on "BULLISH 50% / BEARISH 50%" even though the lean was computable
+        # from the same two totals that picked the label.
+        #
+        # The lean is scaled by how much of the floor the evidence reached, so
+        # a card fades toward an even split as the evidence thins (a lone
+        # stale headline can no longer draw a near-100% bar) and the published
+        # number is continuous across the gate: at exactly MIN_TOTAL_WEIGHT
+        # the scale is 1.0, and this branch is not taken past it. raw_score
+        # keeps the UNSCALED ratio so the audit trail is unaffected.
+        weak_raw = _score_from(bull, bear)
+        weak_score = payload_score(
+            round(weak_raw * min(1.0, total_weight / MIN_TOTAL_WEIGHT), 1),
+            weak_bias)
+        weak_confidence = min(
+            _confidence_from(bull, bear, agg["directionless"], agg["used"]),
+            TIEBREAK_MAX_CONFIDENCE)
         return SentimentResult(
-            asset=asset, score=0.0, raw_score=0.0, damped_score=0.0, confidence=0.0,
+            asset=asset, score=weak_score, raw_score=weak_raw,
+            damped_score=weak_score, confidence=weak_confidence,
             bias=weak_bias, mode=mode,
             drivers=drivers_early, conflict=conflict_early,
             bull_drivers=bull_drivers_early, bear_drivers=bear_drivers_early,
@@ -1052,7 +1086,7 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
             burst_bull=agg["burst_bull"], burst_bear=agg["burst_bear"],
             note=stale_note,
             contradiction_detected=contradiction_detected,
-            confidence_label="LOW",
+            confidence_label=confidence_label_for(weak_confidence, True),
         )
 
     # BINARY BIAS: label = sign of the net news score. Inside EPS the sign is

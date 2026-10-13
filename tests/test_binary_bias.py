@@ -7,8 +7,8 @@ from datetime import timedelta
 import pytest
 
 from app.analysis.sentiment_engine import (
-    EPS, TIEBREAK_LEAN, Bias, WeightedSignal, clear_bias_history, compute,
-    remember_bias,
+    EPS, MIN_TOTAL_WEIGHT, TIEBREAK_LEAN, TIEBREAK_MAX_CONFIDENCE, Bias,
+    WeightedSignal, clear_bias_history, compute, remember_bias,
 )
 from app.models.enums import (
     Asset, Direction, EconomicImportance, ImpactStrength, NewsCategory,
@@ -185,3 +185,54 @@ def test_strong_score_passes_through_unchanged():
     assert abs(r.raw_score) >= EPS
     assert r.score == r.raw_score
     assert r.bias is Bias.BULLISH
+
+
+def test_sub_floor_evidence_publishes_the_lean_not_zero():
+    """Under MIN_TOTAL_WEIGHT the score must be the weighted lean, not 0.0.
+
+    A zeroed score is what froze every dashboard card on "BULLISH 50% /
+    BEARISH 50%": display.to_display projects the score straight onto the bar
+    (bull_pct = round(50 + score / 2)), so score 0 renders a 50/50 split even
+    when the two totals had a side. The weight gate picks the BIAS path (no
+    flip / stability machinery); it must not discard the lean the card shows.
+    """
+    # A stale LOW-strength bearish headline: real weight, far under the floor,
+    # nothing on the other side, so the unscaled ratio is a full -100.
+    thin = [make(direction=Direction.BEARISH, strength=ImpactStrength.LOW,
+                 importance=EconomicImportance.LOW, weight=0.9,
+                 minutes_ago=20, title="stale bear", cluster_id="t")]
+    r = compute(thin, Asset.GOLD, now=NOW)
+
+    assert r.bias is Bias.BEARISH, "the stronger side still names the label"
+    assert r.raw_score == -100.0, "the unscaled ratio survives for audit"
+    assert r.score < 0.0, "the lean must be published, not zeroed"
+    assert abs(r.score) < 10.0, "but thin evidence reads thin"
+    assert r.confidence <= TIEBREAK_MAX_CONFIDENCE
+    assert r.confidence_label == "LOW"
+    assert "Weak evidence" in r.note
+
+    # The dashboard math the card actually runs: the split must move.
+    bull = int(round(50 + r.score / 2.0))
+    assert bull < 50, f"score {r.score} must pull the bar bearish"
+
+    # Nearer the floor the same one-sided lean reads proportionally stronger,
+    # continuous with the full path, which is only taken AT the floor.
+    near = [make(direction=Direction.BULLISH, strength=ImpactStrength.MEDIUM,
+                 importance=EconomicImportance.MEDIUM, weight=0.9,
+                 minutes_ago=10, title="fresh bull", cluster_id="n")]
+    r2 = compute(near, Asset.GOLD, now=NOW)
+    assert r2.bias is Bias.BULLISH
+    assert r2.score > abs(r.score), "more evidence under the floor leans harder"
+    bull2 = int(round(50 + r2.score / 2.0))
+    assert bull2 > 50, f"score {r2.score} must pull the bar bullish"
+
+    # No lean at all is still an honest, exact 50/50: directionless-only
+    # evidence must publish exactly 0.0, with the label carried as before.
+    flat = [make(direction=Direction.NEUTRAL, title="n1", cluster_id="d1"),
+            make(direction=Direction.MIXED, title="m1", cluster_id="d2")]
+    r3 = compute(flat, Asset.GOLD, now=NOW)
+    assert r3.score == 0.0
+    assert r3.raw_score == 0.0
+    assert r3.confidence == 0.0
+    assert r3.confidence_label == "LOW"
+    assert r3.bias in (Bias.BULLISH, Bias.BEARISH)

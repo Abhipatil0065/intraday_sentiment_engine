@@ -41,7 +41,7 @@ def _weight_of(signal, asset=Asset.GOLD) -> float:
 # (a) Event tier decay: TIER_1 decays SLOWER than TIER_3
 # --------------------------------------------------------------------------
 def test_tier1_decays_slower_than_tier3():
-    """Task 5a: TIER_1 half-life 0.5h vs TIER_3 0.1h - Tier 1 decays slower.
+    """Task 5a: TIER_1 half-life 1.5h vs TIER_3 0.25h - Tier 1 decays slower.
 
     The fixture age is 45 minutes: old relative to the day-trading half-lives,
     yet inside BOTH the 2h declared cutoff and the 8h cutoff the shipped .env

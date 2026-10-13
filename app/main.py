@@ -496,11 +496,29 @@ def build_payload(session) -> dict:
     regime = state.get("regime")
     # Session-aware global equity card: NOW-only, computed in the recompute.
     # Falls back to a neutral card so the frontend never sees a missing key.
+    #
+    # Session-boundary refresh: the cached card is scored for whichever region
+    # was active on the LAST TICK (up to poll_interval_seconds ago). When a new
+    # session has opened since then, the card is re-scored right here from the
+    # same in-memory signal list, so the title/symbol/bias switch at the
+    # session start (within one dashboard poll) instead of lagging a tick.
+    # A rebuild failure keeps the last good card - the request never breaks.
     equity = pipeline.current_equity_card()
     if not equity:
         from app.analysis.equity_card import neutral_card, to_payload
         active = equity_session()
         equity = to_payload(neutral_card(active))
+    else:
+        active = equity_session()
+        if equity.get("region") != active.value:
+            try:
+                from app.analysis.equity_card import build_equity_card, to_payload
+                now = T.now_utc()
+                equity = to_payload(build_equity_card(
+                    pipeline.current_equity_signals(), now=now, session=active))
+            except Exception as exc:  # noqa: BLE001 - dashboard never breaks
+                log.debug("equity card session refresh failed: %s", exc)
+                equity = pipeline.current_equity_card() or equity
     return {
         "date": T.now_market().strftime("%Y-%m-%d"),
         "current_time": T.now_market().astimezone(T.display_tz()).strftime("%H:%M:%S"),

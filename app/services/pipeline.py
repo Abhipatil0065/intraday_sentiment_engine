@@ -89,6 +89,11 @@ _calendar_events: list = []
 CALENDAR_NEWS_DUP_FACTOR = 0.35
 # Session-aware global equity card from the most recent recompute (NOW-only).
 _last_equity_card: dict | None = None
+# The weighted signals that produced it, kept so the API can re-score the
+# equity card the instant a session opens without waiting for the next tick.
+# A session boundary must not cost a full poll interval (180s) of a stale
+# region/title/bias on the card.
+_last_equity_signals: list = []
 
 # CoinGlass snapshots (liquidation heatmap / CVD / footprint) from the most
 # recent recompute. Keyed by asset symbol. Rate-limited to at most one fetch
@@ -1257,15 +1262,21 @@ note=result.note,
     # Session-aware global equity card: NOW-only, in-memory, never persisted.
     # No SentimentSnapshot / BiasSnapshot rows - the frontend keys flip state
     # by the region field in the payload.
-    global _last_equity_card
+    global _last_equity_card, _last_equity_signals
     try:
         from app.analysis.equity_card import build_equity_card, to_payload
+        _last_equity_signals = list(signals)
         _last_equity_card = to_payload(build_equity_card(signals))
     except Exception as exc:  # noqa: BLE001 - equity card never breaks a poll
         log.debug("equity card build failed: %s", exc)
         _last_equity_card = None
 
     return signals, assessment
+
+
+def current_equity_signals() -> list:
+    """Copy of the signal list behind the most recent equity card."""
+    return list(_last_equity_signals)
 
 
 def current_equity_card() -> dict | None:

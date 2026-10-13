@@ -208,7 +208,7 @@ def test_drivers_and_conflict_are_populated():
 
 # --- Task 5a: intraday recency decay tests ---
 def test_tier3_10_hours_near_zero_weight():
-    """A 10-hour-old Tier 3 item has near-zero weight (half-life ~1h)."""
+    """A 10-hour-old Tier 3 item has near-zero weight (half-life ~15min)."""
     from app.analysis.sentiment_engine import decay_weight
     old = NOW - timedelta(hours=10)
     w = decay_weight(old, "TIER_3", NOW)
@@ -216,12 +216,12 @@ def test_tier3_10_hours_near_zero_weight():
 
 
 def test_tier1_5_hours_keeps_half():
-    """A 30-minute-old Tier 1 item keeps at least half of its fresh weight (half-life ~30min)."""
+    """A 30-minute-old Tier 1 item keeps most of its fresh weight (half-life 1.5h)."""
     from app.analysis.sentiment_engine import decay_weight
     fresh = decay_weight(NOW, "TIER_1", NOW)
     old = NOW - timedelta(minutes=30)
     w = decay_weight(old, "TIER_1", NOW)
-    # 0.5 ** (0.5/0.5) = 0.5 ** 1 = 0.5
+    # 0.5 ** (0.5/1.5) = 0.5 ** 0.33 = ~0.79
     assert w >= 0.5 * fresh, f"30min old TIER_1 should keep >=50% fresh weight, got {w}/{fresh}"
 
 
@@ -242,10 +242,14 @@ def test_item_older_than_the_cutoff_has_weight_zero(monkeypatch):
 
 
 def test_decay_applied_once_weight_ratio():
-    """Decay is applied exactly once: TIER_1 vs TIER_3 weight ratio matches half-life ratio."""
+    """Decay is applied exactly once: TIER_1 vs TIER_3 weight ratio matches half-life ratio.
+
+    Expected factors are computed from config.TIER_HALF_LIVES rather than
+    hardcoded, so a retune of the half-life table cannot break this test.
+    """
     from app.analysis.sentiment_engine import decay_weight
+    from app.config import TIER_HALF_LIVES
     # Use 30 minutes - within 2h cutoff, shows tier difference
-    # TIER_1 half-life = 0.5h, TIER_3 half-life = 0.1h
     age = timedelta(minutes=30)
     fresh = NOW
     t1_fresh = decay_weight(fresh, "TIER_1", NOW)
@@ -253,11 +257,9 @@ def test_decay_applied_once_weight_ratio():
     t1_old = decay_weight(NOW - age, "TIER_1", NOW)
     t3_old = decay_weight(NOW - age, "TIER_3", NOW)
 
-    # The decay factor for each tier at 30 minutes:
-    # TIER_1: 0.5 ** (0.5/0.5) = 0.5 ** 1 = 0.5
-    # TIER_3: 0.5 ** (0.5/0.1) = 0.5 ** 5 = 0.03125
-    expected_t1 = 0.5 ** (0.5 / 0.5)
-    expected_t3 = 0.5 ** (0.5 / 0.1)
+    # The decay factor for each tier at 30 minutes: 0.5 ** (0.5h / half_life)
+    expected_t1 = 0.5 ** (0.5 / TIER_HALF_LIVES["TIER_1"])
+    expected_t3 = 0.5 ** (0.5 / TIER_HALF_LIVES["TIER_3"])
 
     assert t1_old == pytest.approx(t1_fresh * expected_t1, rel=1e-3)
     assert t3_old == pytest.approx(t3_fresh * expected_t3, rel=1e-3)
@@ -279,11 +281,13 @@ def test_equity_card_respects_tier_decay():
         published_at=NOW - timedelta(minutes=5), relevance=0.9, persistence=0.7,
         category=NewsCategory.EQUITIES, cluster_id="t1", report_kind=ReportKind.ACTUAL
     )
-    # TIER_3 signal (30 min old) - title matches US equity keywords ("fed")
+    # TIER_3 signal (60 min old) - at the 0.25h half-life its decay factor is
+    # 0.5**(1/0.25) = 6%, so versus the fresh TIER_1 signal the weight ratio
+    # comfortably clears the >5x assertion below.
     tier3 = WeightedSignal(
         asset=Asset.BITCOIN, title="analyst: fed may cut rates soon", direction=Direction.BULLISH,
         strength=ImpactStrength.HIGH, importance=EconomicImportance.MEDIUM,
-        published_at=NOW - timedelta(minutes=30), relevance=0.9, persistence=0.7,
+        published_at=NOW - timedelta(minutes=60), relevance=0.9, persistence=0.7,
         category=NewsCategory.EQUITIES, cluster_id="t3", report_kind=ReportKind.GENERAL
     )
 

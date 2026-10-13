@@ -30,14 +30,25 @@ def detect_session(now: datetime | None = None) -> SessionName:
     """
     Current trading session in the market timezone.
 
+    Overlap rule: the NEWEST/highest-liquidity session wins shared hours, so
+    a session switch happens at the moment the next session opens, not when
+    the previous one's window ends. US (08:00-17:00 NY) therefore owns
+    08:00-12:00 even while Europe is still trading, and Europe (03:00-12:00)
+    owns 03:00-04:00 even while Asia's 20:00-04:00 tail has not expired.
+
     Overnight gaps are handled by checking the same hour against the previous
     calendar day for the Asia window.
     """
     ref = (now or T.now_utc()).astimezone(T.market_tz())
     hour = ref.hour
 
-    # Order matters: US is checked first because it overlaps Europe.
-    for name, start, end in SESSION_WINDOWS:
+    # Priority order matters: US is checked first, then EUROPE, then ASIA,
+    # because each one overlaps its neighbour and the later session wins.
+    for name, start, end in sorted(
+        SESSION_WINDOWS,
+        key=lambda window: SESSION_ORDER.index(window[0]),
+        reverse=True,
+    ):
         if name is SessionName.ASIA:
             # Asia wraps midnight.
             if hour >= start or hour < end:
@@ -74,7 +85,10 @@ def next_session(now: datetime | None = None) -> SessionName:
     ref = (now or T.now_utc()).astimezone(T.market_tz())
     current = detect_session(ref)
     idx = SESSION_ORDER.index(current) if current in SESSION_ORDER else len(SESSION_ORDER)
-    return SESSION_ORDER[idx % len(SESSION_ORDER)]
+    # +1: the session that OPENS after the current one. The old modulo on the
+    # current index returned the current session itself. In OFF_HOURS
+    # (idx == len) the wrap lands on ASIA, the first session to open again.
+    return SESSION_ORDER[(idx + 1) % len(SESSION_ORDER)]
 
 
 def session_progress(now: datetime | None = None) -> float:
@@ -160,11 +174,16 @@ def equity_session(now: datetime | None = None) -> SessionName:
     return current
 
 
-def equity_title(session: SessionName) -> str:
-    """Card title for a session, e.g. SessionName.ASIA -> 'ASIA EQUITY'."""
-    info = EQUITY_SESSION_MAP.get(equity_session()
-                                  if session is SessionName.OFF_HOURS
-                                  else session)
+def equity_title(session: SessionName, now: datetime | None = None) -> str:
+    """Card title for a session, e.g. SessionName.ASIA -> 'ASIA EQUITY'.
+
+    OFF_HOURS resolves to the region that is frozen on screen (the previous
+    session), evaluated against `now` so the title is deterministic for the
+    reference time instead of wall-clock time.
+    """
+    if session is SessionName.OFF_HOURS:
+        session = previous_session(now)
+    info = EQUITY_SESSION_MAP.get(session)
     if info is not None:
         title = info.get("title")
         if isinstance(title, str) and title:

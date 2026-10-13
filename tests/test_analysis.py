@@ -514,15 +514,47 @@ def test_retention_default_setting_is_two_days():
 
 
 # ----------------------------- sessions --------------------------------
+# Overlap rule: the NEWEST session wins shared hours, so the switch happens
+# when the next session OPENS. Asia 20:00-04:00, Europe 03:00-12:00 and
+# US 08:00-17:00 NY -> Asia owns 20:00-03:00, Europe owns 03:00-08:00
+# (stealing only Asia's last hour), US owns 08:00-17:00 (stealing the whole
+# 08:00-12:00 Europe overlap), and 17:00-20:00 is off hours.
 @pytest.mark.parametrize("hour,expected", [
-    (2, SessionName.ASIA), (9, SessionName.EUROPE),
-    (14, SessionName.US), (19, SessionName.OFF_HOURS),
+    (2, SessionName.ASIA),      # Asia mid-window (02:59 still Asia)
+    (3, SessionName.EUROPE),    # Europe opens -> Europe, Asia tail ignored
+    (7, SessionName.EUROPE),
+    (8, SessionName.US),        # US opens while Europe runs -> US wins
+    (9, SessionName.US),        # was EUROPE before the overlap fix
+    (11, SessionName.US),
+    (12, SessionName.US),
+    (14, SessionName.US),
+    (16, SessionName.US),
+    (17, SessionName.OFF_HOURS),
+    (19, SessionName.OFF_HOURS),
+    (20, SessionName.ASIA),     # Asia opens again
 ])
 def test_session_detection(monkeypatch, hour, expected):
     monkeypatch.setattr("app.config.settings.market_timezone",
                         "America/New_York")
     when = datetime(2026, 6, 1, hour, 0, tzinfo=NY)
     assert detect_session(when) is expected
+
+
+@pytest.mark.parametrize("hour,prev,cur,nxt", [
+    (21, SessionName.US, SessionName.ASIA, SessionName.EUROPE),
+    (4, SessionName.ASIA, SessionName.EUROPE, SessionName.US),
+    (9, SessionName.EUROPE, SessionName.US, SessionName.ASIA),
+    (18, SessionName.US, SessionName.OFF_HOURS, SessionName.EUROPE),
+])
+def test_session_ordering(monkeypatch, hour, prev, cur, nxt):
+    monkeypatch.setattr("app.config.settings.market_timezone",
+                        "America/New_York")
+    when = datetime(2026, 6, 1, hour, 0, tzinfo=NY)
+    assert detect_session(when) is cur
+    assert previous_session(when) is prev
+    # The session that OPENS after the current one - never the current one.
+    assert next_session(when) is nxt
+    assert next_session(when) is not cur
 
 
 def test_us_session_boosts_fed_relevance(monkeypatch):
@@ -542,4 +574,5 @@ def test_asia_session_boosts_china_relevance(monkeypatch):
 def test_session_cycling():
     now = datetime(2026, 6, 1, 14, 0, tzinfo=NY)
     assert previous_session(now) in SessionName
+    assert next_session(now) is not detect_session(now)
     assert next_session(now) in SessionName
