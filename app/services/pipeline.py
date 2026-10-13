@@ -1547,15 +1547,29 @@ async def run_once() -> IngestStats:
         stats.calendar_signals = len(_calendar_signals)
 
         with session_scope() as session:
-            run_row = PipelineRun(
-                started_at=started, status="running",
-                articles_fetched=stats.fetched,
-                detail={"sources_polled": report.sources_polled,
-                        "sources_ok": report.sources_ok},
-            )
-            session.add(run_row)
-            run_id = run_row.id
-            session.flush()
+            # Bookkeeping row for the dashboard's last-run panel. It is
+            # best-effort: a transient SQLite write lock (e.g. the morning
+            # brief holding an open write transaction) must never abort the
+            # whole pass. When this insert failed in the past, the exception
+            # unwound run_once() before _last_successful_tick was stamped, so
+            # /api/health stayed 503 no_tick_completed and the dashboard pill
+            # read "NO TICK" forever.
+            run_row: PipelineRun | None = None
+            run_id = None
+            try:
+                run_row = PipelineRun(
+                    started_at=started, status="running",
+                    articles_fetched=stats.fetched,
+                    detail={"sources_polled": report.sources_polled,
+                            "sources_ok": report.sources_ok},
+                )
+                session.add(run_row)
+                session.flush()
+                run_id = run_row.id
+            except Exception as exc:  # noqa: BLE001 - bookkeeping is best-effort
+                log.warning("Pipeline run row skipped (best-effort): %s", exc)
+                run_row = None
+                run_id = None
 
             existing = _load_existing_guids(session)
             new_articles: list[NewsArticle] = []
@@ -1657,11 +1671,12 @@ async def run_once() -> IngestStats:
             # 3) SENTIMENT + PREP/WRAP ------------------------------------
             _recompute_sentiment(session, stats)
 
-            run_row.articles_new = stats.new_today
-            run_row.articles_rejected = stats.rejected
-            run_row.llm_errors = stats.llm_new_failed + stats.llm_backlog_failed
-            run_row.status = "ok"
-            run_row.finished_at = T.now_utc()
+            if run_row is not None:
+                run_row.articles_new = stats.new_today
+                run_row.articles_rejected = stats.rejected
+                run_row.llm_errors = stats.llm_new_failed + stats.llm_backlog_failed
+                run_row.status = "ok"
+                run_row.finished_at = T.now_utc()
 
             # 4) HEALTH CACHE ------------------------------------------------
             # Update the in-memory metrics that /api/health and /api/dashboard

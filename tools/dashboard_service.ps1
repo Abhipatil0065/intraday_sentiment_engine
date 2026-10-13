@@ -323,7 +323,13 @@ function _Start-Dashboard {
     $owner = Get-PortOwner
     if ($owner) {
         Write-Log "Port $Port is in use by PID $owner but /api/health is not responding." 'WARN'
-        if (Wait-DashboardHealthy -TimeoutSeconds 20) {
+        # Give the busy engine a long grace before declaring it dead: a tick
+        # (23 sources, LLM retries) plus the boot morning brief can keep the
+        # event loop busy for several minutes. Killing a healthy-but-slow
+        # engine mid-tick resets its in-memory tick state, so the dashboard
+        # then reads "NO TICK" on every restart forever. Only a genuinely
+        # hung process (no response at all for this long) gets replaced.
+        if (Wait-DashboardHealthy -TimeoutSeconds 300) {
             Write-Log "Existing instance became healthy (PID $owner)." 'OK'
             return $true
         }
@@ -476,9 +482,14 @@ function Watch-Dashboard {
 
     while ($true) {
         try {
-            # Non-strict: any HTTP response (even 503 degraded) means the
-            # process is alive. Only a connection failure triggers a restart.
-            if (Test-DashboardHealthy -TimeoutSec 10) {
+                # Non-strict: any HTTP response (even 503 degraded) means the
+                # process is alive. Only a connection failure triggers a restart.
+                # Long HTTP timeout on purpose: while a pipeline tick plus the
+                # boot morning brief are running, /api/health can be slow for
+                # minutes. The engine is alive and mid-work, not dead - a
+                # short timeout here made the watchdog kill it every couple of
+                # minutes, which is what kept the dashboard at "NO TICK".
+                if (Test-DashboardHealthy -TimeoutSec 300) {
                 if ($reportedDown) {
                     Write-Log 'Dashboard is healthy again.' 'OK'
                     $reportedDown = $false

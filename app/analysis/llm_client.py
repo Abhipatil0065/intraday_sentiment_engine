@@ -32,6 +32,8 @@ LLM_CALL_TIMEOUT_SECONDS: int = 30
 
 _SEMAPHORE: asyncio.Semaphore | None = None
 _CLIENT: httpx.AsyncClient | None = None
+# Loop the cached client is bound to - see get_client().
+_CLIENT_LOOP: asyncio.AbstractEventLoop | None = None
 
 
 def _semaphore_fixed() -> asyncio.Semaphore:
@@ -215,8 +217,18 @@ def llm_status() -> str:
 
 
 async def get_client() -> httpx.AsyncClient:
-    global _CLIENT
-    if _CLIENT is None or _CLIENT.is_closed:
+    global _CLIENT, _CLIENT_LOOP
+    try:
+        current_loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+    except RuntimeError:  # pragma: no cover - always called from a loop
+        current_loop = None
+    # Recreate the client when it belongs to a different event loop. The
+    # scheduler runs the pipeline in a worker thread via asyncio.run(), which
+    # opens and CLOSES a fresh loop every tick, so a cached client ends up
+    # bound to a dead loop and the next call fails with "Event loop is
+    # closed". The old client cannot be awaited shut (its loop is gone), so
+    # it is simply replaced.
+    if _CLIENT is None or _CLIENT.is_closed or _CLIENT_LOOP is not current_loop:
         _CLIENT = httpx.AsyncClient(
             base_url=settings.llm_base_url.rstrip("/"),
             timeout=settings.llm_timeout_seconds,
@@ -225,14 +237,16 @@ async def get_client() -> httpx.AsyncClient:
                 "Content-Type": "application/json",
             },
         )
+        _CLIENT_LOOP = current_loop
     return _CLIENT
 
 
 async def close_client() -> None:
-    global _CLIENT
+    global _CLIENT, _CLIENT_LOOP
     if _CLIENT is not None and not _CLIENT.is_closed:
         await _CLIENT.aclose()
     _CLIENT = None
+    _CLIENT_LOOP = None
 
 
 _JSON_BLOCK = re.compile(r"\{.*\}", re.DOTALL)

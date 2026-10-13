@@ -84,8 +84,13 @@ REPORT_DIR = BASE_DIR / "data" / "reports"
 
 # A lock older than this is treated as abandoned (stale process) and stolen.
 _LOCK_STALE_SECONDS = 30 * 60
-# Commit cadence while rewriting classified rows.
-_COMMIT_EVERY = 25
+# Commit cadence while rewriting classified rows. One commit per judged
+# article: every LLM call can take seconds to tens of seconds (retries,
+# timeouts, 429 backoff), so a larger batch keeps a SQLite write transaction
+# open across those waits. WAL allows only one writer, so a long brief
+# transaction starved the pipeline tick's own INSERT ("database is locked"),
+# which aborted the tick and left the dashboard reading "NO TICK".
+_COMMIT_EVERY = 1
 
 _IMPORTANCE_RANK = {
     EconomicImportance.LOW: 0,
