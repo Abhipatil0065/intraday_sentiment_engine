@@ -142,6 +142,15 @@ def _passes_impact_gate(s: WeightedSignal) -> bool:
     """False when a signal's impact band may not reach any card."""
     if not settings.only_high_impact_counts:
         return True
+    # A scraped CoinGlass flow reading is a measured number, not classified
+    # news: it never received an article-level impact verdict, so the news
+    # bands above cannot judge it. The CVD divergence and the footprint
+    # imbalance must be able to reach the bullish/bearish totals - that is the
+    # ONLY thing the reading does. Its own band still scales the magnitude in
+    # _aggregate (CVD HIGH -> 0.72, footprint MEDIUM -> 0.45), so this admits
+    # the number without inflating it.
+    if s.mode == "coinglass":
+        return True
     return s.strength in STRENGTH_GATE
 
 

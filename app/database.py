@@ -226,14 +226,59 @@ def _add_missing_sentiment_columns() -> None:
         log.warning("sentiment_snapshot migration skipped: %s", exc)
 
 
+#: The one correct ``bias_outcome`` shape. Its FK points at ``bias_snapshots``
+#: - the table calibration labels attach to - matching db_models.BiasOutcome.
+#: An early build shipped the ORM model with the FK on ``sentiment_snapshot``
+#: by mistake, so any database whose table came from ``create_all`` rejected
+#: every label insert ("FOREIGN KEY constraint failed", FK enforcement is on
+#: for every SQLite connection here).
+_BIAS_OUTCOME_DDL = (
+    "CREATE TABLE bias_outcome ("
+    "id INTEGER PRIMARY KEY, "
+    "bias_snapshot_id INTEGER REFERENCES bias_snapshots(id) ON DELETE CASCADE, "
+    "asset VARCHAR(12) NOT NULL, "
+    "date_utc DATETIME NOT NULL, "
+    "bias VARCHAR(16) DEFAULT '', "
+    "score FLOAT DEFAULT 0.0, "
+    "confidence FLOAT DEFAULT 0.0, "
+    "outcome VARCHAR(16) DEFAULT '', "
+    "note TEXT DEFAULT '', "
+    "created_at DATETIME NOT NULL"
+    ")"
+)
+
+# Columns copied when a mis-shaped table is rebuilt.
+_BIAS_OUTCOME_COLUMNS = ("id", "bias_snapshot_id", "asset", "date_utc",
+                         "bias", "score", "confidence", "outcome", "note",
+                         "created_at")
+
+
+def _bias_outcome_fk_target(conn) -> str | None:
+    """The table ``bias_outcome.bias_snapshot_id`` references, or None."""
+    from sqlalchemy import text
+
+    for row in conn.execute(text("PRAGMA foreign_key_list(bias_outcome)")):
+        # id, seq, table, from, to, on_update, on_delete, match
+        if len(row) > 3 and row[3] == "bias_snapshot_id":
+            return row[2]
+    return None
+
+
 def _add_missing_bias_outcome_table() -> None:
     """
-    Item 6: create the ``bias_outcome`` calibration table when absent.
+    Item 6: create - or REPAIR - the ``bias_outcome`` calibration table.
 
-    Same idempotent pattern as the migrations above: the table is created
-    only when PRAGMA reports it missing, so an existing database picks up the
-    calibration labels without any data loss. The table is DATA COLLECTION
-    ONLY - it never feeds a threshold at decision time.
+    Two paths, both idempotent (PRAGMA is read fresh every run):
+      * absent -> create it with the correct FK;
+      * present but pointing at the WRONG table -> rebuild it. SQLite cannot
+        alter a foreign key in place, so the table is recreated and the rows
+        are copied over. Rows whose snapshot no longer exists are dropped:
+        they reference a bias_snapshot that is gone, so they can never be
+        labelled again and only break the FK.
+
+    Nothing is rewritten when the shape is already right, so a corrected
+    database is never touched again. The table is DATA COLLECTION ONLY - it
+    never feeds a threshold at decision time.
     """
     from sqlalchemy import text
 
@@ -241,27 +286,55 @@ def _add_missing_bias_outcome_table() -> None:
         with engine.begin() as conn:
             tables = {row[0] for row in conn.execute(
                 text("SELECT name FROM sqlite_master WHERE type='table'"))}
-            if "bias_outcome" in tables:
+            if "bias_outcome" not in tables:
+                conn.execute(text(_BIAS_OUTCOME_DDL))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS "
+                                  "ix_bias_outcome_asset ON bias_outcome(asset)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS "
+                                  "ix_bias_outcome_created "
+                                  "ON bias_outcome(created_at)"))
                 return
-            conn.execute(text(
-                "CREATE TABLE bias_outcome ("
-                "id INTEGER PRIMARY KEY, "
-                "bias_snapshot_id INTEGER REFERENCES bias_snapshots(id) "
-                "ON DELETE SET NULL, "
-                "asset VARCHAR(12) NOT NULL, "
-                "date_utc DATETIME NOT NULL, "
-                "bias VARCHAR(16) DEFAULT '', "
-                "score FLOAT DEFAULT 0.0, "
-                "confidence FLOAT DEFAULT 0.0, "
-                "outcome VARCHAR(16) DEFAULT '', "
-                "note TEXT DEFAULT '', "
-                "created_at DATETIME NOT NULL"
-                ")"
-            ))
-            conn.execute(text(
-                "CREATE INDEX ix_bias_outcome_asset ON bias_outcome(asset)"))
-            conn.execute(text(
-                "CREATE INDEX ix_bias_outcome_created ON bias_outcome(created_at)"))
+            if _bias_outcome_fk_target(conn) == "bias_snapshots":
+                return  # already correct
+
+        # --- rebuild, outside the read transaction above: SQLite refuses
+        # PRAGMA foreign_keys inside a transaction, and the rename/insert
+        # sequence needs enforcement OFF while it runs. Each pragma is
+        # committed before the next statement: the Connection autobegins on
+        # the first execute, and conn.begin() cannot start a second.
+        with engine.connect() as conn:
+            enforced = conn.execute(text("PRAGMA foreign_keys")).scalar()
+            conn.commit()
+            conn.execute(text("PRAGMA foreign_keys=OFF"))
+            conn.commit()
+            with conn.begin():
+                conn.execute(text("ALTER TABLE bias_outcome RENAME TO "
+                                  "bias_outcome_old"))
+                conn.execute(text(_BIAS_OUTCOME_DDL))
+                old_columns = {r[1] for r in conn.execute(
+                    text("PRAGMA table_info(bias_outcome_old)"))}
+                present = [c for c in _BIAS_OUTCOME_COLUMNS
+                           if c in old_columns]
+                cols = ", ".join(present)
+                conn.execute(text(
+                    f"INSERT INTO bias_outcome ({cols}) "
+                    f"SELECT {cols} FROM bias_outcome_old "
+                    f"WHERE bias_snapshot_id IS NULL OR bias_snapshot_id IN "
+                    f"(SELECT id FROM bias_snapshots)"))
+                conn.execute(text("DROP TABLE bias_outcome_old"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS "
+                                  "ix_bias_outcome_asset "
+                                  "ON bias_outcome(asset)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS "
+                                  "ix_bias_outcome_created "
+                                  "ON bias_outcome(created_at)"))
+            if enforced:
+                # Restore the connection's own setting, so the pool hands
+                # back exactly what the connect event established.
+                conn.execute(text("PRAGMA foreign_keys=ON"))
+                conn.commit()
+            log.info("bias_outcome rebuilt: bias_snapshot_id now references "
+                     "bias_snapshots")
     except Exception as exc:  # noqa: BLE001 - never block startup
         log.warning("bias_outcome table migration skipped: %s", exc)
 

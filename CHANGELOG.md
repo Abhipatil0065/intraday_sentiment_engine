@@ -4,6 +4,38 @@ All notable changes to the Intraday News Sentiment & Market Impact Engine.
 
 ---
 
+## EQUITY MARKETS IS THE FOURTH CARD IN EVERY FINANCIALJUICE SESSION BOX (2026-10-13)
+
+### Feature — the FJ session boxes score four instruments, not three
+- **Files:** `app/analysis/fj_sessions.py` (`FJ_ASSETS`, `FJ_CARD_LABELS`,
+  `fj_card_label`, `_empty_box`, `analyse_report_text`, `build_session_analysis`),
+  `app/main.py` (endpoint docstring), `app/dashboard/web/index.html`
+  (`.fjgrid` 4-up + the 1250px 2-up step, `fjAsset` comment),
+  `tests/test_fj_sessions.py`
+- **What it does:** All five session boxes (US Market Wrap, Asian Market Wrap,
+  Europe Market Prep, Europe Market Wrap, US Session Prep) now render a fourth
+  card, **Equity Markets**, directly beside the Bitcoin card, so the equity
+  half of a session report is read on its own card instead of being inferred
+  through bitcoin's cues. Order is fixed: Gold → Silver → Bitcoin → Equity
+  Markets, in found boxes and in the "no report yet" 50/50 boxes alike.
+  `Asset.EQUITY` was already scored by `analyse_report_text` (it has its own
+  cue family in `ASSET_CUES`, added when the S&P 500 became a first-class
+  asset), so the fourth card reuses the same scorer - no second model, no new
+  payload keys, and the 100% Bullish + Bearish invariant is unchanged because
+  every card still flows through `bullish_bearish_from_score`.
+- **Name only here:** `Asset.EQUITY.label` stays `"S&P 500"` everywhere else in
+  the engine; the FJ section overrides the display name to `"Equity Markets"`
+  via `FJ_CARD_LABELS` because each box is a regional session (Asia / Europe /
+  US), not just the US tape.
+- **Tests:** `test_fj_sessions.py` asserts the four-asset order on every box,
+  the quarter-card's name, the untouched global label, and that an
+  equities-only report yields equity drivers (`s&p` / `nasdaq` / `stocks`)
+  while the three price cards honestly report "No asset-specific detail in
+  this report". The no-content-stays-even case now covers EQUITY too. Full
+  suite: 1221 passed.
+
+---
+
 ## ONE LLM CALL PER ARTICLE, THEN KEEP OR DELETE — one-shot policy (2026-10-13)
 
 ### Feature — an article is classified at most once, and the verdict decides its fate

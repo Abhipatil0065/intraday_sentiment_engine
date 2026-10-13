@@ -338,6 +338,33 @@ ASSET_CUES: dict = {
     # Crude's own drivers first, then the macro families that move it.
 }
 
+# ---------------------------------------------------------------------------
+# 3a. THE CARDS EVERY BOX RENDERS
+# ---------------------------------------------------------------------------
+#: The instrument cards each of the five boxes shows, in the fixed order they
+#: appear: gold, silver, bitcoin, then EQUITY MARKETS as the fourth card beside
+#: bitcoin. The session reports spend most of their sentences on the equity
+#: tape, so the fourth card reads that half of the report directly instead of
+#: leaving it to be guessed at through bitcoin's cues. ``Asset.EQUITY`` is
+#: scored by the same loop as the other three (it has its own cue family in
+#: ASSET_CUES), so adding it here costs no second scorer.
+FJ_ASSETS: tuple = (
+    Asset.GOLD, Asset.SILVER, Asset.BITCOIN, Asset.EQUITY,
+)
+
+#: Card names for this section only. ``Asset.EQUITY.label`` ("S&P 500") stays
+#: exactly as it is everywhere else in the engine; here the card is named
+#: "Equity Markets" because each box is a REGIONAL session (Asia / Europe /
+#: US), not just the US tape.
+FJ_CARD_LABELS: dict = {
+    Asset.EQUITY: "Equity Markets",
+}
+
+
+def fj_card_label(asset: Asset) -> str:
+    """The card name this section prints for ``asset``."""
+    return FJ_CARD_LABELS.get(asset) or asset.label
+
 
 def _apply_subject_inversion(lowered: str, bull: float, bear: float) -> tuple:
     """
@@ -398,7 +425,7 @@ def _asset_evidence(text: str, asset: Asset) -> tuple:
     return float(bull), float(bear), list(dict.fromkeys(drivers))[:4]
 
 # ---------------------------------------------------------------------------
-# 3a. REPORT STRUCTURE - what a FinancialJuice report is actually made of
+# 3b. REPORT STRUCTURE - what a FinancialJuice report is actually made of
 # ---------------------------------------------------------------------------
 #: FinancialJuice lays its reports out under fixed headings. "Sentiment" is the
 #: narrative, "Docket" the scheduled macro prints, "Speakers" the voices due to
@@ -522,7 +549,8 @@ def extract_drivers_and_risks(body: str, limit: int = 3,
 
 def analyse_report_text(text: str, context=None) -> dict:
     """
-    Score a single FinancialJuice report for GOLD / SILVER / BITCOIN.
+    Score a single FinancialJuice report for GOLD / SILVER / BITCOIN /
+    EQUITY MARKETS.
 
     Produces the strictly-binary payload each box renders. Evidence scales how
     far the split moves off 50/50, so a report that says nothing about an asset
@@ -557,7 +585,7 @@ def analyse_report_text(text: str, context=None) -> dict:
 
         results[asset] = {
             "asset": asset.value,
-            "label": asset.label,
+            "label": fj_card_label(asset),
             "bull_pct": bull_pct,
             "bear_pct": bear_pct,
             "drivers": drivers,
@@ -566,7 +594,7 @@ def analyse_report_text(text: str, context=None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 3b. EXTERNAL CONTEXT - high-impact news + economic calendar
+# 3c. EXTERNAL CONTEXT - high-impact news + economic calendar
 # ---------------------------------------------------------------------------
 #: The box is driven by its own FinancialJuice report. Section B news and the
 #: economic calendar are *corroborating* evidence: they may shift the split, but
@@ -904,12 +932,12 @@ def _empty_box(session_key: str) -> dict:
         "assets": [
             {
                 "asset": a.value,
-                "label": a.label,
+                "label": fj_card_label(a),
                 "bull_pct": 50.0,
                 "bear_pct": 50.0,
                 "drivers": ["No FinancialJuice report for this session yet"],
             }
-            for a in (Asset.GOLD, Asset.SILVER, Asset.BITCOIN)
+            for a in FJ_ASSETS
         ],
         "drivers": [],
         "risks": [],
@@ -940,7 +968,8 @@ def build_session_analysis(
     ``lookback_days`` overrides the policy for every box (used by tests).
 
     ``context`` supplies the external evidence (high-impact Section B news plus
-    economic-calendar signals) blended into each box's gold/silver/bitcoin split.
+    economic-calendar signals) blended into each box's gold/silver/bitcoin/
+    equity split.
     """
     india_date = india_today(now)
 
@@ -991,8 +1020,7 @@ def build_session_analysis(
             ),
             "report_title": rep.title,
             "published_ist": rep.published_ist,
-            "assets": [scored[a] for a in (
-                Asset.GOLD, Asset.SILVER, Asset.BITCOIN)],
+            "assets": [scored[a] for a in FJ_ASSETS],
             # Report sentences only. This box is FinancialJuice-only, so
             # external evidence (Section B news, the economic calendar) must
             # never appear here - it shapes the scores above, not these notes.

@@ -51,6 +51,61 @@
   .alert-pill.show{display:inline-flex}
   .alert-pill .dot{width:7px;height:7px;border-radius:50%;background:#fff}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.55}}
+   /* DEGRADED pill: LLM enabled but its circuit breaker is open - amber, so a
+      failing model reads as neither healthy (green) nor dead (red). Reached
+      now that the payload publishes the real status (ok / degraded /
+      disabled) instead of only enabled/disabled. */
+   .pill.degraded{background:rgba(210,153,34,.10);border-color:rgba(210,153,34,.40);color:#d29922}
+   .pill.degraded .dot{background:#d29922;box-shadow:0 0 6px #d29922}
+   /* Manual pipeline trigger in the header strip. */
+   .runbtn{background:var(--panel2);border:1px solid var(--line);color:var(--txt);
+           border-radius:14px;padding:4px 12px;font:inherit;font-size:10.5px;
+           font-weight:600;letter-spacing:.5px;cursor:pointer;white-space:nowrap}
+   .runbtn:hover:not(:disabled){border-color:var(--gold);color:var(--gold)}
+   .runbtn:disabled{opacity:.55;cursor:default}
+   .quota{color:var(--dim);font-variant-numeric:tabular-nums;white-space:nowrap}
+
+   /* ---- Bias calibration (manual outcome labels) ----
+      DATA COLLECTION ONLY: nothing here feeds a threshold at decision time.
+      The labels exist so the tunables can later be calibrated against real
+      outcomes, so the section is deliberately plainer than the cards. */
+   .calib{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+          padding:12px 15px;margin-bottom:14px}
+   .calibnote{font-size:10.5px;color:var(--dim);margin-bottom:10px;line-height:1.5}
+   .calibgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
+   .calibcard{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+              padding:10px 12px;display:flex;flex-direction:column;gap:7px}
+   .calibcard .ct{font-size:12px;font-weight:700;letter-spacing:1px}
+   .calibcard .cb{font-size:10.5px;color:var(--dim);line-height:1.5}
+   .calibcard .cb b{color:var(--txt)}
+   .calibbtns{display:flex;gap:6px;flex-wrap:wrap}
+   .calibbtns button{background:var(--panel);border:1px solid var(--line);color:var(--dim);
+                     border-radius:12px;padding:3px 10px;font:inherit;font-size:10px;
+                     font-weight:700;letter-spacing:.5px;cursor:pointer}
+   .calibbtns button:hover:not(:disabled){color:var(--txt);border-color:var(--dim)}
+   .calibbtns button.ok:hover:not(:disabled){border-color:var(--bull);color:var(--bull)}
+   .calibbtns button.bad:hover:not(:disabled){border-color:var(--bear);color:var(--bear)}
+   .calibbtns button.mixed:hover:not(:disabled){border-color:var(--gold);color:var(--gold)}
+   .calibbtns button:disabled{opacity:.45;cursor:default}
+   .calibnote-input{background:var(--panel);border:1px solid var(--line);color:var(--txt);
+                    border-radius:6px;padding:5px 8px;font:inherit;font-size:10.5px;width:100%}
+   .calibmsg{font-size:10px;line-height:1.4;min-height:12px}
+   .calibmsg.ok{color:var(--bull)} .calibmsg.bad{color:var(--bear)}
+   .caliblabels{margin-top:12px}
+   .caliblabels h4{font-size:9.5px;letter-spacing:1.5px;color:var(--dim);font-weight:700;
+                   margin-bottom:6px}
+   .lrow{display:flex;gap:10px;align-items:baseline;padding:5px 8px;font-size:10.5px;
+         border-bottom:1px solid var(--line)}
+   .lrow:last-child{border-bottom:0}
+   .lrow .la{color:var(--txt);font-weight:700;flex:0 0 72px}
+   .lrow .lo{flex:0 0 84px;font-weight:700;letter-spacing:.5px}
+   .lrow .lo.WORKED{color:var(--bull)}
+   .lrow .lo.FAILED{color:var(--bear)}
+   .lrow .lo.Mixed{color:var(--gold)}
+   .lrow .lt{color:var(--dim);flex:0 0 150px;font-variant-numeric:tabular-nums}
+   .lrow .ln{color:var(--dim);flex:1 1 auto;min-width:0}
+   .lrow .lempty{color:var(--dim);font-style:italic}
+   @media (max-width:700px){ .lrow{flex-wrap:wrap} }
 .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
         background:var(--neu);margin-right:5px;vertical-align:middle}
    .dot.on{background:var(--bull);box-shadow:0 0 6px var(--bull)}
@@ -161,9 +216,9 @@
 .mcard .bpct .side.lead{flex-grow:1.45}
 /* Flip stamp sits under the percentage in the dominant box only. Dimmed and
    small so it reads as a timestamp, not a second verdict. */
-.mcard .bpct .flipped{font-size:9.5px;letter-spacing:.2px;color:var(--dim);
-                      margin-top:1px;white-space:nowrap}
-/* No greyed variant. The boxes are permanently green/red, including on a
+ .mcard .bpct .flipped{font-size:9.5px;letter-spacing:.2px;color:var(--dim);
+                       margin-top:1px;white-space:nowrap}
+ /* No greyed variant. The boxes are permanently green/red, including on a
    NEUTRAL card, so all three asset cards read identically. Bitcoin in
    particular sits on the NO_BIAS boundary and flickered between coloured and
    grey as its confidence crossed the floor, which read as a broken card.
@@ -332,7 +387,8 @@
             border:1px dashed rgba(240,180,41,.45);border-radius:7px;
             background:rgba(240,180,41,.07);line-height:1.45}
   .fjrt{font-size:11px;color:var(--dim);margin-bottom:9px;font-style:italic}
-  .fjgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  /* Four asset cards per box: gold / silver / bitcoin / EQUITY MARKETS. */
+  .fjgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
   .fja{background:var(--panel2);border:1px solid var(--line);border-radius:7px;
        padding:10px 12px}
   .fja .an{font-size:10px;letter-spacing:1.3px;color:var(--dim);margin-bottom:6px}
@@ -351,12 +407,14 @@
   .fjbox .note li{color:var(--txt)}
   .fjbox .note .none{font-size:10.5px;color:var(--dim);font-style:italic}
   .fjpending{font-size:11px;color:var(--dim);font-style:italic;padding:4px 0}
-  /* Four cards across need more room per card than three did, so the strip drops
-     to 2-up earlier than the pre-existing 1000px single-column step. Below that
-     step the original 1fr rules apply unchanged. Placed BEFORE the 1000px block
-     so the later rule still wins where both match. */
+  /* Four cards across need more room per card than three did, so both the
+     market-prep strip and the session-scoring grid drop to 2-up earlier than
+     the pre-existing 1000px single-column step. Below that step the original
+     1fr rules apply unchanged. Placed BEFORE the 1000px block so the later
+     rule still wins where both match. */
   @media (max-width:1250px){
     .strip-cards{grid-template-columns:repeat(2,1fr)}
+    .fjgrid{grid-template-columns:repeat(2,1fr)}
   }
   @media (max-width:1000px){
     .strip-cards{grid-template-columns:1fr}
@@ -390,6 +448,8 @@
     <span class="pill live" id="pPipe"><span class="dot"></span><span id="lPipe">Pipeline: RUNNING</span></span>
     <span class="pill live" id="pDb"><span class="dot"></span><span id="lDb">Pipeline: OK</span></span>
     <span class="pill alert-pill" id="pAlert"><span class="dot"></span><span id="lAlert">⚠️ ALERT: LLM Engine Down - Fallback Active</span></span>
+    <button class="runbtn" id="runBtn" title="Run one pipeline pass now">RUN NOW</button>
+    <span class="quota" id="tsLlmQuota"></span>
     <span class="ts" id="tsLastUpdated">Last Updated: n/a</span>
   </div>
 </header>
@@ -404,6 +464,18 @@
   <h2>SECTION B &mdash; TODAY'S NEWS IMPACT FEED <span class="n" id="feedCount"></span></h2>
   <div class="filters" id="filters"></div>
   <div class="feed" id="feed"></div>
+
+  <h2>BIAS CALIBRATION <span class="n" id="calibCount"></span></h2>
+  <div class="calib">
+    <div class="calibnote">Label the CURRENT published bias per asset so hit-rate can be
+      scored by hand later. Data collection only &mdash; nothing here feeds a threshold at
+      decision time; the engine never reads these labels when scoring.</div>
+    <div class="calibgrid" id="calibGrid"></div>
+    <div class="caliblabels">
+      <h4>RECENT LABELS</h4>
+      <div id="calibLabels"></div>
+    </div>
+  </div>
 </main>
 <footer id="disclaimer">News-based intraday sentiment. Not a price prediction, not financial advice.</footer>
 <script>
@@ -422,7 +494,7 @@ let FEED={items:[],total:0,loaded:0,page:60,busy:false};
     systemError:null,          // string | null
     lastUpdated:''
   };
-  const LLMMAP={LIVE:'live',STOPPED:'stopped',IDLE:'idle'};
+  const LLMMAP={LIVE:'live',STOPPED:'stopped',IDLE:'idle',DEGRADED:'degraded'};
   const STD_MAP={LIVE:'live',STOPPED:'stopped',RUNNING:'live',OK:'live',STALE:'stopped'};
   function pillClass(key,state){
     if(key==='llm') return LLMMAP[state]||'idle';
@@ -940,7 +1012,9 @@ async function loadMore(){
    Converting it would change published numbers for existing users, so it is
    flagged rather than silently rewritten.
    TODO(unify-fj): port fj_sessions onto the transmission map and the NO_BIAS
-   contract, then remove this banner. */
+    contract, then remove this banner. */
+/* One asset card per box, in the backend's fixed order: GOLD, SILVER,
+   BITCOIN, then EQUITY MARKETS as the fourth card beside bitcoin. */
 function fjAsset(a){
   var bull=+a.bull_pct||0, bear=+a.bear_pct||0;
   var dv=(a.drivers&&a.drivers.length)?a.drivers.slice(0,3).join(' \u00b7 '):'';
@@ -1042,11 +1116,27 @@ function renderHeader(d){
      is a single source of truth: update HEALTH and every pill re-renders.
      The error pill appears only when a non-green status is set. */
   var s=d.status||{};
-  var llm = s.llm_enabled ? (s.llm_status || 'LIVE') : 'STOPPED';
-HEALTH.llmStatus = llm;
+  /* Real LLM state, now that the payload publishes it: ok -> LIVE,
+     degraded -> DEGRADED (enabled but the circuit breaker is open, so the
+     engine is falling back to heuristics), disabled/no key -> STOPPED.
+     The old expression could only ever produce LIVE or STOPPED. */
+  var llmKey = s.llm_enabled ? (s.llm_status || 'ok') : 'disabled';
+  var LLM_LABEL={ok:'LIVE',degraded:'DEGRADED',disabled:'STOPPED'};
+  HEALTH.llmStatus = LLM_LABEL[llmKey] || 'LIVE';
+  HEALTH.llmKey = llmKey;
   HEALTH.pipelineStatus = st.running ? 'RUNNING' : 'STOPPED';
   HEALTH.dbStatus = s.last_poll_ok ? 'OK' : 'STALE';
   HEALTH.lastUpdated = st.last_updated || '';
+
+  /* LLM rate-limit budget used in the last minute - the number that predicts
+     the next degraded pill before the breaker trips. */
+  var _quota=document.getElementById('tsLlmQuota');
+  if(_quota){
+    _quota.textContent = s.llm_enabled
+      ? ('LLM calls/min: '+(+s.llm_requests_used_last_min||0)+'/'
+         +(+s.llm_requests_per_minute||0))
+      : 'LLM off';
+  }
    /* Any red status => show the error pill with a specific message.
       NOTE: dbStatus is only ever 'OK' or 'STALE' (set above) - the label and
       the alert branch below must test those exact values. An earlier version
@@ -1055,6 +1145,7 @@ HEALTH.llmStatus = llm;
       never fire. */
    var reds = [];
    if(HEALTH.llmStatus==='STOPPED') reds.push('LLM Engine Down - Fallback Active');
+   if(HEALTH.llmStatus==='DEGRADED') reds.push('LLM Degraded - Circuit Breaker Open');
    if(HEALTH.newsFeedStatus==='STOPPED') reds.push('News Feed Stopped - No New Articles');
    if(HEALTH.pipelineStatus==='STOPPED') reds.push('Pipeline Stopped - No Tick Running');
    if(HEALTH.dbStatus==='STALE') reds.push('Pipeline Stale - No Successful Tick');
@@ -1115,6 +1206,7 @@ function render(d){
   renderPrepStrip(d.assets);
   renderAssets(d.assets);
   renderAlerts(d.alerts);
+  renderCalib(d);
   /* Seed the feed from the payload's first page. On a refresh the page-1 rows
      are replaced, but anything the reader already paged in is kept, so a 30s
      auto-refresh does not silently collapse an expanded feed back to 60. */
@@ -1148,6 +1240,7 @@ async function load(){
     }
   }catch(e){ console.error('FETCH ERROR:', e); }
   loadFinancialJuice();
+  loadCalibLabels();
 }
 /* FinancialJuice Session Analysis is served by its own read-only endpoint so
    the main dashboard payload is left byte-for-byte unchanged. It reuses the
@@ -1172,6 +1265,11 @@ document.addEventListener('click',function(e){
   var btn=e.target.closest('.filters button');
   if(btn){ activeFilter=btn.getAttribute('data-f'); renderFilters();
            renderFeed(FEED.items); }
+  var run=e.target.closest('#runBtn');
+  if(run){ runPipelineNow(); return; }
+  var lab=e.target.closest('[data-label]');
+  if(lab){ labelBias(lab.getAttribute('data-asset'),lab.getAttribute('data-label'));
+           return; }
 });
 function connect(){
   const proto=location.protocol==='https:'?'wss':'ws';
@@ -1194,6 +1292,124 @@ function connect(){
   ws.onopen=function(){ backoff=1000; };
   setInterval(function(){ if(ws&&ws.readyState===1) ws.send('ping'); },25000);
 }
+/* ------------------------------------------------------------------ */
+/* Manual pipeline trigger                                             */
+/* ------------------------------------------------------------------ */
+/* POST /api/run executes one full pass. It can take minutes (LLM
+   classifications, one browser render), so the button disables until the
+   response lands, then reloads the payload - the tick has already rewritten
+   every card, snapshot row and alert by the time it answers. The endpoint
+   answers "already_running" when a scheduler tick or an earlier click holds
+   the lock, which is information, not an error. */
+async function runPipelineNow(){
+  var btn=document.getElementById('runBtn');
+  if(!btn||btn.disabled) return;
+  btn.disabled=true;
+  btn.textContent='RUNNING…';
+  try{
+    const r=await fetch('/api/run',{method:'POST'});
+    const d=await r.json().catch(function(){return {};});
+    if(d.status==='already_running'){
+      btn.textContent='ALREADY RUNNING';
+    }else{
+      btn.textContent='DONE +'+(+d.fetched||0)+' fetched / '+(+d.new||0)+' new';
+      load();   /* refresh the cards with the tick that just ran */
+    }
+  }catch(e){
+    btn.textContent='RUN FAILED';
+  }finally{
+    setTimeout(function(){ btn.textContent='RUN NOW'; btn.disabled=false; },4000);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Bias calibration (manual outcome labels)                            */
+/* ------------------------------------------------------------------ */
+/* One card per asset, anchored on the CURRENT block - that is the published
+   bias a label attaches to (the endpoint labels the newest bias_snapshots
+   row for the asset). POST /api/calibration/labels records it; GET lists
+   the recent ones. Deliberately plain: data collection only, nothing here
+   influences a decision, so this section carries no signal semantics. */
+var CALIB={items:[]};
+
+function calibCard(a){
+  var cur=a.current||{};
+  var asset=esc(a.symbol||'');
+  var label=esc(String(a.label||asset).toUpperCase());
+  var bias=esc(cur.bias||'NO_BIAS');
+  var updated=esc(cur.last_updated||'n/a');
+  return '<div class="calibcard">'
+    +'<div class="ct">'+label+' <span style="color:var(--dim)">'+asset+'</span></div>'
+    +'<div class="cb">current bias <b>'+bias+'</b> &middot; published '+updated+'</div>'
+    +'<div class="calibbtns">'
+    +'<button class="ok" data-asset="'+asset+'" data-label="WORKED">WORKED</button>'
+    +'<button class="bad" data-asset="'+asset+'" data-label="FAILED">FAILED</button>'
+    +'<button class="mixed" data-asset="'+asset+'" data-label="Mixed">MIXED</button>'
+    +'</div>'
+    +'<input class="calibnote-input" id="calibNote-'+asset+'" placeholder="note (optional)">'
+    +'<div class="calibmsg" id="calibMsg-'+asset+'"></div>'
+    +'</div>';
+}
+
+function renderCalib(d){
+  var box=document.getElementById('calibGrid');
+  var assets=(d&&d.assets)||[];
+  if(box) box.innerHTML=assets.map(calibCard).join('');
+  var n=document.getElementById('calibCount');
+  if(n) n.textContent='('+assets.length+' assets)';
+}
+
+function renderCalibLabels(){
+  var box=document.getElementById('calibLabels');
+  if(!box) return;
+  if(!CALIB.items.length){
+    box.innerHTML='<div class="lrow"><span class="lempty">No labels recorded yet.</span></div>';
+    return;
+  }
+  box.innerHTML=CALIB.items.map(function(it){
+    return '<div class="lrow">'
+      +'<span class="la">'+esc(it.asset||'')+'</span>'
+      +'<span class="lo '+esc(it.outcome||'')+'">'+esc(it.outcome||'')+'</span>'
+      +'<span class="lt">'+esc(it.created_at||'')+'</span>'
+      +'<span class="ln">'+esc(it.note||'')+'</span>'
+      +'</div>';
+  }).join('');
+}
+
+async function loadCalibLabels(){
+  try{
+    const r=await fetch('/api/calibration/labels?limit=50');
+    if(!r.ok) return;
+    const d=await r.json();
+    CALIB.items=d.items||[];
+    renderCalibLabels();
+  }catch(e){ /* optional section - the cards still work without the list */ }
+}
+
+async function labelBias(asset,outcome){
+  var noteEl=document.getElementById('calibNote-'+asset);
+  var msg=document.getElementById('calibMsg-'+asset);
+  var note=noteEl?noteEl.value.trim():'';
+  if(msg){ msg.className='calibmsg'; msg.textContent='Saving…'; }
+  try{
+    const r=await fetch('/api/calibration/labels?asset='
+      +encodeURIComponent(asset)+'&outcome='+encodeURIComponent(outcome)
+      +(note?('&note='+encodeURIComponent(note)):''),{method:'POST'});
+    const d=await r.json().catch(function(){return {};});
+    if(!r.ok){
+      if(msg){ msg.className='calibmsg bad'; msg.textContent=d.error||('HTTP '+r.status); }
+      return;
+    }
+    if(msg){ msg.className='calibmsg ok';
+             msg.textContent='Recorded '+esc(d.outcome||outcome)+' on snapshot #'
+               +(+d.bias_snapshot_id||0)+'.'; }
+    if(noteEl) noteEl.value='';
+    loadCalibLabels();
+  }catch(e){
+    if(msg){ msg.className='calibmsg bad'; msg.textContent='Request failed.'; }
+  }
+}
+
 renderFilters();
 load(); connect(); setInterval(load,30000);
 </script>

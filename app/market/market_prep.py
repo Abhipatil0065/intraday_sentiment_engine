@@ -79,6 +79,12 @@ MACRO_DRIVER_LABELS: dict[NewsCategory, str] = {
     NewsCategory.OIL_ENERGY: "Energy cost pressure",
     NewsCategory.BANKING_FINANCIAL_STRESS: "Financial-system stress",
     NewsCategory.COMMODITY_SUPPLY_DEMAND: "Physical supply/demand",
+    # CoinGlass scrapes score on the same path as news, so their categories
+    # reach this map. Without an entry the prep build raised KeyError and took
+    # the whole recompute (hence the tick) down with it.
+    NewsCategory.LIQUIDATION_HEATMAP: "Liquidation clusters (CoinGlass)",
+    NewsCategory.CVD: "Aggressive flow - CVD (CoinGlass)",
+    NewsCategory.FOOTPRINT: "Order-flow imbalance (CoinGlass)",
     NewsCategory.OTHER: "Unclassified flow",
 }
 
@@ -124,8 +130,12 @@ def build(
             "general intraday news flow."
         )
 
+    # .get, not []: a category with no label must degrade to its own name,
+    # never raise. A KeyError here propagates through _recompute_sentiment
+    # into run_once and costs the whole tick - a missing display string is
+    # not worth a failed poll.
     macro = [
-        MACRO_DRIVER_LABELS[c]
+        MACRO_DRIVER_LABELS.get(c, str(getattr(c, "value", c)))
         for c, w in sorted(category_weights.items(), key=lambda kv: -kv[1])
         if w > 0 and c is not NewsCategory.OTHER
     ][:4]

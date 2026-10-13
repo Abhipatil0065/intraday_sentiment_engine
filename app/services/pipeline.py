@@ -957,12 +957,19 @@ def current_calendar_signals() -> list[CalendarSignal]:
     return list(_calendar_signals)
 
 
-def _recompute_sentiment(session, stats: IngestStats):
+def _recompute_sentiment(session, stats: IngestStats,
+                         coinglass_snapshots: dict | None = None):
     """
     Rebuild every asset's CURRENT / PREP / WRAP sentiment from today's rows.
 
     Always recomputed from scratch rather than incrementally patched, so
     impact decay (section 17) is applied consistently on every pass.
+
+    ``coinglass_snapshots`` is this tick's CoinGlass scrape. It is fetched by
+    the async caller (``run_once``) and handed in: this recompute runs INSIDE
+    the pipeline coroutine, so it cannot start an event loop of its own
+    (``asyncio.run`` there is exactly what silently killed every CoinGlass
+    signal before the 2026-10-13 fix).
     """
     # IMPROVEMENT 4: detect a session change at the start of this tick.
     # The reweight itself happens below, after the in-memory signal list
@@ -1112,32 +1119,39 @@ def _recompute_sentiment(session, stats: IngestStats):
     # and costs no browser. The CVD reading feeds the SAME scoring path as a
     # headline, so it moves the bullish/bearish badge the dashboard shows.
     #
+    # The snapshots arrive as a PARAMETER, fetched (awaited) by the async
+    # caller in run_once(). They are NOT scraped here: this function runs
+    # inside the pipeline coroutine, and ``asyncio.run`` cannot start a loop
+    # in a thread that already has one - that is precisely the bug that made
+    # every tick log "CoinGlass scrape_all failed: asyncio.run() cannot be
+    # called from a running event loop" and injected no signal at all.
+    #
     # A failure here is not an error: the pool is skipped, the last good
     # snapshot stays on the cache for the dashboard, and the verdict degrades
     # to news + price confirmation exactly as documented.
-    global _coinglass_snapshots
     try:
-        from app.ingestion import coinglass_scraper
+        if coinglass_snapshots:
+            from app.ingestion import coinglass_scraper
 
-        snapshots = coinglass_scraper.scrape_all()
-        if snapshots:
-            _coinglass_snapshots = snapshots
             cg_signals = coinglass_scraper.coinglass_signals_to_weighted(
-                snapshots)
-            signals.extend(cg_signals)
-            for s in cg_signals:
-                category_weights[s.category] = (
-                    category_weights.get(s.category, 0.0) + s.relevance
-                )
-            log.info("CoinGlass: %d CVD/footprint signal(s) injected from %d "
-                     "asset(s)", len(cg_signals), len(snapshots))
+                coinglass_snapshots)
+            if cg_signals:
+                signals.extend(cg_signals)
+                for s in cg_signals:
+                    category_weights[s.category] = (
+                        category_weights.get(s.category, 0.0) + s.relevance
+                    )
+                log.info("CoinGlass: %d CVD/footprint signal(s) injected from "
+                         "%d asset(s)", len(cg_signals),
+                         len(coinglass_snapshots))
         else:
-            # Keep the previous in-memory read so a skipped poll does not wipe
-            # the module state mid-session; the cached panel is unaffected.
+            # No snapshot this tick: the poll was skipped (rate-limited,
+            # backed off, browser busy) or the feature is off. The previous
+            # in-memory read stays put and the cached panel is unaffected.
             log.debug("CoinGlass: no fresh snapshot this tick (cached, backed "
                       "off, or unavailable) - sentiment unchanged")
     except Exception as exc:  # noqa: BLE001 - never break the recompute
-        log.debug("CoinGlass signal injection failed: %s", exc)
+        log.warning("CoinGlass signal injection failed: %s", exc)
 
     # IMPROVEMENT 4, Step 2: on the tick where the session changed, rewrite
     # every signal's session_multiplier IN MEMORY so the aggregation that
@@ -1382,6 +1396,33 @@ def coinglass_caution_note() -> str:
     return " ".join(notes)
 
 
+async def _fetch_coinglass_snapshots() -> dict:
+    """
+    Latest CoinGlass scrapes for this tick (cached, rate-limited, never fatal).
+
+    Awaited because a scrape can spend a browser render. The consumer,
+    ``_recompute_sentiment``, is SYNC and runs inside this coroutine, so it
+    cannot scrape for itself: ``asyncio.run`` refuses to start a loop in a
+    thread that already has one - which is exactly how the CVD / footprint
+    numbers used to die on every tick without ever reaching a card.
+
+    Returns an empty dict when the feature is off, the poll is skipped
+    (rate-limited / backed off / browser busy) or the render failed; the
+    caller then scores news + price only, exactly as documented.
+    """
+    try:
+        from app.ingestion import coinglass_scraper
+
+        snapshots = await coinglass_scraper.scrape_all_async()
+        if snapshots:
+            global _coinglass_snapshots
+            _coinglass_snapshots = snapshots
+        return snapshots
+    except Exception as exc:  # noqa: BLE001 - a provider never breaks a poll
+        log.warning("CoinGlass fetch failed: %s", exc)
+        return {}
+
+
 def _is_article_today_query(published: datetime | None) -> bool:
     """
     The TODAY test, re-evaluated NOW rather than trusting a stored flag.
@@ -1620,6 +1661,15 @@ async def run_once() -> IngestStats:
         stats.calendar_events = len(events)
         stats.calendar_signals = len(_calendar_signals)
 
+        # 1b) COINGLASS SCRAPES ------------------------------------------
+        # A scrape is a browser render, so it is awaited HERE - the one async
+        # point of the pass - and handed to the sync recompute below, which
+        # only injects it into the signal pool. Runs before the session opens
+        # so the render never holds the SQLite write lock the ingest steps
+        # need. Skipped when no fresh poll was spent: an empty dict leaves the
+        # verdict on news + price confirmation.
+        coinglass_snapshots = await _fetch_coinglass_snapshots()
+
         with session_scope() as session:
             # Bookkeeping row for the dashboard's last-run panel. It is
             # best-effort: a transient SQLite write lock (e.g. the morning
@@ -1745,7 +1795,11 @@ async def run_once() -> IngestStats:
             evaluate_and_emit(session, stats)
 
             # 3) SENTIMENT + PREP/WRAP ------------------------------------
-            _recompute_sentiment(session, stats)
+            # CoinGlass snapshots come from step 1b: the recompute is sync, so
+            # the async scrape happens once, up front, and the scraped number
+            # enters the bullish/bearish totals as a normal weighted signal.
+            _recompute_sentiment(
+                session, stats, coinglass_snapshots=coinglass_snapshots)
 
             if run_row is not None:
                 run_row.articles_new = stats.new_today

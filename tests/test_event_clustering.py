@@ -832,11 +832,154 @@ def test_decision_anchor_uses_30_minute_window():
 def test_opposite_directions_never_merge_even_with_anchor():
     """Opposite directions never merge, even with same anchor and within window."""
     from app.analysis.event_clustering import cluster_signals
-    
+
     a = _mk_signal_90("Fed minutes show policymakers back another rate hike",
                       "2026-10-07T18:00:00", Direction.BULLISH)
     b = _mk_signal_90("Fed minutes show policymakers back another rate hike",
                       "2026-10-07T18:30:00", Direction.BEARISH)  # +30 min, opposite direction
-    
+
     clustered = cluster_signals([a, b], window_hours=0.5)
     assert len(clustered) == 2, "Opposite directions never merge"
+
+
+# =============================================================================
+# EVENT-KEY IDENTITY FIRST (2026-10-13)
+# =============================================================================
+# The reported defect: "Trump: Working with Russia to end war" was ingested
+# once per article row (ingestion dedup shares one NewsEvent but never drops
+# the row), and the scoring-time clusterer re-counted every copy because it
+# grouped by title similarity inside a 30-minute window only - so a story
+# re-emitted on later polls (or reworded by another outlet, geopolitics having
+# no macro entities in _ENTITIES and no event_anchor) re-entered the bull
+# total as a fresh contributor, 2-3 times, and printed 2-3 times in
+# bull_drivers. The identity ingestion already decided is now checked first,
+# with no time window, exactly like equity_card._collapse_cross_asset.
+#
+# These tests stamp headlines at the REAL wall clock (like the 2026-10-08
+# selection tests) because _collapse_members picks the representative with a
+# wall-clock "now".
+
+def _mk_evt(title, minutes_ago, direction, event_key):
+    """A realistic signal carrying an ingestion-time event key."""
+    from app.analysis.sentiment_engine import WeightedSignal
+    from app.models.enums import (
+        Asset, EconomicImportance, ImpactStrength, NewsCategory,
+    )
+    from app.utils import timeutils as T
+
+    return WeightedSignal(
+        asset=Asset.GOLD,
+        title=title,
+        direction=direction,
+        strength=ImpactStrength.HIGH,
+        importance=EconomicImportance.VERY_HIGH,
+        published_at=T.now_utc() - timedelta(minutes=minutes_ago),
+        relevance=0.85,
+        persistence=0.85,
+        source_quality="TIER_2_MAJOR",
+        category=NewsCategory.GEOPOLITICS,
+        event_key=event_key,
+        cluster_id=event_key,
+    )
+
+
+def test_republished_copies_under_one_event_key_count_once():
+    """One story filed under one event_key is ONE vote, hours apart, any wording."""
+    from app.analysis.event_clustering import cluster_signals
+
+    copies = [
+        _mk_evt("Trump: Working with Russia to end war", 0,
+                Direction.BULLISH, "evt-trump-russia"),
+        _mk_evt("Trump says working with Russia to end the war", 95,
+                Direction.BULLISH, "evt-trump-russia"),
+        _mk_evt("Trump, Putin to hold talks on ending the conflict", 200,
+                Direction.BULLISH, "evt-trump-russia"),
+    ]
+
+    clustered = cluster_signals(copies, window_hours=0.5)
+
+    assert len(clustered) == 1, (
+        f"one event_key must be one vote, got {len(clustered)}")
+    assert clustered[0].event_key == "evt-trump-russia"
+    # The cluster still confirms the story with the capped boost.
+    assert clustered[0].corroboration >= 1.0
+
+
+def test_event_key_collapse_scores_like_one_not_two():
+    """The aggregate sees one contribution, not one per copy."""
+    from app.analysis.event_clustering import cluster_signals
+    from app.analysis.sentiment_engine import _aggregate, clear_bias_history
+    from app.utils import timeutils as T
+
+    base = T.now_utc()
+    copies = [
+        _mk_evt("Trump: Working with Russia to end war", 0,
+                Direction.BULLISH, "evt-trump-russia"),
+        _mk_evt("Trump: Working with Russia to end war", 150,
+                Direction.BULLISH, "evt-trump-russia"),
+    ]
+    single = [copies[0]]
+
+    clear_bias_history()
+    agg_two = _aggregate(cluster_signals(list(copies), window_hours=0.5),
+                         now=base)
+    agg_one = _aggregate(cluster_signals(single, window_hours=0.5), now=base)
+
+    # Two copies may not double the bull total: only the (capped)
+    # corroboration boost of the cluster may lift it, never 2x.
+    assert 1.0 <= agg_two["bull"] / agg_one["bull"] <= 1.30
+
+
+def test_opposite_directions_under_one_event_key_stay_two_votes():
+    """A bullish and a bearish reading of one event are two readings."""
+    from app.analysis.event_clustering import cluster_signals
+
+    bull = _mk_evt("Trump: Working with Russia to end war", 0,
+                   Direction.BULLISH, "evt-trump-russia")
+    bear = _mk_evt("Trump: Working with Russia to end war", 5,
+                   Direction.BEARISH, "evt-trump-russia")
+
+    clustered = cluster_signals([bull, bear], window_hours=0.5)
+
+    assert len(clustered) == 2
+    assert {s.direction for s in clustered} == {
+        Direction.BULLISH, Direction.BEARISH}
+
+
+def test_different_event_keys_are_not_merged_by_identity():
+    """Identity joins one event only - two events stay two votes."""
+    from app.analysis.event_clustering import cluster_signals
+
+    a = _mk_evt("Trump: Working with Russia to end war", 0,
+                Direction.BULLISH, "evt-trump-russia")
+    b = _mk_evt("OPEC+ extends output cuts through year end", 5,
+                Direction.BULLISH, "evt-opec-cuts")
+
+    clustered = cluster_signals([a, b], window_hours=0.5)
+    assert len(clustered) == 2
+
+
+def test_identity_less_signals_still_use_the_title_window():
+    """Signals with no ingestion identity keep the old title behaviour."""
+    from app.analysis.event_clustering import cluster_signals
+
+    a = _mk_evt("Fed holds rates steady", 0, Direction.BEARISH, "")
+    a.event_key = a.cluster_id = ""
+    b = _mk_evt("Fed holds rates steady", 150, Direction.BEARISH, "")
+    b.event_key = b.cluster_id = ""
+
+    clustered = cluster_signals([a, b], window_hours=0.5)
+    assert len(clustered) == 2, "outside the 30-min window, no identity join"
+
+
+def test_calendar_and_market_data_signals_pass_through_untouched():
+    """One signal per key must never be dropped or altered."""
+    from app.analysis.event_clustering import cluster_signals
+
+    lone = _mk_evt("US CPI Rises 0.3 Percent in September", 10,
+                   Direction.BEARISH, "evt-cpi")
+
+    clustered = cluster_signals([lone], window_hours=0.5)
+    assert len(clustered) == 1
+    assert clustered[0].title == lone.title
+    assert clustered[0].corroboration == lone.corroboration

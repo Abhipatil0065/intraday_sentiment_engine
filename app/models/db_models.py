@@ -196,8 +196,11 @@ class SentimentSnapshot(Base):
     confidence_label: Mapped[str] = mapped_column(String(8), default="LOW")
     computed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, index=True)
-
-    outcomes: Mapped[list[BiasOutcome]] = relationship(back_populates="snapshot")
+    # NOTE: no outcomes relationship here. Calibration labels belong to
+    # BiasSnapshot (BiasOutcome.bias_snapshot_id). This class used to declare
+    # one that paired with a BiasOutcome FK pointing at THIS table - both
+    # wrong, and together they made every mapper fail to configure. Nothing
+    # reads sentiment_snapshot.outcomes; the labels live on BiasSnapshot.
 
 
 class BiasSnapshot(Base):
@@ -245,6 +248,28 @@ class BiasSnapshot(Base):
     bull_drivers: Mapped[list] = mapped_column(JSON, default=list)
     bear_drivers: Mapped[list] = mapped_column(JSON, default=list)
 
+    # Item 1: baseline audit trail. The published ``score`` is
+    # baseline-adjusted when a baseline exists; these carry the unadjusted
+    # level the engine computed, the reference it was normalised against, and
+    # whether an adjustment actually applied. NULL / False during warm-up.
+    #
+    # KEEP IN SYNC with _add_missing_bias_snapshot_columns() in database.py:
+    # the migration creates the columns on an existing database, but without
+    # the Mapped attribute here every ``BiasSnapshot(**row)`` raises
+    # "'raw_score' is an invalid keyword argument" and the writer's guard
+    # silently drops EVERY snapshot row - which is exactly what happened, and
+    # why /api/calibration/labels had no snapshot to attach a label to.
+    raw_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    baseline_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    adjusted: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Manual calibration labels recorded against this snapshot
+    # (/api/calibration/labels). Data collection only - the engine never reads
+    # these rows when scoring. Snapshots are append-only; cascade exists so a
+    # manual purge takes its labels with it rather than orphaning them.
+    outcomes: Mapped[list["BiasOutcome"]] = relationship(
+        back_populates="snapshot", cascade="all, delete-orphan")
+
     __table_args__ = (Index("ix_bias_snapshots_asset_ts", "asset",
                             "timestamp_utc"),)
 
@@ -290,8 +315,14 @@ class BiasOutcome(Base):
     __tablename__ = "bias_outcome"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Must point at bias_snapshots(id) - the rows calibration labels attach
+    # to. It pointed at sentiment_snapshot(id) instead, so every POST died
+    # with "FOREIGN KEY constraint failed": a bias_snapshots id is not a
+    # sentiment_snapshot id, and with FK enforcement on SQLite rejects the
+    # insert outright. Same contract as the CREATE TABLE in
+    # _add_missing_bias_outcome_table() (database.py).
     bias_snapshot_id: Mapped[int] = mapped_column(
-        ForeignKey("sentiment_snapshot.id", ondelete="CASCADE"), index=True)
+        ForeignKey("bias_snapshots.id", ondelete="CASCADE"), index=True)
     asset: Mapped[str] = mapped_column(String(12), index=True)
     date_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     bias: Mapped[str] = mapped_column(String(16))
@@ -301,7 +332,7 @@ class BiasOutcome(Base):
     note: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
-    snapshot: Mapped[SentimentSnapshot] = relationship(back_populates="outcomes")
+    snapshot: Mapped["BiasSnapshot"] = relationship(back_populates="outcomes")
 
 
 class DroppedArticle(Base):

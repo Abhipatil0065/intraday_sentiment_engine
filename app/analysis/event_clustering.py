@@ -9,12 +9,18 @@ a single FOMC decision therefore cast five votes into the aggregate, and the
 verdict drifted toward whichever story was syndicated most widely.
 
 The model now
--------------
+------------
 A cluster is ONE event with ONE vote. Extra INDEPENDENT sources add only a
 small, hard-capped boost (``corroboration_per_source`` per source, capped at
 ``corroboration_max_boost``), so corroboration confirms a story without
 out-voting a genuinely different one. Repeats from the SAME outlet never
 raise the boost.
+
+The ingestion-time event identity (``event_key`` / ``cluster_id``) is checked
+FIRST and carries NO time window: articles that ingestion dedup filed under
+one event collapse here regardless of publish time or outlet wording, so a
+republished headline can never re-enter the aggregate as a fresh vote.
+Title similarity remains the fallback for signals with no identity.
 
 Similarity blends normalised-title overlap with shared macro ENTITIES, which
 is what actually identifies "the same event" when two outlets word it very
@@ -31,6 +37,7 @@ from datetime import datetime, timedelta, timezone
 from app.analysis.sentiment_engine import WeightedSignal
 from app.config import settings
 from app.logging_conf import get_logger
+from app.models.enums import Direction
 
 log = get_logger(__name__)
 
@@ -157,13 +164,108 @@ def corroboration_multiplier(independent_sources: int) -> float:
     return round(1.0 + boost, 4)
 
 
+def _event_identity(s) -> str:
+    """
+    The ingestion-time cluster identity stamped on a signal.
+
+    ``build_signal`` stamps the NewsEvent key on every article-derived signal
+    (and mirrors it into ``cluster_id``), so copies of one story that
+    ingestion dedup filed under one event share this identity here. Falls
+    back to ``cluster_id`` for builders that only set that field. Returns
+    "" for the synthetic families (calendar, market data, CoinGlass) that
+    never went through ingestion dedup.
+    """
+    return ((getattr(s, "event_key", "") or getattr(s, "cluster_id", "") or "")
+            .strip())
+
+
+def _collapse_members(members: list) -> list[WeightedSignal]:
+    """One vote per direction inside a finished cluster.
+
+    Splits by direction (a hawkish and a dovish headline about one event are
+    NOT one event - they are two readings, and merging them manufactures a
+    verdict neither source supports), keeps the heaviest member as the
+    representative, and applies the capped corroboration boost for the
+    cluster's independent sources.
+
+    The representative is picked by the weight scoring actually uses
+    (relevance x persistence x quality x session x tier x decay), NEVER by
+    ``final_weight``: that field is assigned by
+    ``sentiment_engine._aggregate`` AFTER clustering returns, so every signal
+    still carries 0.0 here and a ``final_weight``-based selector picked the
+    survivor by arbitrary tuple ordering.
+    """
+    if len(members) == 1:
+        return [members[0]]
+
+    # Split by direction so opposing readings never share a cluster.
+    by_dir: dict = {}
+    for s in members:
+        by_dir.setdefault(s.direction, []).append(s)
+
+    collapsed: list[WeightedSignal] = []
+    for direction_members in by_dir.values():
+        if len(direction_members) == 1:
+            collapsed.append(direction_members[0])
+            continue
+
+        # Representative = highest ACTUAL weight, recomputed here with the
+        # same formula _signal_weight uses downstream. This is the weight
+        # that will decide the contribution, so it is the right thing to
+        # maximise.
+        from app.analysis.sentiment_engine import _signal_weight
+
+        _now = _scoring_now()
+        best = max(direction_members,
+                   key=lambda s: max(0.0, _signal_weight(s, _now)))
+        # Count unique sources in this sub-cluster
+        sources = {s.source_quality for s in direction_members}
+        source_names = {getattr(s, 'source_name', '') for s in direction_members
+                        if getattr(s, 'source_name', '')}
+        independent_sources = len(sources | source_names)
+        # Apply corroboration boost
+        boost = corroboration_multiplier(independent_sources)
+        # Create a new signal with the boosted corroboration
+        new_signal = WeightedSignal(
+            asset=best.asset,
+            title=best.title,
+            direction=best.direction,
+            strength=best.strength,
+            importance=best.importance,
+            published_at=best.published_at,
+            relevance=best.relevance,
+            persistence=best.persistence,
+            source_quality=best.source_quality,
+            category=best.category,
+            cluster_id=best.cluster_id,
+            corroboration=max(best.corroboration, boost),
+            session_multiplier=best.session_multiplier,
+            is_primary=best.is_primary,
+            event_key=best.event_key,
+            reason=best.reason,
+            transmission=best.transmission,
+            report_kind=best.report_kind,
+            mode=best.mode,
+            surprise_weight=best.surprise_weight,
+        )
+        collapsed.append(new_signal)
+
+    return collapsed
+
+
 def cluster_signals(signals: list, window_hours: float = 0.5) -> list:
     """
     Cluster signals by normalized title within a time window.
 
-    This implements near-duplicate clustering at SCORING time (not ingestion time).
-    Each cluster contributes ONE signal (the highest-weight member) with a
-    corroboration boost based on the number of independent sources in the cluster.
+    This implements near-duplicate clustering at SCORING time (not ingestion
+    time). Each cluster contributes ONE signal (the highest-weight member)
+    with a corroboration boost based on the number of independent sources in
+    the cluster.
+
+    Identity first: signals that ingestion dedup already filed under one
+    event (same ``event_key`` / ``cluster_id``) collapse regardless of
+    publish time or wording - one event is one vote for the whole trading
+    day. Title similarity is the fallback for identity-less signals only.
 
     Args:
         signals: List of WeightedSignal objects
@@ -198,9 +300,31 @@ def cluster_signals(signals: list, window_hours: float = 0.5) -> list:
 
         asset_signals.sort(key=get_sort_key)
 
-        # Simple clustering: group by normalized title within time window
-        clusters: list[list[WeightedSignal]] = []
+        # Rule 0 (2026-10-13): the ingestion-time event identity decides
+        # FIRST, with no time window. Articles that ingestion dedup filed
+        # under one NewsEvent share one event_key, so their signals are ONE
+        # vote here too. Without this the 30-minute title rule below
+        # re-admitted every republished or reworded copy as a fresh
+        # contributor - the reported "Trump: working with Russia" headline
+        # counted 2-3 times, each copy adding its own weight to the bull
+        # total. Mirrors equity_card._collapse_cross_asset, which already
+        # collapses by event_key first.
+        keyed: dict[tuple[str, Direction], list[WeightedSignal]] = {}
+        unkeyed: list[WeightedSignal] = []
         for s in asset_signals:
+            event_id = _event_identity(s)
+            if event_id:
+                keyed.setdefault((event_id, s.direction), []).append(s)
+            else:
+                unkeyed.append(s)
+        for members in keyed.values():
+            clustered.extend(_collapse_members(members))
+
+        # Title-similarity fallback for identity-less signals (calendar,
+        # market data, CoinGlass, synthetic builders): group by normalized
+        # title within the rolling window, exactly as before.
+        clusters: list[list[WeightedSignal]] = []
+        for s in unkeyed:
             if s.published_at is None:
                 clusters.append([s])
                 continue
@@ -272,78 +396,11 @@ def cluster_signals(signals: list, window_hours: float = 0.5) -> list:
             if not matched:
                 clusters.append([s])
 
-        # For each cluster, keep the highest-weight signal and apply corroboration boost.
-        #
-        # BUG FIX (2026-10-08): the old representative selector used
-        # ``max(cluster, key=lambda s: max(0, s.final_weight))``. ``final_weight``
-        # is assigned by ``sentiment_engine._aggregate`` AFTER this function
-        # returns, so every signal carried 0.0 here and the "best" member was
-        # chosen by arbitrary tuple ordering. Worse, a cluster whose members
-        # DISAGREE in direction collapsed to one side and the other side's
-        # vote was silently dropped.
-        #
-        # Two changes, both required by the brief:
-        #   1. cluster only within the SAME direction. A hawkish and a dovish
-        #      headline about the same event are NOT one event - they are two
-        #      readings, and merging them manufactures a verdict neither source
-        #      actually supports.
-        #   2. pick the representative by the weight scoring actually uses
-        #      (relevance x persistence x quality x session x tier x decay),
-        #      not by a field that is always zero at this point.
+        # Each finished title cluster keeps one vote per direction (see
+        # _collapse_members): the heaviest member survives, carrying the
+        # capped corroboration boost for its independent sources.
         for cluster in clusters:
-            if len(cluster) == 1:
-                clustered.append(cluster[0])
-                continue
-
-            # Split by direction so opposing readings never share a cluster.
-            by_dir: dict = {}
-            for s in cluster:
-                by_dir.setdefault(s.direction, []).append(s)
-
-            for direction, members in by_dir.items():
-                if len(members) == 1:
-                    clustered.append(members[0])
-                    continue
-
-                # Representative = highest ACTUAL weight, recomputed here with
-                # the same formula _signal_weight uses downstream. This is the
-                # weight that will decide the contribution, so it is the right
-                # thing to maximise.
-                from app.analysis.sentiment_engine import _signal_weight
-
-                _now = _scoring_now()
-                best = max(members, key=lambda s: max(0.0, _signal_weight(s, _now)))
-                # Count unique sources in this sub-cluster
-                sources = {s.source_quality for s in members}
-                source_names = {getattr(s, 'source_name', '') for s in members
-                                if getattr(s, 'source_name', '')}
-                independent_sources = len(sources | source_names)
-                # Apply corroboration boost
-                boost = corroboration_multiplier(independent_sources)
-                # Create a new signal with the boosted corroboration
-                new_signal = WeightedSignal(
-                    asset=best.asset,
-                    title=best.title,
-                    direction=best.direction,
-                    strength=best.strength,
-                    importance=best.importance,
-                    published_at=best.published_at,
-                    relevance=best.relevance,
-                    persistence=best.persistence,
-                    source_quality=best.source_quality,
-                    category=best.category,
-                    cluster_id=best.cluster_id,
-                    corroboration=max(best.corroboration, boost),
-                    session_multiplier=best.session_multiplier,
-                    is_primary=best.is_primary,
-                    event_key=best.event_key,
-                    reason=best.reason,
-                    transmission=best.transmission,
-                    report_kind=best.report_kind,
-                    mode=best.mode,
-                    surprise_weight=best.surprise_weight,
-                )
-                clustered.append(new_signal)
+            clustered.extend(_collapse_members(cluster))
 
     return clustered
 

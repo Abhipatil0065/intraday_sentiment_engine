@@ -559,6 +559,12 @@ def build_payload(session) -> dict:
             "sources_ok": detail.get("sources_ok", 0),
             "analysis_mode": "llm" if settings.has_llm else "heuristic",
             "llm_enabled": settings.has_llm,
+            # Real LLM state for the header pill: "ok" / "degraded" (circuit
+            # breaker open) / "disabled". /api/health has always reported it;
+            # this block never did, so the dashboard's pill could only ever
+            # read LIVE or STOPPED and a degraded model was indistinguishable
+            # from a healthy one.
+            "llm_status": llm_client.llm_status(),
             "llm_requests_per_minute": settings.llm_requests_per_minute,
             "llm_requests_used_last_min": llm_client.requests_in_window(),
             "poll_interval_seconds": settings.poll_interval_seconds,
@@ -672,8 +678,8 @@ async def financialjuice_sessions():
     it current with no second connection.
 
     The boxes themselves are still FinancialJuice-only, but their gold/silver/
-    bitcoin split also folds in HIGH-importance Section B news and the economic
-    calendar, so a session is read against the day's real backdrop.
+    bitcoin/equity split also folds in HIGH-importance Section B news and the
+    economic calendar, so a session is read against the day's real backdrop.
 
     LEGACY SCORING: this section still returns a forced bull_pct/bear_pct pair
     that sums to 100, from the older scorer in fj_sessions.py. It is NOT on the

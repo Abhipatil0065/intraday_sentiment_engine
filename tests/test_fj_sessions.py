@@ -459,9 +459,24 @@ def test_hawkish_report_leans_bearish_for_gold():
 def test_report_with_no_asset_content_stays_even():
     from app.models.enums import Asset
     scored = F.analyse_report_text("A short note about the weather today.")
-    for asset in (Asset.GOLD, Asset.SILVER, Asset.BITCOIN):
+    for asset in (Asset.GOLD, Asset.SILVER, Asset.BITCOIN, Asset.EQUITY):
         assert scored[asset]["bull_pct"] == 50.0
         assert scored[asset]["bear_pct"] == 50.0
+
+
+def test_equity_markets_card_reads_equity_language():
+    """The equity card is the only card that answers a report about equities."""
+    scored = F.analyse_report_text(
+        "Stocks rallied on strong earnings as the Nasdaq closed at a record "
+        "high, with the S&P 500 surging on better-than-expected guidance.")
+    equity = scored[Asset.EQUITY]
+    assert equity["label"] == "Equity Markets"
+    # Its own cue family fires, so the card has something real to show...
+    assert "s&p" in equity["drivers"] or "nasdaq" in equity["drivers"]
+    # ...while the three price cards honestly report no asset-specific detail.
+    for asset in (Asset.GOLD, Asset.SILVER, Asset.BITCOIN):
+        assert scored[asset]["drivers"] == [
+            "No asset-specific detail in this report"]
 
 
 
@@ -539,11 +554,23 @@ def test_box_order_is_exactly_as_specified():
     ]
 
 
-def test_every_box_has_the_three_assets_in_order():
+def test_every_box_has_the_four_assets_in_order():
     payload = F.build_session_analysis([], now=NOW)
     for box in payload["boxes"]:
         assert [a["asset"] for a in box["assets"]] == [
-            "XAUUSD", "XAGUSD", "BTCUSD"]
+            "XAUUSD", "XAGUSD", "BTCUSD", "EQUITY"]
+
+
+def test_equity_markets_card_sits_beside_bitcoin_with_its_own_name():
+    """The fourth card is the region's equity tape, not a bitcoin proxy."""
+    payload = F.build_session_analysis([], now=NOW)
+    box = payload["boxes"][0]
+    cards = {a["asset"]: a for a in box["assets"]}
+    assert list(cards)[-1] == "EQUITY"           # right after bitcoin
+    assert "EQUITY" in cards
+    assert cards["EQUITY"]["label"] == "Equity Markets"
+    # The engine-wide equity label is untouched elsewhere.
+    assert Asset.EQUITY.label == "S&P 500"
 
 
 # ---------------------------------------------------------------------------
