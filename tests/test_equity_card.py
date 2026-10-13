@@ -1,7 +1,11 @@
 """Session-aware global equity card: title mapping + region filtering."""
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+import pytest
 
 from app.analysis.equity_card import (
+    _collapse_cross_asset,
     build_equity_card,
     neutral_card,
     region_signals,
@@ -21,6 +25,8 @@ from app.models.enums import (
     NewsCategory,
     SessionName,
 )
+
+NY = ZoneInfo("America/New_York")
 
 NOW = datetime(2026, 10, 6, 14, 0, tzinfo=timezone.utc)
 
@@ -100,4 +106,136 @@ def test_off_hours_falls_back_to_previous_session():
         "ASIA EQUITY", "EUROPE EQUITY", "US EQUITY")
     card = neutral_card(equity_session())
     assert card.region in ("ASIA", "EUROPE", "US")
+
+
+# ------------------------- end-to-end session switch -------------------------
+# The user-visible contract: ONE 4th card whose region/title/symbol/bias follow
+# the active session, switching the MOMENT the next session opens, even when
+# the previous session's window has not expired (newest session wins).
+def _all_regions_pool():
+    return [
+        _eq_signal("Nikkei rallies as China stimulus lifts Asian shares"),
+        _eq_signal("DAX hits record as ECB signals rate cuts"),
+        _eq_signal("S&P 500 futures jump as Fed turns dovish"),
+    ]
+
+
+@pytest.mark.parametrize("ny_hour,expected_region,expected_title", [
+    (21, "ASIA", "ASIA EQUITY"),   # Asia running -> Asia bias
+    (2, "ASIA", "ASIA EQUITY"),    # still Asia (its window ends 04:00)
+    (3, "EUROPE", "EUROPE EQUITY"),  # Europe opens -> Europe, Asia tail ignored
+    (7, "EUROPE", "EUROPE EQUITY"),
+    (8, "US", "US EQUITY"),        # US opens while Europe runs -> US wins
+    (14, "US", "US EQUITY"),
+])
+def test_card_follows_active_session(ny_hour, expected_region, expected_title):
+    when = datetime(2026, 10, 6, ny_hour, 0, tzinfo=NY)
+    card = build_equity_card(_all_regions_pool(), now=when,
+                             session=equity_session(when))
+    assert card.region == expected_region
+    assert card.title == expected_title
+    assert EQUITY_SESSION_MAP[SessionName(expected_region)]["title"] == expected_title
+    # The region actually decided the verdict: only its own region scored.
+    assert card.no_data is False
+    assert card.signal_count == 1
+
+
+def test_session_switch_keeps_regions_independent():
+    pool = _all_regions_pool()
+    when_eu = datetime(2026, 10, 6, 6, 0, tzinfo=NY)
+    when_us = datetime(2026, 10, 6, 10, 0, tzinfo=NY)
+    eu = build_equity_card(pool, now=when_eu, session=equity_session(when_eu))
+    us = build_equity_card(pool, now=when_us, session=equity_session(when_us))
+    assert eu.region == "EUROPE" and us.region == "US"
+    # Different signal sets per region proof: each card saw exactly one region.
+    assert eu.signal_count == 1 and us.signal_count == 1
+
+
+# ---------------- one story, one vote (cross-asset duplication) -------------
+# Regression (2026-10-13): one article is classified against every asset it
+# could touch, so the pipeline built one WeightedSignal PER IMPACT ROW, all
+# sharing one title. cluster_signals groups by asset first, so the copies never
+# merged, and the equity card re-tagged them all as Asset.EQUITY - the same
+# (e.g. bullish) headline then appeared twice in the driver list and counted
+# twice in the score.
+_DUP_TITLE = "S&P 500 rallies as Fed signals cuts"
+
+
+def _copy(asset, direction=Direction.BULLISH, event_key="evt-1",
+          published_at=NOW, relevance=0.8):
+    return build_signal(
+        asset=asset, title=_DUP_TITLE, direction=direction,
+        strength=ImpactStrength.HIGH, importance=EconomicImportance.HIGH,
+        published_at=published_at, relevance=relevance, persistence=0.6,
+        category=NewsCategory.EQUITIES, event_key=event_key,
+        cluster_id=event_key)
+
+
+def _same_story_pool():
+    """One article, four impact rows (gold / silver / bitcoin / equity)."""
+    return [_copy(a) for a in (Asset.GOLD, Asset.SILVER,
+                               Asset.BITCOIN, Asset.EQUITY)]
+
+
+def test_same_story_scores_once_across_assets():
+    pool = _same_story_pool()
+    card = build_equity_card(pool, now=NOW, session=SessionName.US)
+    assert card.no_data is False
+    assert card.bias == "BULLISH"
+    # ONE vote, not one per impact row.
+    assert card.signal_count == 1
+    assert card.contributing_articles == 1
+    assert [d["title"] for d in card.drivers] == [_DUP_TITLE]
+
+
+def test_multi_asset_duplicate_matches_single_signal_card():
+    # The collapsed card must be indistinguishable from the same story
+    # sent in once: no double-counted score, no inflated confidence.
+    pool = _same_story_pool()
+    dup = build_equity_card(pool, now=NOW, session=SessionName.US)
+    lone = build_equity_card([_copy(Asset.GOLD)], now=NOW,
+                             session=SessionName.US)
+    assert dup.score == lone.score
+    assert dup.raw_score == lone.raw_score
+    assert dup.confidence == lone.confidence
+    assert dup.signal_count == lone.signal_count == 1
+
+
+def test_opposing_readings_stay_separate_votes():
+    # A hawkish and a dovish reading of one event are two readings (the same
+    # rule cluster_signals applies), so both survive the collapse.
+    bull = _copy(Asset.GOLD, direction=Direction.BULLISH)
+    bear = _copy(Asset.EQUITY, direction=Direction.BEARISH)
+    assert len(_collapse_cross_asset([bull, bear], now=NOW)) == 2
+
+
+def test_duplicate_guid_same_headline_merges_inside_window():
+    a = _copy(Asset.GOLD, event_key="evt-a", published_at=NOW)
+    b = _copy(Asset.EQUITY, event_key="evt-b",
+              published_at=datetime(2026, 10, 6, 14, 10, tzinfo=timezone.utc))
+    assert len(_collapse_cross_asset([a, b], now=NOW)) == 1
+
+
+def test_repeated_story_hours_later_stays_two_votes():
+    a = _copy(Asset.GOLD, event_key="evt-a", published_at=NOW)
+    b = _copy(Asset.EQUITY, event_key="evt-b",
+              published_at=datetime(2026, 10, 6, 20, 10, tzinfo=timezone.utc))
+    assert len(_collapse_cross_asset([a, b], now=NOW)) == 2
+
+
+def test_collapse_keeps_highest_weight_copy():
+    weak = _copy(Asset.GOLD, relevance=0.2)
+    strong = _copy(Asset.EQUITY, relevance=0.95)
+    out = _collapse_cross_asset([weak, strong], now=NOW)
+    assert len(out) == 1
+    assert out[0].relevance == 0.95
+
+
+def test_collapse_does_not_mutate_inputs():
+    src = _copy(Asset.GOLD, relevance=0.1)
+    other = _copy(Asset.SILVER, relevance=0.9)
+    before = src.relevance
+    _collapse_cross_asset([src, other], now=NOW)
+    assert src.relevance == before
+    assert other.relevance == 0.9
 

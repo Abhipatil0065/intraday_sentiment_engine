@@ -26,11 +26,12 @@ tasks apply.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta, timezone
 
 from app.analysis.cue_rules import detect_direction
 from app.analysis.display import to_display
+from app.analysis.event_clustering import normalise_tokens
 from app.analysis.release_surprise import (
     combine_prints_for_asset,
     parse_all,
@@ -104,6 +105,118 @@ def _state_key(region: str) -> str:
 def _matches_region(text: str, keywords: Sequence[str]) -> bool:
     lowered = (text or "").lower()
     return any(k and k in lowered for k in keywords)
+
+
+def _aware_utc(dt: datetime | None) -> datetime | None:
+    """Aware UTC copy of a published_at, or None (naive -> UTC, like clustering)."""
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
+# Same 30-minute window ``cluster_signals`` uses for near-duplicate joins, so
+# the title fallback below can never merge stories that clustering itself
+# would keep apart. The event_key / cluster_id identity has no window: one
+# event is one story for the whole day, that is what the key MEANS.
+_TITLE_WINDOW = timedelta(minutes=30)
+
+
+def _collapse_cross_asset(signals: list[WeightedSignal],
+                          now: datetime | None = None) -> list[WeightedSignal]:
+    """
+    ONE story, ONE vote in the equity aggregate (2026-10-13).
+
+    One article is classified against every asset it could touch, so the
+    pipeline built one WeightedSignal PER ASSET_IMPACT ROW - copies sharing a
+    single title but a different asset (e.g. XAUUSD + XAGUSD + BTCUSD news on
+    the same headline). ``cluster_signals`` groups by asset FIRST, so those
+    copies never meet there, and ``region_signals`` then re-tags EVERY
+    region-matching copy as Asset.EQUITY. Without this collapse the story
+    scored once per impact row and the card printed the identical (same
+    direction) headline several times in its BULLISH / BEARISH driver lists,
+    each copy inflating the net score.
+
+    Copies collapse by cluster identity - ``event_key`` (the ingestion-level
+    event), then ``cluster_id``, then the exact normalised title INSIDE a
+    30-minute window (which also merges the same headline stored twice under
+    different GUIDs) - and by direction, so two genuinely opposing readings of
+    one event stay two votes, exactly like ``cluster_signals`` does. The
+    surviving member is the copy with the highest weight under the same
+    formula the scoring engine uses, so the representative is the one that
+    contributes most anyway, and it keeps the strongest corroboration in the
+    group (a per-asset boost ``cluster_signals`` already granted is not thrown
+    away).
+
+    A signal with no usable identity passes through untouched. Input objects
+    are never mutated: the winner is returned via ``dataclasses.replace``.
+    """
+    from app.analysis.sentiment_engine import _signal_weight
+
+    def _title_key(s: WeightedSignal) -> str:
+        return " ".join(sorted(normalise_tokens(s.title or "")))
+
+    groups: dict[tuple, list[WeightedSignal]] = {}
+    order: list[tuple] = []
+    for idx, s in enumerate(signals):
+        stamp = _aware_utc(s.published_at)
+        title_key = _title_key(s)
+        key: tuple | None = None
+
+        # 1. Exact event identity: one event is one story, all day.
+        event_id = s.event_key or s.cluster_id
+        if event_id:
+            candidate = ("event", event_id, s.direction)
+            if candidate in groups:
+                key = candidate
+
+        # 2. Title fallback, inside the 30-minute window: the same headline
+        #    stored twice (different GUIDs, so different event keys) or
+        #    carried by sources with no event identity at all. May join a
+        #    group opened under either identity.
+        if key is None and title_key:
+            for existing in order:
+                if existing[0] == "raw":
+                    continue
+                rep = groups[existing][0]
+                if rep.direction != s.direction:
+                    continue
+                if _title_key(rep) != title_key:
+                    continue
+                rep_stamp = _aware_utc(rep.published_at)
+                if stamp is None or rep_stamp is None:
+                    continue
+                if abs((stamp - rep_stamp).total_seconds()) <= \
+                        _TITLE_WINDOW.total_seconds():
+                    key = existing
+                    break
+
+        # 3. Nothing to join: open a new group.
+        if key is None:
+            if event_id:
+                key = ("event", event_id, s.direction)
+            elif title_key:
+                key = ("title", title_key, s.direction, idx)
+            else:
+                # No fingerprint at all: keep it as its own vote.
+                key = ("raw", idx)
+
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(s)
+
+    out: list[WeightedSignal] = []
+    for key in order:
+        members = groups[key]
+        if len(members) == 1:
+            out.append(members[0])
+            continue
+        winner = max(members, key=lambda m: _signal_weight(m, now))
+        best_corr = max(float(m.corroboration or 1.0) for m in members)
+        if best_corr > float(winner.corroboration or 1.0):
+            winner = replace(winner, corroboration=best_corr)
+        out.append(winner)
+    return out
 
 
 # Categories the equity card listens to (Task 7).
@@ -252,6 +365,10 @@ def build_equity_card(all_signals: Sequence[WeightedSignal],
             reason=s.reason, transmission=s.transmission,
             report_kind=s.report_kind, mode=s.mode,
             surprise_weight=s.surprise_weight))
+    # One story, one vote: drop the per-asset copies of the same headline
+    # BEFORE scoring, otherwise a macro story that routed to gold, silver and
+    # bitcoin at ingest is counted (and displayed) once per impact row.
+    proxy = _collapse_cross_asset(proxy, now)
     # Task 4: the equity card reuses the same single tier multiplier table
     # and applies it once per signal, via sentiment_engine._signal_weight
     # (compute). No duplicate tier logic here, so importance and tier never
