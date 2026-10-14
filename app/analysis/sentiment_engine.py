@@ -142,15 +142,6 @@ def _passes_impact_gate(s: WeightedSignal) -> bool:
     """False when a signal's impact band may not reach any card."""
     if not settings.only_high_impact_counts:
         return True
-    # A scraped CoinGlass flow reading is a measured number, not classified
-    # news: it never received an article-level impact verdict, so the news
-    # bands above cannot judge it. The CVD divergence and the footprint
-    # imbalance must be able to reach the bullish/bearish totals - that is the
-    # ONLY thing the reading does. Its own band still scales the magnitude in
-    # _aggregate (CVD HIGH -> 0.72, footprint MEDIUM -> 0.45), so this admits
-    # the number without inflating it.
-    if s.mode == "coinglass":
-        return True
     return s.strength in STRENGTH_GATE
 
 
@@ -455,6 +446,14 @@ class WeightedSignal:
     metal_character: str | None = None
     # Central bank speaker tier multiplier.
     speaker_tier: float = 1.0
+    # Overnight admission: the instant this signal's FRESHNESS is measured
+    # from, when that differs from publication time. Set for headlines the
+    # morning brief judged while the laptop was off - the engine could not act
+    # on them at publication, so age is measured from the moment it came back
+    # (the covered window's end) instead. None for every live signal, which
+    # keeps publication-time ageing exactly as before. Display, burst and
+    # delta-60m logic still reads ``published_at``.
+    age_reference_utc: datetime | None = None
 
     # filled by compute()
     recency: float = 0.0
@@ -659,9 +658,12 @@ def _signal_weight(s: WeightedSignal, now: datetime | None) -> float:
 
     # Task 5a: decay uses the event-tier half-life (TIER_1~1.5h, TIER_2~0.75h,
     # TIER_3~0.25h) scaled by the per-asset multiplier, with
-    # TRADING_DAY_CUTOFF_HOURS giving weight 0.
+    # TRADING_DAY_CUTOFF_HOURS giving weight 0. An overnight-admitted signal
+    # ages from its reference (the brief's judgment moment), not from the
+    # publication time the laptop slept through.
     tier_key = event_tier(s)
-    decay = decay_weight(s.published_at, tier_key, now, asset=s.asset)
+    published_ref = s.age_reference_utc or s.published_at
+    decay = decay_weight(published_ref, tier_key, now, asset=s.asset)
     rel = max(0.0, min(1.0, s.relevance))
     per = max(0.05, min(1.0, s.persistence))
     qual = QUALITY_MULT.get((s.source_quality or "").upper(), 0.90)

@@ -331,11 +331,8 @@ Price-action confirmation unavailable.
 
 It never invents prices, yields, DXY or ETF flows. Enable with
 `PRICE_DATA_ENABLED=true` to attach price-action confirmation from keyless
-feeds: BTC via Coinbase spot, and GOLD/SILVER via TradingView
-(OANDA:XAUUSD / OANDA:XAGUSD over tvDatafeed, the same symbol mapping the
-CoinGlass scraper uses). Each leg degrades on its own - a TradingView
-failure leaves BTC confirmation intact, and `PRICE_TV_ENABLED=false`
-disables the metals leg without touching BTC.
+feeds: BTC via Coinbase spot. GOLD/SILVER have no spot feed, so they
+always read unavailable.
 
 ---
 
@@ -420,8 +417,7 @@ See `.env.example` for the full annotated list. Key values:
 | `MAX_ARTICLE_AGE_HOURS` | `26` | Hard cap on article age |
 | `NEWS_RETENTION_DAYS` | `2` | Days of news kept in the DB (today + previous day); `0` keeps everything |
 | `DEDUP_SIMILARITY_THRESHOLD` | `0.72` | Event merge threshold |
-| `PRICE_DATA_ENABLED` | `false` | Price-action confirmation (master switch) |
-| `PRICE_TV_ENABLED` | `true` | GOLD/SILVER confirmation leg via TradingView (tvDatafeed) |
+| `PRICE_DATA_ENABLED` | `false` | Price-action confirmation (master switch; BTC via Coinbase) |
 | `USE_MOCK_SOURCE` | `false` | Offline synthetic demo |
 | `DATABASE_URL` | `sqlite:///./data/...` | Swap for PostgreSQL in prod |
 

@@ -271,7 +271,7 @@ class Settings(BaseSettings):
         "Geopolitics=8.0,Risk Sentiment=5.0,ETF Flows=24.0,Bitcoin ETF Flows=24.0,"
         "Crypto Market Flows=12.0,Crypto Regulation=72.0,China=12.0,"
         "Industrial Demand=12.0,Commodity Supply/Demand=10.0,Oil/Energy=8.0,"
-        "Equities=8.0,Liquidation Heatmap=1.0,CVD=1.0,Footprint=1.0,Other=6.0"
+        "Equities=8.0,Other=6.0"
     )
 
     # ---------------- economic calendar (item 8) ----------------
@@ -335,130 +335,10 @@ class Settings(BaseSettings):
     bias_snapshot_enabled: bool = True
 
     # ---------------- price confirmation ----------------
+    # Master switch for the price-action confirmation panel (GOLD/SILVER have
+    # no spot feed; BITCOIN is covered by the Coinbase leg in price_data.py).
     price_data_enabled: bool = Field(default=False, validation_alias="PRICE_DATA_ENABLED")
     price_api_base_url: str = "https://api.coinbase.com/v2"
-    # TradingView leg of the price confirmation: GOLD/SILVER via OANDA
-    # XAUUSD/XAGUSD (tvDatafeed, free/keyless). Independent toggle so the
-    # metals feed can be disabled without turning the BTC (Coinbase) one off.
-    price_tv_enabled: bool = Field(default=True, validation_alias="PRICE_TV_ENABLED")
-    # Market data proxy polling interval (seconds). Used by market_data.py
-    # to poll DXY/TIP for synthetic STRONG_USD/WEAK_USD and REAL_YIELDS signals.
-    market_data_poll_seconds: int = Field(default=60, validation_alias="MARKET_DATA_POLL_SECONDS")
-
-    # ---------------- CoinGlass Scraper ----------------
-    # Enable/disable CoinGlass scraping for liquidation heatmap, CVD, and footprint data
-    coinglass_enabled: bool = Field(default=True, validation_alias="COINGLASS_ENABLED")
-    # Poll interval in seconds (default 300s = 5 minutes to respect rate limits)
-    coinglass_poll_seconds: int = Field(default=300, validation_alias="COINGLASS_POLL_SECONDS")
-
-    # NOTE ON THE URLS. The "legend" chart links
-    #   https://legend.coinglass.com/chart/<id>
-    # are SHARED chart links and now redirect to a login page
-    # (verified: coinglass.com/login?act=legend), so they cannot be scraped
-    # without an authenticated session. The public page that renders the same
-    # liquidation heatmap WITHOUT a login is used instead:
-    #   https://www.coinglass.com/pro/futures/LiquidationHeatMap
-    #
-    # VERIFIED CAPABILITY (2026-10):
-    #   * This page renders BTC and the BTC heatmap is readable end to end,
-    #     with NO key and NO login.
-    #   * It does NOT render XAU or XAG: no URL parameter switches the
-    #     instrument, the API is behind a plan wall, and driving the symbol
-    #     combobox changes the page state but never redraws the chart.
-    #
-    # GOLD / SILVER need a different page, and the one that has them is the
-    # "Legend" chart, which requires a login. The scraper therefore defaults to
-    # the public page above for BTC, and uses the Legend chart for the metals
-    # once a session is saved (see coinglass_profile_dir and
-    # tools/coinglass_login.py). A Legend chart holds several instruments as
-    # separate canvases in one render, and the extractor matches each asset to
-    # the canvas whose price axis belongs to it, so one shared chart id serves
-    # both metals.
-    #
-    # Override any of these to scrape a different CoinGlass page.
-    coinglass_gold_url: str = Field(
-        default="https://www.coinglass.com/pro/futures/LiquidationHeatMap",
-        validation_alias="COINGLASS_GOLD_URL"
-    )
-    coinglass_silver_url: str = Field(
-        default="https://www.coinglass.com/pro/futures/LiquidationHeatMap",
-        validation_alias="COINGLASS_SILVER_URL"
-    )
-    coinglass_btc_url: str = Field(
-        default="https://www.coinglass.com/pro/futures/LiquidationHeatMap",
-        validation_alias="COINGLASS_BTC_URL"
-    )
-    # Which assets to scrape from CoinGlass at all (comma-separated).
-    #
-    # DEFAULT IS BTC ONLY, and deliberately so. The public heatmap page renders
-    # BTC with no key and no login, so BTC is the one instrument that can be
-    # read end to end. Gold and Silver need a CoinGlass "Legend" chart, and
-    # those cannot be automated:
-    #   * the Legend chart redirects anonymous visitors to a login wall,
-    #   * CoinGlass's REST API answers "Upgrade plan" for every endpoint on
-    #     this key's plan - including free-tier ones,
-    #   * and, decisively, the auth session is a SESSION-ONLY COOKIE that
-    #     Chromium does not write to a persistent profile (verified: /account
-    #     returns 200 inside the run, then the cookie is gone once the browser
-    #     closes, so every fresh render lands on the login wall again).
-    #
-    # Listing an asset that cannot be read would cost a wasted browser render
-    # every poll and make noise that looks like bot traffic, so unreadable
-    # assets are simply not configured. Metals then fall back to news + price
-    # confirmation, which is the documented degradation.
-    coinglass_assets: str = Field(
-        default="BTCUSD", validation_alias="COINGLASS_ASSETS")
-    # Optional PERSISTENT BROWSER PROFILE directory for authenticated browsing.    #
-    # Why this exists: the "Legend" chart links (legend.coinglass.com/chart/<id>)
-    # redirect to coinglass.com/login?act=legend - CoinGlass requires an account
-    # to view a Legend chart, so the gold/silver links are NOT publicly readable
-    # (verified live). The BTC liquidation heatmap page IS public and needs no
-    # login.
-    #
-    # When this is set, renders reuse a real browser profile so a session saved
-    # by a one-time manual login (tools/coinglass_login.py) is used, and the
-    # Legend charts can be scraped with the crawler signed in. Leave it EMPTY to
-    # browse anonymously (the default, and the only keyless path).
-    coinglass_profile_dir: str = Field(
-        default="", validation_alias="COINGLASS_PROFILE_DIR")
-    # When true, the render runs HEADED (headed browser needed for the one-time
-    # login flow). Always keep False for scheduled scraping.
-    coinglass_headless: bool = Field(
-        default=True, validation_alias="COINGLASS_HEADLESS")
-
-    # CoinGlass REST API key (optional).
-    #
-    # TESTED AND NOT USABLE ON THIS PROJECT'S PLAN (verified 2026-10): the key
-    # is VALID - it is recognised, and a wrong header name yields "API key
-    # missing" - but every endpoint answers {"code":"401","msg":"Upgrade plan"},
-    # including free-tier basics such as /api/index/fear-greed-history and
-    # /api/futures/supported-coins. The v3 API (open-api.coinglass.com) is dead
-    # (404), and no endpoint is reachable, so the key buys nothing today. The
-    # liquidation-heatmap / CVD / footprint endpoints are among the blocked
-    # ones even if the tier were raised, so the metals still need the login
-    # path below.
-    #
-    # Left wired up so that a raised plan is a config change only: set the key
-    # and the client in coinglass_api.py (see _COINGLASS_API_ENDPOINTS) will
-    # start using it.
-    #
-    # NEVER commit it: .env is gitignored and is the right home for it.
-    coinglass_api_key: str = Field(
-        default="", validation_alias="COINGLASS_API_KEY")
-    # Cache TTL for scraped data (seconds) - avoid hitting the site too frequently
-    coinglass_cache_ttl_seconds: int = Field(default=300, validation_alias="COINGLASS_CACHE_TTL_SECONDS")
-    # Headless browser timeout (seconds). A chart page needs the app to hydrate
-    # and the canvas to draw, which measured ~20s usually but up to ~75s when
-    # CoinGlass is slow, so this is set with headroom rather than tight.
-    coinglass_browser_timeout_seconds: int = Field(
-        default=90, validation_alias="COINGLASS_BROWSER_TIMEOUT_SECONDS")
-    # User agent for scraping
-    coinglass_user_agent: str = Field(
-        default="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
-        validation_alias="COINGLASS_USER_AGENT"
-    )
-    # Fallback: if scraping fails, use liquidator-indicator or HyperData Terminal
-    coinglass_fallback_enabled: bool = Field(default=True, validation_alias="COINGLASS_FALLBACK_ENABLED")
 
     # ---------------- stability / flip tuning ----------------
     # Minimum margin by which the opposite side must exceed the current side
@@ -690,6 +570,20 @@ class Settings(BaseSettings):
     # WAL with a 30s busy timeout, so this is politeness, not a lock.
     morning_brief_startup_grace_seconds: int = Field(
         default=15, validation_alias="MORNING_BRIEF_STARTUP_GRACE_SECONDS")
+    # OVERNIGHT COUNTS AS FRESH
+    # -------------------------
+    # The brief keeps the off-window's headlines, but the market-day boundary
+    # (00:00 ET) has usually already rolled over by boot time, so those rows
+    # would otherwise never reach that morning's boxes. With this on, the
+    # covered off-window is ADMITTED into the day's rows (feed, boxes, alerts)
+    # for the rest of that market day, and each kept headline measures its
+    # freshness from the window's END - the moment the engine came back and
+    # the model actually judged it - instead of from its publication time
+    # while the laptop was off. Without this the 8h trading-day cutoff zeroes
+    # the whole overnight batch before it can move a score. Set false to fall
+    # back to pure publication-time ageing (headlines appear, weigh ~0).
+    overnight_counts_as_fresh: bool = Field(
+        default=True, validation_alias="OVERNIGHT_COUNTS_AS_FRESH")
 
     # ---------------- ports ----------------
     dashboard_port: int = 8501
@@ -981,10 +875,6 @@ DRIVER_RANKINGS: dict[str, dict[str, float]] = {
         "COMMODITY_SUPPLY": 0.60,
         "OIL_SUPPLY_TIGHTNESS": 0.15,
         "OIL_SUPPLY_GLUT": 0.10,
-        # CoinGlass derived signals (scraped)
-        "LIQUIDATION_HEATMAP": 0.90,   # high relevance: liquidation clusters drive price
-        "CVD": 0.85,                    # CVD divergence is a strong signal
-        "FOOTPRINT": 0.80,              # footprint shows aggressive buying/selling
         "GENERAL_MACRO": 0.30,
     },
     # SILVER: gold's drivers plus industrial demand and China data.
@@ -1030,10 +920,6 @@ DRIVER_RANKINGS: dict[str, dict[str, float]] = {
         "COMMODITY_SUPPLY": 0.75,
         "OIL_SUPPLY_TIGHTNESS": 0.15,
         "OIL_SUPPLY_GLUT": 0.10,
-        # CoinGlass derived signals (scraped)
-        "LIQUIDATION_HEATMAP": 0.85,
-        "CVD": 0.80,
-        "FOOTPRINT": 0.75,
         "GENERAL_MACRO": 0.30,
     },
     # BITCOIN: ETF flows, liquidity / rate path, regulation, risk sentiment.
@@ -1088,10 +974,6 @@ DRIVER_RANKINGS: dict[str, dict[str, float]] = {
         "COMMODITY_SUPPLY": 0.10,
         "OIL_SUPPLY_TIGHTNESS": 0.10,
         "OIL_SUPPLY_GLUT": 0.05,
-        # CoinGlass derived signals (scraped)
-        "LIQUIDATION_HEATMAP": 1.00,   # critical for BTC - liquidation cascades
-        "CVD": 0.95,                    # CVD divergence very relevant for crypto
-        "FOOTPRINT": 0.90,              # footprint shows aggressive buying/selling
         "GENERAL_MACRO": 0.30,
     },
 }
@@ -1124,9 +1006,6 @@ EQUITY_RELEVANCE: dict[str, float] = {
     NewsCategory.BITCOIN_ETF_FLOWS: 0.05,
     NewsCategory.CRYPTO_MARKET_FLOWS: 0.05,
     NewsCategory.OIL_ENERGY: 0.35,
-    NewsCategory.LIQUIDATION_HEATMAP: 0.10,
-    NewsCategory.CVD: 0.10,
-    NewsCategory.FOOTPRINT: 0.10,
     NewsCategory.OTHER: 0.10,
 }
 

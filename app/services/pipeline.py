@@ -26,7 +26,11 @@ from app.analysis.economic_impact import (
     headline as calendar_headline,
 )
 from app.analysis.event_deduplication import EventDeduplicator
-from app.analysis.fj_sessions import FINANCIAL_JUICE_SOURCE
+from app.analysis.fj_sessions import (
+    FINANCIAL_JUICE_SOURCE,
+    is_fj_session_report_row,
+    session_report_asset_allowed,
+)
 from app.analysis.news_classifier import analyze_article, is_section_b_verdict
 from app.analysis.sentiment_engine import WeightedSignal, remember_bias
 from app.analysis.signal_factory import build_bleed_signal, build_signal
@@ -35,7 +39,6 @@ from app.database import session_scope
 from app.ingestion.base import RawArticle
 from app.ingestion.economic_calendar import fetch_calendar
 from app.ingestion.news_fetcher import fetch_all_news
-from app.ingestion.market_data import build_market_data_signals, market_data_signals_to_weighted
 from app.logging_conf import get_logger
 from app.market import market_prep, market_wrap
 from app.market import regime as regime_mod
@@ -95,12 +98,6 @@ _last_equity_card: dict | None = None
 # A session boundary must not cost a full poll interval (180s) of a stale
 # region/title/bias on the card.
 _last_equity_signals: list = []
-
-# CoinGlass snapshots (liquidation heatmap / CVD / footprint) from the most
-# recent recompute. Keyed by asset symbol. Rate-limited to at most one fetch
-# per coinglass_cache_ttl_seconds inside the scraper, so a recompute never
-# opens a browser on its own - it only reads what the cache decides is fresh.
-_coinglass_snapshots: dict = {}
 
 # Cached health metrics - written by the pipeline, read by /api/health without
 # touching the database so the endpoint stays instant even while a tick runs.
@@ -457,6 +454,11 @@ class IngestStats:
     calendar_events: int = 0
     calendar_signals: int = 0
     skipped_unroutable: int = 0
+    # FJ session-report impacts dropped at signal build because the asset is
+    # not on the allowlist (gold / silver / bitcoin). The article row stays in
+    # the database for the FinancialJuice five-box section - only its effect on
+    # those cards is removed.
+    skipped_fj_session: int = 0
     errors: list[str] = field(default_factory=list)
     purged: dict = field(default_factory=dict)
 
@@ -957,19 +959,12 @@ def current_calendar_signals() -> list[CalendarSignal]:
     return list(_calendar_signals)
 
 
-def _recompute_sentiment(session, stats: IngestStats,
-                         coinglass_snapshots: dict | None = None):
+def _recompute_sentiment(session, stats: IngestStats):
     """
     Rebuild every asset's CURRENT / PREP / WRAP sentiment from today's rows.
 
     Always recomputed from scratch rather than incrementally patched, so
     impact decay (section 17) is applied consistently on every pass.
-
-    ``coinglass_snapshots`` is this tick's CoinGlass scrape. It is fetched by
-    the async caller (``run_once``) and handed in: this recompute runs INSIDE
-    the pipeline coroutine, so it cannot start an event loop of its own
-    (``asyncio.run`` there is exactly what silently killed every CoinGlass
-    signal before the 2026-10-13 fix).
     """
     # IMPROVEMENT 4: detect a session change at the start of this tick.
     # The reweight itself happens below, after the in-memory signal list
@@ -986,6 +981,20 @@ def _recompute_sentiment(session, stats: IngestStats,
     rows = session.scalars(
         select(NewsArticle).where(news_day_predicate())
     ).all()
+
+    # Overnight admission: rows the morning brief judged while the laptop was
+    # off are in the day's rows, but their age must be measured from the
+    # moment the engine came back (the window's end), not from a publication
+    # the operator could not act on - otherwise TRADING_DAY_CUTOFF_HOURS
+    # zeroes the entire batch and it never reaches a score. Live rows keep
+    # publication-time ageing (age_ref is None for them).
+    from app.services.overnight import admit_window
+
+    window = admit_window()
+    overnight_age_ref = (window.end
+                         if window is not None
+                         and settings.overnight_counts_as_fresh
+                         else None)
 
     signals: list[WeightedSignal] = []
     category_weights: dict = {}
@@ -1004,6 +1013,17 @@ def _recompute_sentiment(session, stats: IngestStats,
         except ValueError:
             cat_enum = NewsCategory.OTHER
 
+        # Overnight admission: this row was published inside the covered
+        # off-window, so age it from the boot (the window's end) instead of
+        # its publication stamp. Anything else keeps None = live ageing.
+        age_reference_utc = (
+            overnight_age_ref
+            if overnight_age_ref is not None
+            and row.published_at_utc is not None
+            and window.contains(row.published_at_utc)
+            else None
+        )
+
         # Task 3: an ACTUAL scheduled-data report also carries a surprise
         # weight - its direction was already fixed at ingest from the
         # surprise sign, this is only how LARGE the surprise was.
@@ -1011,6 +1031,13 @@ def _recompute_sentiment(session, stats: IngestStats,
         release_text = f"{row.title} {row.body}"
         printed = (release_surprise.parse(release_text)
                    if kind is ReportKind.ACTUAL else None)
+
+        # One classification per article (not per impact): true for the five
+        # FinancialJuice session reports - the prep/wrap summaries. Their home
+        # is the FJ five-box section; the only multi-source card they may shape
+        # is the one on SESSION_REPORT_ALLOWED_ASSETS (today: EQUITY, the
+        # region's own tape).
+        is_session_report = is_fj_session_report_row(row)
 
         for impact in row.impacts:
             # Phase 1: category drives the decay half-life, and the event key
@@ -1032,6 +1059,23 @@ def _recompute_sentiment(session, stats: IngestStats,
                 log.debug(
                     "Skipping unroutable impact asset %r on article %d (%s)",
                     impact.asset, row.id, row.title[:80],
+                )
+                continue
+            # FJ SESSION REPORTS: a session prep/wrap is a SUMMARY, not a
+            # trade signal, so it may only shape the cards on
+            # fj_sessions.SESSION_REPORT_ALLOWED_ASSETS (today: EQUITY, the
+            # region's own tape). Dropping the impact here removes it from
+            # gold / silver / bitcoin at the ONE choke point every verdict
+            # passes through: no bullish/bearish weight, no TOP DRIVERS or
+            # strongest-conflict box, no burst bonus, no binary tie-break.
+            # The article row itself is untouched - it still feeds the
+            # FinancialJuice five-box section, which reads rows directly.
+            if is_session_report and not session_report_asset_allowed(asset_enum):
+                stats.skipped_fj_session += 1
+                log.debug(
+                    "Skipping FJ session report impact for %s on article %d "
+                    "(%s) - session reports stay in their five boxes",
+                    asset_enum.value, row.id, row.title[:80],
                 )
                 continue
             signal = build_signal(
@@ -1064,6 +1108,8 @@ def _recompute_sentiment(session, stats: IngestStats,
                 metal_character=impact.metal_character,
                 # Central bank speaker tier multiplier.
                 speaker_tier=getattr(impact, "speaker_tier", 1.0),
+                # Overnight admission freshness (None for live rows).
+                age_reference_utc=age_reference_utc,
             )
             signals.append(signal)
 
@@ -1094,64 +1140,6 @@ def _recompute_sentiment(session, stats: IngestStats,
         category_weights[sig.profile.category] = (
             category_weights.get(sig.profile.category, 0.0) + sig.relevance
         )
-
-    # --- Synthetic market data signals (DXY, real yields) ---
-    # These inject price-action information directly into sentiment when
-    # headlines are absent but capital flows are moving.
-    if settings.price_data_enabled:
-        try:
-            market_signals = build_market_data_signals()
-            if market_signals:
-                weighted_market = market_data_signals_to_weighted(market_signals)
-                signals.extend(weighted_market)
-                # Add to category weights for regime detection
-                for s in weighted_market:
-                    category_weights[s.category] = (
-                        category_weights.get(s.category, 0.0) + s.relevance
-                    )
-        except Exception as exc:  # noqa: BLE001 - never break the recompute
-            log.debug("Market data signal injection failed: %s", exc)
-
-    # --- CoinGlass scrapes (liquidation heatmap / CVD / footprint) ---
-    # Scraped from the public CoinGlass chart pages - no API key. The scraper
-    # owns its own rate limit (one fetch per coinglass_cache_ttl_seconds,
-    # default 5 min, persisted to disk), so on a fast tick this is a cache read
-    # and costs no browser. The CVD reading feeds the SAME scoring path as a
-    # headline, so it moves the bullish/bearish badge the dashboard shows.
-    #
-    # The snapshots arrive as a PARAMETER, fetched (awaited) by the async
-    # caller in run_once(). They are NOT scraped here: this function runs
-    # inside the pipeline coroutine, and ``asyncio.run`` cannot start a loop
-    # in a thread that already has one - that is precisely the bug that made
-    # every tick log "CoinGlass scrape_all failed: asyncio.run() cannot be
-    # called from a running event loop" and injected no signal at all.
-    #
-    # A failure here is not an error: the pool is skipped, the last good
-    # snapshot stays on the cache for the dashboard, and the verdict degrades
-    # to news + price confirmation exactly as documented.
-    try:
-        if coinglass_snapshots:
-            from app.ingestion import coinglass_scraper
-
-            cg_signals = coinglass_scraper.coinglass_signals_to_weighted(
-                coinglass_snapshots)
-            if cg_signals:
-                signals.extend(cg_signals)
-                for s in cg_signals:
-                    category_weights[s.category] = (
-                        category_weights.get(s.category, 0.0) + s.relevance
-                    )
-                log.info("CoinGlass: %d CVD/footprint signal(s) injected from "
-                         "%d asset(s)", len(cg_signals),
-                         len(coinglass_snapshots))
-        else:
-            # No snapshot this tick: the poll was skipped (rate-limited,
-            # backed off, browser busy) or the feature is off. The previous
-            # in-memory read stays put and the cached panel is unaffected.
-            log.debug("CoinGlass: no fresh snapshot this tick (cached, backed "
-                      "off, or unavailable) - sentiment unchanged")
-    except Exception as exc:  # noqa: BLE001 - never break the recompute
-        log.warning("CoinGlass signal injection failed: %s", exc)
 
     # IMPROVEMENT 4, Step 2: on the tick where the session changed, rewrite
     # every signal's session_multiplier IN MEMORY so the aggregation that
@@ -1198,35 +1186,6 @@ def _recompute_sentiment(session, stats: IngestStats,
         at_risk, risk_note = event_risk_check(_calendar_events)
     except Exception as exc:  # noqa: BLE001 - never break the recompute
         log.debug("event_risk_check failed: %s", exc)
-
-    # A liquidation cluster sitting within 1% of spot on either side is a
-    # caution flag on the same channel: the bias is still published, but the
-    # payload says a cascade is nearby. This is the ONLY way a CoinGlass read
-    # touches the verdict other than through the CVD signal above, and it is
-    # additive - an empty note leaves the calendar's verdict untouched.
-    try:
-        from app.ingestion.coinglass_scraper import (
-            LIQ_CAUTION_PCT,
-            cached_snapshot,
-        )
-
-        liq_notes = []
-        for asset in Asset:
-            snapshot = cached_snapshot(asset.value)
-            if snapshot is None:
-                continue
-            note = snapshot.caution_note()
-            if note:
-                liq_notes.append(note)
-        if liq_notes:
-            merged = " ".join(liq_notes)
-            risk_note = f"{risk_note} {merged}".strip()
-            at_risk = True
-            log.info("CoinGlass liquidation caution raised for %d asset(s) "
-                     "(within %.1f%% of spot)",
-                     len(liq_notes), LIQ_CAUTION_PCT * 100)
-    except Exception as exc:  # noqa: BLE001 - never break the recompute
-        log.debug("CoinGlass caution check failed: %s", exc)
 
     for asset in Asset:
         asset_signals = [s for s in signals if s.asset is asset]
@@ -1350,79 +1309,6 @@ def current_equity_card() -> dict | None:
     return dict(_last_equity_card) if _last_equity_card else None
 
 
-def current_coinglass() -> dict:
-    """
-    Read-only view of the most recent CoinGlass scrapes, per asset.
-
-    Deliberately derived from the CACHE rather than the recompute's in-memory
-    snapshots: the dashboard must still show the last good reading after a
-    tick where the poll was skipped (cached, backed off, or deferred), instead
-    of blanking the panel the moment a fetch is not spent.
-
-    Returns a dict keyed by asset symbol, each value the serialisable
-    snapshot dict (spot, nearest clusters below/above, caution flags, CVD
-    divergence, footprint imbalance).
-    """
-    from app.ingestion.coinglass_scraper import cached_snapshot
-    from app.models.enums import Asset
-
-    out: dict = {}
-    for asset in Asset:
-        try:
-            snapshot = cached_snapshot(asset.value)
-        except Exception:  # noqa: BLE001 - the panel is best-effort
-            continue
-        if snapshot is not None:
-            out[asset.value] = snapshot.to_dict()
-    return out
-
-
-def coinglass_caution_note() -> str:
-    """Merged liquidation-cluster caution note across every cached asset."""
-    from app.ingestion.coinglass_scraper import cached_snapshot
-    from app.models.enums import Asset
-
-    notes = []
-    for asset in Asset:
-        try:
-            snapshot = cached_snapshot(asset.value)
-        except Exception:  # noqa: BLE001
-            continue
-        if snapshot is None:
-            continue
-        note = snapshot.caution_note()
-        if note:
-            notes.append(note)
-    return " ".join(notes)
-
-
-async def _fetch_coinglass_snapshots() -> dict:
-    """
-    Latest CoinGlass scrapes for this tick (cached, rate-limited, never fatal).
-
-    Awaited because a scrape can spend a browser render. The consumer,
-    ``_recompute_sentiment``, is SYNC and runs inside this coroutine, so it
-    cannot scrape for itself: ``asyncio.run`` refuses to start a loop in a
-    thread that already has one - which is exactly how the CVD / footprint
-    numbers used to die on every tick without ever reaching a card.
-
-    Returns an empty dict when the feature is off, the poll is skipped
-    (rate-limited / backed off / browser busy) or the render failed; the
-    caller then scores news + price only, exactly as documented.
-    """
-    try:
-        from app.ingestion import coinglass_scraper
-
-        snapshots = await coinglass_scraper.scrape_all_async()
-        if snapshots:
-            global _coinglass_snapshots
-            _coinglass_snapshots = snapshots
-        return snapshots
-    except Exception as exc:  # noqa: BLE001 - a provider never breaks a poll
-        log.warning("CoinGlass fetch failed: %s", exc)
-        return {}
-
-
 def _is_article_today_query(published: datetime | None) -> bool:
     """
     The TODAY test, re-evaluated NOW rather than trusting a stored flag.
@@ -1453,6 +1339,15 @@ def news_day_predicate():
     report away every evening, exactly the regression the IST carve-out exists
     to prevent. They stay governed by ``is_today``, which is the flag ingest set
     for them.
+
+    OVERNIGHT ADMISSION: a laptop that was powered off over the ET midnight
+    boundary leaves its last headlines stamped on the PREVIOUS market day, so
+    the plain ``published_at >= day_start`` test would drop every one of them
+    from the morning's boxes - the model may have just judged them in the
+    morning brief and they would still never reach a score. When the brief has
+    covered an off-window today, rows published inside that window are
+    admitted too (``overnight.admit_window``); the window lapses at the next
+    market midnight, so it can never re-serve yesterday as today.
     """
 
     day_start = T.market_day_start_utc().replace(tzinfo=None)
@@ -1471,12 +1366,25 @@ def news_day_predicate():
             flat = func.replace(flat, ch, "")
         return flat.contains(FINANCIAL_JUICE_SOURCE)
 
+    # Best-effort: an unreadable/expired admission simply yields None and the
+    # predicate degrades to the plain market-day filter.
+    from app.services.overnight import admit_window
+
+    window = admit_window()
+
+    clauses = [
+        NewsArticle.published_at_utc >= day_start,
+        _is_fj_source(NewsArticle.source),
+    ]
+    if window is not None:
+        clauses.append(and_(
+            NewsArticle.published_at_utc >= window.start.replace(tzinfo=None),
+            NewsArticle.published_at_utc <= window.end.replace(tzinfo=None),
+        ))
+
     return and_(
         NewsArticle.is_today.is_(True),
-        or_(
-            NewsArticle.published_at_utc >= day_start,
-            _is_fj_source(NewsArticle.source),
-        ),
+        or_(*clauses),
     )
 
 
@@ -1661,15 +1569,6 @@ async def run_once() -> IngestStats:
         stats.calendar_events = len(events)
         stats.calendar_signals = len(_calendar_signals)
 
-        # 1b) COINGLASS SCRAPES ------------------------------------------
-        # A scrape is a browser render, so it is awaited HERE - the one async
-        # point of the pass - and handed to the sync recompute below, which
-        # only injects it into the signal pool. Runs before the session opens
-        # so the render never holds the SQLite write lock the ingest steps
-        # need. Skipped when no fresh poll was spent: an empty dict leaves the
-        # verdict on news + price confirmation.
-        coinglass_snapshots = await _fetch_coinglass_snapshots()
-
         with session_scope() as session:
             # Bookkeeping row for the dashboard's last-run panel. It is
             # best-effort: a transient SQLite write lock (e.g. the morning
@@ -1795,11 +1694,7 @@ async def run_once() -> IngestStats:
             evaluate_and_emit(session, stats)
 
             # 3) SENTIMENT + PREP/WRAP ------------------------------------
-            # CoinGlass snapshots come from step 1b: the recompute is sync, so
-            # the async scrape happens once, up front, and the scraped number
-            # enters the bullish/bearish totals as a normal weighted signal.
-            _recompute_sentiment(
-                session, stats, coinglass_snapshots=coinglass_snapshots)
+            _recompute_sentiment(session, stats)
 
             if run_row is not None:
                 run_row.articles_new = stats.new_today

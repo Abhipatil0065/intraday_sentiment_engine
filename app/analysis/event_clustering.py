@@ -172,8 +172,8 @@ def _event_identity(s) -> str:
     (and mirrors it into ``cluster_id``), so copies of one story that
     ingestion dedup filed under one event share this identity here. Falls
     back to ``cluster_id`` for builders that only set that field. Returns
-    "" for the synthetic families (calendar, market data, CoinGlass) that
-    never went through ingestion dedup.
+    "" for the synthetic families (calendar) that never went through
+    ingestion dedup.
     """
     return ((getattr(s, "event_key", "") or getattr(s, "cluster_id", "") or "")
             .strip())
@@ -321,8 +321,8 @@ def cluster_signals(signals: list, window_hours: float = 0.5) -> list:
             clustered.extend(_collapse_members(members))
 
         # Title-similarity fallback for identity-less signals (calendar,
-        # market data, CoinGlass, synthetic builders): group by normalized
-        # title within the rolling window, exactly as before.
+        # synthetic builders): group by normalized title within the rolling
+        # window, exactly as before.
         clusters: list[list[WeightedSignal]] = []
         for s in unkeyed:
             if s.published_at is None:

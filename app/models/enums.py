@@ -71,10 +71,6 @@ class NewsCategory(str, Enum):
     OIL_ENERGY = "Oil/Energy"
     EQUITIES = "Equities"
     BANKING_FINANCIAL_STRESS = "Banking/Financial Stress"
-    # CoinGlass derived categories (scraped from public CoinGlass charts)
-    LIQUIDATION_HEATMAP = "Liquidation Heatmap"
-    CVD = "CVD"
-    FOOTPRINT = "Footprint"
     OTHER = "Other"
 
 

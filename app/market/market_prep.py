@@ -79,12 +79,6 @@ MACRO_DRIVER_LABELS: dict[NewsCategory, str] = {
     NewsCategory.OIL_ENERGY: "Energy cost pressure",
     NewsCategory.BANKING_FINANCIAL_STRESS: "Financial-system stress",
     NewsCategory.COMMODITY_SUPPLY_DEMAND: "Physical supply/demand",
-    # CoinGlass scrapes score on the same path as news, so their categories
-    # reach this map. Without an entry the prep build raised KeyError and took
-    # the whole recompute (hence the tick) down with it.
-    NewsCategory.LIQUIDATION_HEATMAP: "Liquidation clusters (CoinGlass)",
-    NewsCategory.CVD: "Aggressive flow - CVD (CoinGlass)",
-    NewsCategory.FOOTPRINT: "Order-flow imbalance (CoinGlass)",
     NewsCategory.OTHER: "Unclassified flow",
 }
 

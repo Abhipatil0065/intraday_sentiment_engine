@@ -531,13 +531,6 @@ def build_payload(session) -> dict:
         "equity": equity,
         "equity_title": equity.get("title", equity_title(equity_session())),
         "equity_region": equity.get("region", equity_session().value),
-        # CoinGlass panel: liquidation heatmap clusters / CVD divergence /
-        # footprint imbalance, scraped from the public chart pages (no API
-        # key). Read from the scraper's cache so the panel still shows the
-        # last good reading on a tick where no fresh fetch was spent. Empty
-        # when the feature is off or every poll has failed so far.
-        "coinglass": pipeline.current_coinglass(),
-        "coinglass_caution_note": pipeline.coinglass_caution_note(),
         "regime": (regime.regime.value if regime else MarketRegime.MIXED.value),
         "regime_confidence": (regime.confidence if regime else 0.0),
         "regime_drivers": (regime.drivers if regime else []),
@@ -755,33 +748,6 @@ async def alerts():
             for a in session.scalars(
                 select(Alert).order_by(Alert.created_at.desc()).limit(30)).all()
         ]}
-
-
-@app.get("/api/coinglass")
-async def coinglass():
-    """
-    CoinGlass scrapes: liquidation heatmap / CVD / footprint per asset.
-
-    Served from the scraper's cache, so this endpoint NEVER opens a browser
-    and never blocks on the site - it reports the last good reading and an
-    empty dict when there is none. Poll this independently of /api/dashboard
-    to render the panel without dragging the whole payload along.
-    """
-    from app.config import settings as _settings
-
-    if not _settings.coinglass_enabled:
-        return {"enabled": False, "assets": {}, "caution_note": ""}
-    return {
-        "enabled": True,
-        "assets": pipeline.current_coinglass(),
-        "caution_note": pipeline.coinglass_caution_note(),
-        "poll_seconds": _settings.coinglass_poll_seconds,
-        "disclaimer": (
-            "Scraped from public CoinGlass chart pages. Rate-limited and "
-            "cached; a missing reading means the poll was skipped, not that "
-            "the market is quiet."
-        ),
-    }
 
 
 # ---------------------------------------------------------------------------
