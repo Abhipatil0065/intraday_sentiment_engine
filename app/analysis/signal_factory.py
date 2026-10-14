@@ -71,6 +71,7 @@ def build_signal(
     surprise_weight: float = 1.0,
     metal_character: str | None = None,
     speaker_tier: float = 1.0,
+    age_reference_utc: datetime | None = None,
 ) -> object:
     """
     Build one correctly-populated ``WeightedSignal``.
@@ -113,6 +114,9 @@ def build_signal(
         metal_character=metal_character,
         # Central bank speaker tier multiplier.
         speaker_tier=speaker_tier,
+        # Overnight admission: age an off-window headline from the moment the
+        # engine judged it, not from the publication the laptop slept through.
+        age_reference_utc=age_reference_utc,
     )
 
 
@@ -190,4 +194,7 @@ def build_bleed_signal(primary: WeightedSignal) -> WeightedSignal | None:
         mode=primary.mode,
         surprise_weight=primary.surprise_weight,
         metal_character=primary.metal_character,
+        # The bleed must age with its primary: an overnight macro headline
+        # admitted this morning bleeds to the pair with the same freshness.
+        age_reference_utc=primary.age_reference_utc,
     )

@@ -276,6 +276,10 @@ def region_signals(signals: Sequence[WeightedSignal],
                 report_kind=s.report_kind,
                 mode=s.mode,
                 surprise_weight=s.surprise_weight,
+                # Overnight admission: keep the proxy's freshness aligned with
+                # the signal it copies, so an off-window headline admitted this
+                # morning is not aged out of the equity card.
+                age_reference_utc=getattr(s, "age_reference_utc", None),
             ))
     return out
 
@@ -364,7 +368,8 @@ def build_equity_card(all_signals: Sequence[WeightedSignal],
             corroboration=s.corroboration, category=s.category,
             reason=s.reason, transmission=s.transmission,
             report_kind=s.report_kind, mode=s.mode,
-            surprise_weight=s.surprise_weight))
+            surprise_weight=s.surprise_weight,
+            age_reference_utc=getattr(s, "age_reference_utc", None)))
     # One story, one vote: drop the per-asset copies of the same headline
     # BEFORE scoring, otherwise a macro story that routed to gold, silver and
     # bitcoin at ingest is counted (and displayed) once per impact row.

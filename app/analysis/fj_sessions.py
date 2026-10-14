@@ -272,6 +272,49 @@ def classify_fj_session(title: str, body: str = "") -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# 2b. MULTI-SOURCE ENGINE ADMISSION - which cards a session report may shape
+# ---------------------------------------------------------------------------
+#: A session report is a SUMMARY of a session, not a trade signal. Its home is
+#: the five boxes above and nowhere else - with one deliberate exception: a
+#: region's own equity card. "Morning Juice - Europe Session Prep" IS the
+#: European equity tape's news, so EQUITY may read it when the classifier says
+#: it matters (an AssetImpact row for EQUITY). Gold, silver and bitcoin have
+#: their own wires and their own cue families: a session prep must never move
+#: their card, never enter their TOP DRIVERS / strongest-conflict boxes, and
+#: never break their binary tie-break.
+#:
+#: The set is an ALLOWLIST on purpose: any instrument added later is excluded
+#: until someone decides it belongs here.
+SESSION_REPORT_ALLOWED_ASSETS: frozenset = frozenset({Asset.EQUITY})
+
+
+def session_report_asset_allowed(asset) -> bool:
+    """
+    True only when a session report may shape ``asset``'s card.
+
+    ``asset`` may be an :class:`~app.models.enums.Asset` or the stored string
+    ("EQUITY", "XAUUSD", ...). Everything outside
+    :data:`SESSION_REPORT_ALLOWED_ASSETS` - gold, silver, bitcoin and any
+    future instrument - returns False, so the default is exclusion.
+    """
+    value = getattr(asset, "value", asset)
+    return value in {a.value for a in SESSION_REPORT_ALLOWED_ASSETS}
+
+
+def is_fj_session_report_row(row) -> bool:
+    """
+    Stored-row twin of the pipeline's RawArticle test - ONE definition.
+
+    Reads only ``source`` / ``title`` / ``body``, so it works on an ORM
+    ``NewsArticle`` row and on a plain ``SimpleNamespace`` alike.
+    """
+    if not is_financial_juice(getattr(row, "source", None)):
+        return False
+    return classify_fj_session(getattr(row, "title", "") or "",
+                               getattr(row, "body", "") or "") is not None
+
+
+# ---------------------------------------------------------------------------
 # 3. SENTIMENT - BINARY ONLY, ALWAYS 100%
 # ---------------------------------------------------------------------------
 #: The furthest the split may ever stray from 50/50, even on overwhelming

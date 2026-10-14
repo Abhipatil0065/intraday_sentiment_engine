@@ -24,11 +24,20 @@ shutdown gap into ONE explicit catch-up pass:
      verdict back to ``news_article`` + ``asset_impact``. This is each of those
      articles' FIRST model verdict - the live path only ever calls once, and
      this pass fills that one call in.
-  4. A MEDIUM/LOW verdict now has the same outcome it has at ingest: the row is
-     DELETED and its guid suppressed for the trading day (the one-shot
-     policy), so "once the model says low, it is gone" holds here too.
-  4. Run one final pipeline pass so every sentiment snapshot is rebuilt from
-     the refreshed rows, and write a dated morning brief report.
+4. A MEDIUM/LOW verdict now has the same outcome it has at ingest: the row is
+   DELETED and its guid suppressed for the trading day (the one-shot
+   policy), so "once the model says low, it is gone" holds here too.
+4. Run one final pipeline pass so every sentiment snapshot is rebuilt from
+   the refreshed rows, and write a dated morning brief report.
+
+The covered window is also persisted as an ADMISSION (``admit_window``):
+the market-day boundary (00:00 ET) has usually already rolled over by the
+time the laptop comes back, so the pass admits its kept rows into that
+trading day's feed and boxes (``news_day_predicate``), and those headlines
+measure freshness from the window's end - when the model judged them - so
+the 8h trading-day cutoff cannot zero the whole overnight batch. The
+admission lapses at the next market midnight via
+``valid_through_market_day``.
 
 Runs automatically on boot from ``app.main`` (see ``run_boot_catchup``), is
 idempotent per window (a state file records what it already covered), and is
@@ -49,7 +58,7 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Self
 
@@ -827,13 +836,88 @@ def _load_state() -> dict:
 
 
 def _save_state(report: dict) -> None:
+    """
+    Record the covered window, INCLUDING the admission block the boxes read.
+
+    ``admit_window`` is what carries the off-window's keeps into the trading
+    day that follows the boot: the market-day boundary (00:00 ET) has usually
+    already rolled over by the time the machine comes back, so without an
+    explicit admission those rows would never reach that morning's boxes even
+    though the model just judged them. Admission is bounded by
+    ``valid_through_market_day`` (the market-tz date of THIS run), so a stale
+    window can never leak into a later trading day.
+    """
+    started = _parse_iso(report["window"]["start_utc"])
+    ended = _parse_iso(report["window"]["end_utc"])
+    valid_through = _aware(
+        _parse_iso(report["generated_at_utc"]) or T.now_utc()
+    ).astimezone(T.market_tz()).date()
     _write_json_atomic(BRIEF_STATE, {
         "last_run_utc": report["generated_at_utc"],
         "last_window_start_utc": report["window"]["start_utc"],
         "last_window_end_utc": report["window"]["end_utc"],
         "articles": report["totals"]["articles"],
         "llm_judged": report["llm"].get("llm_judged", 0),
+        "admit_window": {
+            "start_utc": started.isoformat() if started else None,
+            "end_utc": ended.isoformat() if ended else None,
+            "valid_through_market_day": valid_through.isoformat(),
+        },
     })
+
+
+# ---------------------------------------------------------------------------
+# Window admission (the boxes read this)
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class AdmitWindow:
+    """The covered off-window, plus the last market day it may be shown on.
+
+    ``valid_through`` is the MARKET-timezone date of the brief run that wrote
+    the state: the overnight keeps belong to the trading day the operator
+    wakes up into, and only that day. The next ET midnight (09:30 IST) lapses
+    the admission, so yesterday evening's headlines can never be re-served as
+    today's news by a stale state file.
+    """
+
+    start: datetime
+    end: datetime
+    valid_through: date
+
+    def contains(self, moment: datetime | None) -> bool:
+        moment = _aware(moment)
+        return moment is not None and self.start <= moment <= self.end
+
+
+def admit_window(now: datetime | None = None) -> AdmitWindow | None:
+    """
+    The off-window whose kept rows count as TODAY, or None.
+
+    Read fresh on every call (never cached): ``news_day_predicate`` runs on
+    every pipeline tick and every dashboard read, and the state file is
+    rewritten by each morning's brief. Any unreadable, unparseable, empty or
+    day-expired entry yields None, which degrades to the plain market-day
+    filter - an admission can never break the feed.
+    """
+    data = _load_state()
+    block = data.get("admit_window") if isinstance(data, dict) else None
+    if not isinstance(block, dict):
+        return None
+
+    start = _parse_iso(block.get("start_utc"))
+    end = _parse_iso(block.get("end_utc"))
+    if start is None or end is None or end < start:
+        return None
+
+    try:
+        valid_through = date.fromisoformat(str(block.get("valid_through_market_day")))
+    except ValueError:
+        return None
+
+    today = _aware(now or T.now_utc()).astimezone(T.market_tz()).date()
+    if today > valid_through:
+        return None  # a later trading day: this window has lapsed
+    return AdmitWindow(start=start, end=end, valid_through=valid_through)
 
 
 def _already_covered(window: OvernightWindow) -> bool:
