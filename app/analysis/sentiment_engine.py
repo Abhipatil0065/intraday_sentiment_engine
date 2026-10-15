@@ -128,6 +128,32 @@ STRENGTH_MULT = {
     ImpactStrength.LOW: 0.20,
 }
 
+# --- Step 4f: asset-sensitivity fallbacks ---------------------------------
+# Used by _signal_weight when a headline's event types are known but tell us
+# nothing about how strongly this asset transmits.
+#
+# ASSET_SENSITIVITY_UNKNOWN is the value applied when detect_event_types
+# returns NOTHING. The old code used 1.0 - full transmission weight - so a
+# headline whose mechanism could not be identified scored exactly like one the
+# map records as a direct, high-magnitude driver of that asset.
+# 0.5 is the "no opinion" default: enough to carry a genuine lean, not enough
+# to amplify unidentifiable noise.
+ASSET_SENSITIVITY_UNKNOWN = 0.5
+
+# Event types exempt from the asset-sensitivity scaling, because they describe
+# money moving into or out of the instrument ITSELF rather than a macro
+# transmission channel. A gold-ETF flow headline should not be discounted by
+# gold's real-yield sensitivity: that magnitude describes a different
+# mechanism. Step 4f widened this from the previous {BTC_ETF_FLOW,
+# GOLD_ETF_FLOW} to cover every *_ETF_FLOW*, *_ETF_FLOW_IN, *_ETF_FLOW_OUT and
+# INDEX_FLOW variant.
+_FLOW_SENSITIVITY_EXEMPT = {
+    "BTC_ETF_FLOW", "GOLD_ETF_FLOW",
+    "GOLD_ETF_FLOW_IN", "GOLD_ETF_FLOW_OUT",
+    "BTC_ETF_FLOW_IN", "BTC_ETF_FLOW_OUT",
+    "INDEX_FLOW",
+}
+
 # --- impact gate (config.only_high_impact_counts) -------------------------
 # The ONE rule for which news may reach a card: with the gate on, only the two
 # top bands are admissible. MEDIUM (0.45) and LOW (0.20) used to contribute at
@@ -437,6 +463,12 @@ class WeightedSignal:
     transmission: str = ""
     report_kind: ReportKind = ReportKind.GENERAL
     mode: str = "heuristic"
+    # STEP 9.3: set by event_clustering._collapse_members when two readings of
+    # the SAME event (one event_key) pointed in opposite directions and were
+    # collapsed to a single vote. The signal survives with the dominant
+    # direction, and this flag tells compute() the evidence behind it was split
+    # so the verdict can be reported as low confidence rather than a call.
+    contradiction_detected: bool = False
     # Task 3: surprise-size multiplier for ACTUAL scheduled-data reports
     # (release_surprise.surprise_weight). Constant 1.0 for every other
     # signal, so no existing behaviour changes.
@@ -474,13 +506,25 @@ class Driver:
 
 @dataclass
 class SentimentResult:
-    """One asset's verdict. Always directional (BULLISH or BEARISH)."""
+    """One asset's verdict. Always directional (BULLISH or BEARISH).
+
+    bull_weight / bear_weight (TASK 2) carry the aggregate totals, so the
+    split of the evidence can be reconstructed after the fact. They are
+    never read by the scoring path.
+    """
 
     asset: Asset
     score: float = 0.0
     # The pre-clamp net score, for logging/audit only: `score` is what the
     # payload shows, so a tie-break can never contradict its own badge.
     raw_score: float = 0.0
+    # TASK 2: the two aggregate totals, persisted so
+    # r = min(bull,bear)/max(bull,bear) is recoverable from history. A net
+    # score cannot be decomposed into its two sides, so without this the ratio
+    # is unrecoverable for any past tick. DATA CAPTURE ONLY - nothing in the
+    # scoring path reads these, so they cannot change a verdict.
+    bull_weight: float = 0.0
+    bear_weight: float = 0.0
     # Dampened score for display/cue strength. Computed as
     # raw * total_weight / (total_weight + k). Raw score is used for
     # bias labels, flip margin and stability-hold logic.
@@ -521,33 +565,61 @@ class SentimentResult:
 
 
 def decay_weight(published_at: datetime | None, tier: str,
-                 now: datetime | None = None, asset: "Asset | None" = None) -> float:
+                 now: datetime | None = None, asset: "Asset | None" = None,
+                 event_type: str | None = None) -> float:
     """
-    Exponential decay with a per-event-tier half-life (Task 5a).
+    Exponential decay with a per-event-tier half-life (Task 5a + Steps 7/11).
 
-    Tier 1 ~90min, Tier 2 ~45min, Tier 3 ~15min; the per-asset multiplier in
-    config.ASSET_DECAY_MULTIPLIER is applied on top (bitcoin +25% for its 24/7
-    clock, equities -25% because equity news fades into the close).
-    ``weight = 0.5 ** (age_hours / half_life)``.
-    Items older than settings.trading_day_cutoff_hours get weight 0.
+    Tier 1 = 1.5h, Tier 2 = 1.25h, Tier 3 = 0.25h; the per-asset multiplier in
+    config.ASSET_DECAY_MULTIPLIER is applied on top (bitcoin 1.25 for its 24/7
+    clock). EQUITY is absent from the multiplier table on purpose - Step 6's
+    Option A removed it, because the session-aware equity card applies its own
+    multipliers and no longer routes through this function.
+
+    Explicit half-life overrides per EventType (config.EVENT_HALF_LIFE_OVERRIDE)
+    let FOMC, NFP, CPI, geopolitical escalation and similar events carry
+    custom persistence independent of their tier.
+
+        weight = 0.5 ** (age_hours / half_life)
+
+    Items older than settings.trading_day_cutoff_hours get weight = DECAY_FLOOR
+    (0.05 = 5% residual), not zero, so stale news fades instead of vanishing.
+
+    ``published_at=None`` also returns DECAY_FLOOR; those rows are never
+    admitted by ingest, so they should not reach this function at all.
+
+    STEP 11: this docstring used to say "Tier 1 ~90min, Tier 2 ~45min,
+    Tier 3 ~15min". Those were the DAY-TRADING values from before the
+    2026-10-13 retune; the real half-lives have been 1.5/0.75/0.25h since then
+    and 1.5/1.25/0.25h since Step 7. Reading the docstring instead of config
+    would have mis-dimensioned every decay calculation.
     """
-    from app.config import ASSET_DECAY_MULTIPLIER, TIER_HALF_LIVES, settings
+    from app.config import (ASSET_DECAY_MULTIPLIER, TIER_HALF_LIVES,
+                            EVENT_HALF_LIFE_OVERRIDE, DECAY_FLOOR,
+                            TRADING_DAY_CUTOFF_HOURS, settings)
 
-    half_life = TIER_HALF_LIVES.get(tier, 2.0)
+    # Step 7: Check for event-specific half-life override first
+    if event_type is not None:
+        half_life = EVENT_HALF_LIFE_OVERRIDE.get(event_type)
+        if half_life is None:
+            half_life = TIER_HALF_LIVES.get(tier, 2.0)
+    else:
+        half_life = TIER_HALF_LIVES.get(tier, 2.0)
     if asset is not None:
         half_life *= ASSET_DECAY_MULTIPLIER.get(
             getattr(asset, "name", str(asset)), 1.0)
     half_life = max(0.1, float(half_life))
 
     if published_at is None:
-        return 0.15
+        # Step 7: Missing timestamp -> flag as UNVERIFIED, return floor weight
+        return DECAY_FLOOR
     hours = _age_hours(published_at, now)
     if hours < 0:
         return 1.0  # within clock skew: treat as brand new
     cutoff = getattr(settings, 'trading_day_cutoff_hours', 2.0)
     if hours >= cutoff:
-        return 0.0
-    return max(0.0, min(1.0, 0.5 ** (hours / half_life)))
+        return DECAY_FLOOR  # Step 7: floor instead of hard zero
+    return max(DECAY_FLOOR, min(1.0, 0.5 ** (hours / half_life)))
 
 
 def _age_hours(published_at: datetime, now: datetime | None = None) -> float:
@@ -710,7 +782,7 @@ def _signal_weight(s: WeightedSignal, now: datetime | None) -> float:
     # Earnings mega-cap / unnamed multiplier (Item 6).
     # Detect event types from the headline and category.
     earnings_event_types = {"EARNINGS_BEAT", "EARNINGS_MISS", "GUIDANCE_RAISED", "GUIDANCE_CUT"}
-    flow_event_types = {"BTC_ETF_FLOW", "GOLD_ETF_FLOW"}
+    flow_event_types = _FLOW_SENSITIVITY_EXEMPT
     detected = detect_event_types(s.title, s.category)
     earnings_mult = 1.0
     if any(et.value in earnings_event_types for et in detected):
@@ -721,31 +793,75 @@ def _signal_weight(s: WeightedSignal, now: datetime | None) -> float:
             earnings_mult = settings.earnings_unnamed_mult
 
     # Asset sensitivity based on transmission map magnitude.
-    # ev = detect_event_types(s.title, s.category); if empty -> 1.0.
-    # m = transmission(ev[0], s.asset).magnitude.
-    # asset_sensitivity = min(1.0, max(0.3, m)).
-    # Skip (use 1.0) ONLY for EARNINGS_BEAT, EARNINGS_MISS,
-    # GUIDANCE_RAISED, GUIDANCE_CUT, BTC_ETF_FLOW and GOLD_ETF_FLOW.
-    # Events with sign 0 (GENERAL_MACRO and similar) must never be scaled.
-    flow_event_types = {"BTC_ETF_FLOW", "GOLD_ETF_FLOW"}
-    asset_sensitivity = 1.0
-    if not any(et.value in earnings_event_types for et in detected) \
-       and not any(et.value in flow_event_types for et in detected) \
-       and detected:
-        # Look at all detected events with non-zero sign, take max magnitude
-        max_m = 0.0
-        for et in detected:
-            entry = transmission(et, s.asset)
-            if entry.sign != 0 and entry.magnitude > 0:
-                if entry.magnitude > max_m:
-                    max_m = entry.magnitude
-        if max_m > 0:
-            asset_sensitivity = min(1.0, max(0.3, max_m))
+    #
+    # STEP 4f (second half): when NO usable event type is detected, the old
+    # code fell back to 1.0 - FULL transmission weight. A headline whose
+    # mechanism could not be identified therefore scored exactly like one the
+    # map knows is a direct, high-magnitude driver of that asset. It now falls
+    # back to ASSET_SENSITIVITY_UNKNOWN (0.5), which is the "no opinion"
+    # default: enough to carry a genuine lean, not enough to amplify noise.
+    #
+    # STEP 4f (first half): the skip list is widened from
+    # {BTC_ETF_FLOW, GOLD_ETF_FLOW} to EVERY *_ETF_FLOW* and *_ETF_FLOW_IN /
+    # *_ETF_FLOW_OUT plus INDEX_FLOW. A direct flow headline is a statement
+    # about money into or out of the instrument itself - it should not be
+    # discounted by the asset's macro sensitivity, which for gold is driven by
+    # real yields. Before this, a gold-ETF flow headline was penalised by the
+    # very factor that describes a different transmission channel.
+    #
+    # Events with sign 0 (GENERAL_MACRO and similar) must never be scaled:
+    # they are directionless by construction, and max_m only ever considers
+    # non-zero-sign entries for exactly that reason.
+    flow_event_types = _FLOW_SENSITIVITY_EXEMPT
+    asset_sensitivity = ASSET_SENSITIVITY_UNKNOWN
+    if detected:
+        # Separate earnings, flow, and nonzero non-earnings/non-flow events
+        has_earnings = any(et.value in earnings_event_types for et in detected)
+        has_flow = any(et.value in flow_event_types for et in detected)
+        if has_earnings or has_flow:
+            # earnings or flow detected -> skip transmission map, asset_sensitivity = 1.0
+            asset_sensitivity = 1.0
+        else:
+            # Look at nonzero events only (sign != 0)
+            nonzero = [et for et in detected if transmission(et, s.asset).sign != 0]
+            if nonzero:
+                # compute max magnitude among nonzero events
+                max_m = 0.0
+                for et in nonzero:
+                    entry = transmission(et, s.asset)
+                    # entry.sign != 0 guaranteed by filter
+                    if entry.magnitude > max_m:
+                        max_m = entry.magnitude
+                if max_m > 0:
+                    asset_sensitivity = min(1.0, max(0.3, max_m))
+                else:
+                    # All nonzero events have zero magnitude? Should not happen if magnitude >0 for sign!=0, but just in case.
+                    asset_sensitivity = 1.0
+            else:
+                # All detected events are sign-zero (e.g., GENERAL_MACRO) -> treat as no usable event type
+                asset_sensitivity = ASSET_SENSITIVITY_UNKNOWN
+    # else: no detected events, leave asset_sensitivity as ASSET_SENSITIVITY_UNKNOWN (0.5)
 
     return decay * rel * per * qual * sess * corr * surprise * tier * metal_mult * earnings_mult * asset_sensitivity * s.speaker_tier
 
 
 def _mode_for(signals: Sequence[WeightedSignal]) -> str:
+    """
+    How these signals were classified, reported truthfully (Step 3).
+
+        every contributing signal is "llm"        -> "llm"
+        every contributing signal is "heuristic"  -> "heuristic"
+        a blend of the two (or any other value)   -> "mixed"
+        nothing contributed at all                -> "heuristic"
+
+    ``WeightedSignal.mode`` is populated from ``NewsArticle.analysis_mode`` by
+    ``build_signal``. Before Step 3 the pipeline never passed it, so every
+    signal defaulted to "heuristic" and the card claimed a rule engine even
+    when the LLM had classified every headline behind it. The footer now shows
+    the real mode, and a card that reads "mixed" is a genuine blend -
+    typically LLM-classified news alongside rule-based calendar prints, which
+    are always computed and therefore always heuristic.
+    """
     modes = {s.mode for s in signals if s.mode}
     if not modes:
         return "heuristic"
@@ -832,10 +948,32 @@ def _aggregate(signals: Sequence[WeightedSignal],
 
 def _score_from(bull: float, bear: float) -> float:
     """Map the two weighted totals onto a signed -100..+100 score."""
+    from app.config import (CONTRADICTION_DAMPENER_ENABLED,
+                            CONTRADICTION_DAMPENER_FACTOR,
+                            CONTRADICTION_RATIO)
+
     total = bull + bear
     if total <= 0:
         return 0.0
-    return round(100.0 * (bull - bear) / total, 1)
+    score = round(100.0 * (bull - bear) / total, 1)
+    # STEP 8: contradiction dampener.
+    #
+    # When the two sides are genuinely close, the news is fighting itself and
+    # the difference is mostly which side happened to land the heavier single
+    # headline. Projecting that to 67/33 published a conviction the evidence
+    # did not support. Halving the score here means the split (and therefore
+    # the displayed percentage) shows a lean, not a verdict.
+    #
+    # The 0.6 threshold is the same ratio the confidence blend uses for
+    # "agreement": min/max > 0.6 is the point at which the weaker side is at
+    # least 60% of the stronger, i.e. the fight is real rather than noise.
+    if CONTRADICTION_DAMPENER_ENABLED:
+        smaller = min(bull, bear)
+        larger = max(bull, bear)
+        if larger > 0 and smaller / larger > CONTRADICTION_RATIO:
+            score = round(
+                score * CONTRADICTION_DAMPENER_FACTOR, 1)
+    return score
 
 
 def _damped_score(raw_score: float, total_weight: float) -> float:
@@ -880,6 +1018,16 @@ def _confidence_from(bull: float, bear: float, directionless: float,
     certainty = directional / total_flow if total_flow > 0 else 0.0
 
     confidence = (0.40 * conviction + 0.28 * breadth + 0.22 * agreement) * certainty
+
+    # STEP 10: remap onto the observed hit rates. Identity until a fit exists,
+    # so this is a no-op today - see confidence_calibration for why any number
+    # invented here would be an unfounded formula.
+    try:
+        from app.analysis.confidence_calibration import calibrate_confidence
+        confidence = calibrate_confidence(confidence)
+    except Exception:  # noqa: BLE001 - calibration must never break scoring
+        pass
+
     return round(max(0.0, min(0.95, confidence)), 3)
 
 
@@ -1048,6 +1196,10 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
     if not relevant:
         bias, note = _carry_forward_bias(signals, key)
         remember_bias(key, bias)
+        # bull_weight/bear_weight stay at their dataclass default of 0.0: this
+        # branch is reached when `not relevant`, so there is no aggregate to
+        # report. (They are computed further down, so passing them here would
+        # raise UnboundLocalError.)
         return SentimentResult(
             asset=asset, score=0.0, confidence=0.0, bias=bias,
             mode=mode, contributing_articles=0, contributing_clusters=0,
@@ -1070,6 +1222,25 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
     # flip should be harder: the score must cross by an extra 10 points.
     contradiction_detected = (bull > 80.0 and bear > 80.0)
     effective_flip_margin = FLIP_MARGIN + (10 if contradiction_detected else 0)
+
+    # STEP 9.3: a cluster may already carry a recorded contradiction - two
+    # readings of the SAME event key that pointed opposite ways and were
+    # collapsed to one vote. That is evidence the direction was uncertain, so
+    # it counts towards the flag exactly as if the engine had spotted the
+    # imbalance itself, and it caps confidence and forces the LOW label below.
+    if any(getattr(s, "contradiction_detected", False) for s in relevant):
+        contradiction_detected = True
+
+    # STEP 8: a detected contradiction must not be reported as a call.
+    #
+    # Both sides are heavily weighted, so whatever number the engine prints the
+    # split is a coin toss with a thumb on the scale. Cap the confidence at
+    # TIEBREAK_MAX_CONFIDENCE (0.30) and force the LOW label, so a card cannot
+    # show "BEARISH 67%" alongside confidence 0.62 and be read as conviction.
+    # The flip-margin widening above already handles the "should we flip" half;
+    # this handles the "how loudly do we speak" half.
+    if contradiction_detected:
+        confidence = min(confidence, TIEBREAK_MAX_CONFIDENCE)
 
     # Total directional weight for dampening
     total_weight = bull + bear
@@ -1120,6 +1291,7 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
             TIEBREAK_MAX_CONFIDENCE)
         return SentimentResult(
             asset=asset, score=weak_score, raw_score=weak_raw,
+            bull_weight=bull, bear_weight=bear,
             damped_score=weak_score, confidence=weak_confidence,
             bias=weak_bias, mode=mode,
             drivers=drivers_early, conflict=conflict_early,
@@ -1202,6 +1374,13 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
         # Tie-break case (raw inside EPS) is low quality
         low_quality = abs(raw) < EPS
 
+        # STEP 8: a detected contradiction is low quality too, however the
+        # score landed. The two sides are both heavily weighted, so the label
+        # names which side happened to be heavier - not a conviction. This
+        # forces confidence_label to LOW regardless of the numeric confidence.
+        if contradiction_detected:
+            low_quality = True
+
     # Dampened score for display/cue strength (raw used for bias/flip/stability)
     damped = _damped_score(raw, total_weight)
 
@@ -1228,6 +1407,8 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
         asset=asset,
         score=score,
         raw_score=raw,
+        bull_weight=bull,
+        bear_weight=bear,
         damped_score=damped,
         confidence=confidence,
         bias=final_bias,

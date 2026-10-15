@@ -112,7 +112,7 @@ def test_exact_once_tier_multiplier_weight_ratio():
     )
     # TIER_2: HIGH importance (not VERY_HIGH)
     tier2 = _s(
-        "Fed speaker says policy is restrictive",
+        "Rates to stay higher for longer",
         source_quality="TIER_1_OFFICIAL",
         direction=Direction.BEARISH,
         importance=EconomicImportance.HIGH,

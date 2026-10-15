@@ -96,8 +96,9 @@ def test_gold_etf_flows_move_gold_only():
 
 
 def test_crypto_regulation_is_btc_only():
-    # Generic SEC trigger has no direction; REGULATION_CLAMP/CLARITY decide it.
-    assert tm.transmission(tm.EventType.CRYPTO_REGULATION, Asset.BITCOIN).sign == 0
+    # STEP 4a: CRYPTO_REGULATION is now bearish for BTC (sign=-1).
+    # It has no direction for gold/silver (sign=0).
+    assert tm.transmission(tm.EventType.CRYPTO_REGULATION, Asset.BITCOIN).sign == -1
     assert tm.transmission(tm.EventType.CRYPTO_REGULATION, Asset.GOLD).sign == 0
     assert tm.transmission(tm.EventType.CRYPTO_REGULATION, Asset.SILVER).sign == 0
 

@@ -91,7 +91,23 @@ class EventDeduplicator:
 
     def match(self, title: str, published_at: datetime,
               now: datetime | None = None) -> DedupeResult:
-        now = now or published_at
+        """
+        Find the event this title belongs to, or mint a new key.
+
+        ``now`` is the clock the 12h prune window is measured from. STEP 9.1:
+        callers SHOULD pass it - ``_ingest_article`` passes the tick's clock.
+        When it is omitted it falls back to ``published_at``, which used to
+        make the window drift forward with each incoming article: a newer
+        duplicate kept an old event alive indefinitely, and the index never
+        fully forgot yesterday's stories. The fallback is kept so the unit
+        tests and any standalone caller that has no tick to offer still work,
+        but it is now documented as the degenerate case rather than the default.
+        """
+        if now is None:
+            log.debug(
+                "EventDeduplicator.match() called without `now`; falling back "
+                "to published_at for the prune clock, which drifts the window")
+            now = published_at
         self._prune(now)
         tokens = normalise_tokens(title)
 

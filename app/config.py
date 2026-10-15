@@ -186,11 +186,17 @@ class Settings(BaseSettings):
     update_window_hours: int = 6
 
     # ---------------- bias / NO_BIAS thresholds (item 2) ----------------
-    # Score is -100..+100. Below either floor the engine says NO_BIAS rather
-    # than inventing a direction from noise.
-    bias_min_abs_score: float = 12.0
-    bias_min_confidence: float = 0.30
-    bias_score_scale: float = 100.0
+    # Score is -100..+100.
+    #
+    # STEP 11: bias_min_abs_score / bias_min_confidence / bias_score_scale
+    # were the NO_BIAS-era floors. Item 2 replaced them with a BINARY bias
+    # (BULLISH or BEARISH, never withheld), and the equivalents now live as
+    # module constants in app/analysis/sentiment_engine.py: EPS = 12.0 is the
+    # old bias_min_abs_score and TIEBREAK_MAX_CONFIDENCE = 0.30 is the old
+    # bias_min_confidence. Keeping the settings copies invited reading a
+    # threshold that nothing consults, so they are retired here; see
+    # sentiment_engine.py's comment at the EPS definition. bias_score_scale
+    # was 100.0 and is now the literal in _score_from.
     # ---- Item 5: minimum confidence before a computed flip is allowed. ----
     # A flip the stability gates say "yes" to still has to clear this floor:
     # below it the new reading is too thin to be trusted and the previous bias
@@ -803,8 +809,22 @@ TIER_MULTIPLIERS = {
 # TRADING_DAY_CUTOFF_HOURS: any item older than this gets weight 0.
 TIER_HALF_LIVES = {
     "TIER_1": 1.5,
-    "TIER_2": 0.75,
+    "TIER_2": 1.25,
     "TIER_3": 0.25,
+}
+
+# STEP 7: Explicit half-life override per EventType (optional).
+# Allows FOMC decisions, NFP prints, etc. to carry custom half-lives
+# independent of their tier. If absent, the tier's half-life is used.
+EVENT_HALF_LIFE_OVERRIDE: dict[str, float] = {
+    "FOMC_DECISION": 4.0,       # FOMC decision drives price for hours
+    "NFP_PRINT": 3.0,           # NFP print trades for hours
+    "CPI_PRINT": 3.0,           # CPI print trades for hours
+    "PPI_PRINT": 3.0,           # PPI print trades for hours
+    "FOMC_MINUTES": 2.0,        # Minutes release has medium persistence
+    "ECB_DECISION": 4.0,        # ECB decision
+    "BOE_DECISION": 4.0,        # BoE decision
+    "GEOPOLITICAL_RISK": 6.0,   # Wars/escalations last days
 }
 
 # Per-asset decay multipliers applied ON TOP of the tier half-life
@@ -814,15 +834,12 @@ TIER_HALF_LIVES = {
 #                  tier table above.
 #   BITCOIN:       24/7 - no overnight reset, so a 03:00 UTC headline still
 #                  matters at the London open. Longer half-life (+25%).
-#   EQUITY:       cash equities trade ~16h/day; earnings and sector news react
-#                 pre-market and fade into the close. Shorter half-life (-25%).
-# The equity card picks this up automatically: it proxies signals with
-# asset=Asset.EQUITY before calling sentiment_engine.compute().
+#   EQUITY:       REMOVED (Step 6 Option A). The equity card handles its own
+#                 decay via its own session-aware logic.
 ASSET_DECAY_MULTIPLIER = {
     "GOLD": 1.0,
     "SILVER": 1.0,
     "BITCOIN": 1.25,
-    "EQUITY": 0.75,
 }
 
 # Hard cap on article age, independent of the window. Reads from the
@@ -830,6 +847,57 @@ ASSET_DECAY_MULTIPLIER = {
 # for backward compatibility with callers importing the constant.
 # DAY TRADING: .env ships 8h for live trading; the declared default is 2.0.
 TRADING_DAY_CUTOFF_HOURS = settings.trading_day_cutoff_hours
+
+# STEP 7: decay floor - items older than cutoff don't hit zero, they hit
+# this floor (0.05 = 5% residual weight). Ensures very old news still
+# contributes a tiny signal rather than vanishing entirely.
+DECAY_FLOOR = 0.05
+
+# ---------------------------------------------------------------------------
+# STEP 8: contradiction dampener (applied in sentiment_engine._score_from).
+#
+# When the two sides are genuinely close, the news is fighting itself, and
+# min/max above CONTRADICTION_RATIO means the difference is mostly which side
+# landed the heavier single headline rather than a real lean. The score is
+# multiplied by CONTRADICTION_DAMPENER_FACTOR there, so the displayed split
+# reads as a lean rather than a verdict.
+#
+# Unlike `contradiction_detected` (which widens the FLIP margin at bull > 80
+# AND bear > 80), this fires on a much smaller imbalance and scales the score
+# rather than gating a label change - it is about how strongly to speak, not
+# about whether to flip.
+# ---------------------------------------------------------------------------
+CONTRADICTION_DAMPENER_ENABLED = True
+# min(bull, bear) / max(bull, bear) above this is treated as a real fight.
+CONTRADICTION_RATIO = 0.6
+# Multiplier applied to the score when that ratio is exceeded.
+CONTRADICTION_DAMPENER_FACTOR = 0.5
+
+# ---------------------------------------------------------------------------
+# STEP 10: confidence calibration.
+#
+# The confidence blend in sentiment_engine._confidence_from uses fixed
+# hand-picked coefficients that were never checked against real outcomes. This
+# table remaps its output onto the hit rates observed in tools/calibration_report.py,
+# so a reported 0.30 means "right about 30% of the time".
+#
+# UNFITTED ON PURPOSE: bias_outcome is empty (no calibration label has ever been
+# recorded), so any mapping placed here would be an invented formula rather than
+# evidence. Until a fit exists the applier is an identity and the flag stays off.
+# Run  python tools/calibration_report.py  and paste its printed block to enable.
+#
+# Points are (raw_confidence, calibrated_confidence), ascending in raw.
+# ---------------------------------------------------------------------------
+CONFIDENCE_CALIBRATION_ENABLED = False
+CONFIDENCE_CALIBRATION: tuple[tuple[float, float], ...] = (
+    (0.0, 0.0),
+    (1.0, 1.0),
+)
+# A bucket with fewer than this many labels is reported but not fitted: a hit
+# rate over 4 samples is noise.
+CONFIDENCE_CALIBRATION_MIN_SAMPLES = 30
+# Bucket edges used by the fitter, in ascending order.
+CONFIDENCE_CALIBRATION_BUCKETS = (0.0, 0.1, 0.2, 0.3, 0.45, 0.6, 0.8, 1.01)
 
 # Task 3: one multiplier for rumors/unconfirmed items ("reportedly",
 # "sources say", "may", "could", "might", opinion pieces).

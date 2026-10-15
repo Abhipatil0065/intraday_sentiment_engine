@@ -411,9 +411,9 @@ def test_html_shows_both_side_percentages_under_the_bar():
     assert "BULLISH" in html and "BEARISH" in html
     # Both figures come from the display block, so they match the bar exactly.
     assert "d.bull_pct" in html and "d.bear_pct" in html
-    # prepCard must actually call it, directly after the bar. msplit now also
+    # scopeCard must actually call it, directly after the bar. msplit now also
     # takes the asset symbol so each card keys its own flip time.
-    card = html.split("function prepCard(", 1)[1].split("function renderPrepStrip", 1)[0]
+    card = html.split("function scopeCard(", 1)[1].split("function equityCard", 1)[0]
     assert "mbar(b)" in card and "msplit(b," in card
     assert card.index("mbar(b)") < card.index("msplit(b,"), (
         "the two-sided numbers must sit BELOW the bar line")
@@ -491,8 +491,8 @@ def test_api_block_exposes_both_driver_sides(session):
 def test_html_renders_two_driver_boxes():
     """The card must draw a bullish box and a bearish box side by side."""
     html = _html()
-    card = html.split("function prepCard(", 1)[1].split(
-        "function renderPrepStrip", 1)[0]
+    card = html.split("function scopeCard(", 1)[1].split(
+        "function equityCard", 1)[0]
     assert "BULLISH DRIVERS" in card
     assert "BEARISH DRIVERS" in card
     assert "b.bull_drivers" in card

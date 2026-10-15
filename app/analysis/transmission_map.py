@@ -374,20 +374,13 @@ _INTRINSIC_RULES: tuple[tuple[EventType, tuple[str, ...]], ...] = (
      ("inflow", "inflows", "approval", "approved")),
 (EventType.BTC_ETF_FLOW,
       ("outflow", "outflows", "redemption", "redemptions", "rejection", "rejected", "denied")),
-    (EventType.EARNINGS_BEAT, ("beats earnings", "earnings beat",
-      "beats estimates", "beats expectations", "tops estimates",
-      "record profit")),
-    (EventType.EARNINGS_MISS, ("misses earnings", "earnings miss",
-      "misses estimates", "misses expectations", "profit warning",
-      "warns on profit", "falls short")),
-    (EventType.GUIDANCE_RAISED, ("raises guidance", "raises outlook",
-      "raises forecast", "lifts guidance", "lifts forecast")),
-    (EventType.GUIDANCE_CUT, ("cuts guidance", "cuts outlook",
-      "cuts forecast", "lowers guidance", "lowers forecast")),
-    (EventType.GOLD_ETF_FLOW,
-      ("inflow", "inflows")),
-    (EventType.GOLD_ETF_FLOW,
-      ("outflow", "outflows", "redemption", "redemptions")),
+(EventType.BTC_ETF_FLOW,
+      ("outflow", "outflows", "redemption", "redemptions", "rejection", "rejected", "denied")),
+    # STEP 4c: the duplicate EARNINGS_BEAT / EARNINGS_MISS / GUIDANCE_RAISED /
+    # GUIDANCE_CUT entries that used to sit here are gone. They carried the
+    # same keywords as the qualified entries further down (740-772) but with an
+    # EMPTY qualifier set, so both fired on every match and the event was
+    # counted twice through resolve(). Only the qualified set remains.
     (EventType.BANKING_STRESS,
       ("bank collapse", "bank collapses", "bank fails", "bank failure",
        "bank run", "bank runs", "banking crisis", "bank seized", "bailout")),
@@ -531,17 +524,34 @@ EVENT_SIGNALS: tuple[tuple[EventType, tuple[str, ...], tuple[str, ...]], ...] = 
      ("recession", "slump", "slowdown", "contraction", "downturn")),
 (EventType.DOVISH_POLICY, ("dovish", "rate cut", "cuts rates", "cut rates",
                                "pivot", "easing", "stimulus"), ()),
-    # ---- Real yields / TIPS / breakevens (gold's primary driver) ----
-    # Must come BEFORE generic RISING_YIELDS/FALLING_YIELDS to avoid conflicts
-    (EventType.REAL_YIELDS_RISING, ("real yields rise", "real yields rising", "real yields climbed", "real yields higher", "real yields spike", "real yields spiked", "real yields surged", "tips yields rise", "tips yields rising", "real yield climb", "real yield spike", "real yield surge"), ("real", "yield", "tips", "inflation protected")),
-    (EventType.REAL_YIELDS_FALLING, ("real yields fall", "real yields falling", "real yields dropped", "real yields lower", "real yields drop", "real yields decline", "real yields ease", "tips yields fall", "tips yields falling", "real yield drop", "real yield decline", "real yields ease"), ("real", "yield", "tips", "inflation protected")),
+     # ---- Real yields / TIPS / breakevens (gold's primary driver) ----
+     # Must come BEFORE generic RISING_YIELDS/FALLING_YIELDS to avoid conflicts
+     #
+     # STEP 4b (keyword completion): the past tense "real yields rose" /
+     # "real yields fell" was missing from both sets. Removing the bare "real
+     # yields" phrase from RISING_YIELDS (below) left past-tense real-yield
+     # headlines with no specific rule at all, so they fell through to the
+     # generic FALLING_YIELDS / RISING_YIELDS. Those generic rules DO give the
+     # right sign, so the self-contradiction was already fixed - but the
+     # headline was then attributed to the wrong mechanism, and the generic
+     # entries carry a different magnitude. The past-tense forms are added so
+     # all real-yield language is owned by the two specific rules, which is
+     # what the ordering above is there to guarantee.
+     (EventType.REAL_YIELDS_RISING, ("real yields rise", "real yields rising", "real yields climbed", "real yields higher", "real yields spike", "real yields spiked", "real yields surged", "real yields rose", "tips yields rise", "tips yields rising", "tips yields rose", "real yield climb", "real yield spike", "real yield surge", "real yield rose"), ("real", "yield", "tips", "inflation protected")),
+     (EventType.REAL_YIELDS_FALLING, ("real yields fall", "real yields falling", "real yields dropped", "real yields lower", "real yields drop", "real yields decline", "real yields ease", "real yields fell", "tips yields fall", "tips yields falling", "tips yields fell", "real yield fell", "real yield drop", "real yield decline", "real yield fell"), ("real", "yield", "tips", "inflation protected")),
     (EventType.TIPS_AUCTION, ("tips auction", "tips sale", "treasury inflation protected", "real yield auction", "tips issuance"), ("tips", "treasury", "inflation protected")),
     (EventType.BREAKEVENS_RISING, ("breakevens rise", "breakevens rising", "breakeven inflation rise", "inflation breakevens climb", "breakevens widen", "breakeven spread widens"), ("breakeven", "inflation expectation")),
     (EventType.BREAKEVENS_FALLING, ("breakevens fall", "breakevens falling", "breakeven inflation fall", "inflation breakevens drop", "breakevens narrow", "breakeven spread narrows"), ("breakeven", "inflation expectation")),
     (EventType.RISING_YIELDS, ("yields rise", "yields rose", "yields climbed",
                                "yields climb", "yields higher", "yields surged",
-                               "higher yields", "rising yields", "real yields",
-                               "bond yield"), ()),
+                               "higher yields", "rising yields"),
+     ()),
+     # STEP 4b: the bare phrase "real yields" used to sit in RISING_YIELDS's
+     # any-of set. Every "real yields FELL" headline therefore matched BOTH
+     # REAL_YIELDS_FALLING (bullish) and RISING_YIELDS (bearish), so the two
+     # cancelled inside resolve(). Real-yield language now belongs exclusively
+     # to REAL_YIELDS_RISING / REAL_YIELDS_FALLING above, which are ordered
+     # ahead of this entry and carry the verb.
     (EventType.FALLING_YIELDS, ("yields fall", "yields fell", "yields eased",
                                  "yields decline", "lower yields",
                                  "falling yields"), ()),
@@ -589,15 +599,23 @@ EVENT_SIGNALS: tuple[tuple[EventType, tuple[str, ...], tuple[str, ...]], ...] = 
     (EventType.BTC_EXCHANGE_OUTFLOW, ("exchange outflow", "exchange outflows", "binance outflow", "coinbase outflow", "withdrawals surge", "exchange withdrawal"), ("btc", "bitcoin")),
     (EventType.BTC_STABLECOIN_MINT, ("usdt mint", "usdc mint", "tether mint", "stablecoin mint", "usdt printed", "usdc printed"), ("btc", "bitcoin", "crypto")),
     (EventType.BTC_STABLECOIN_REDEEM, ("usdt redemption", "usdc redemption", "tether redemption", "stablecoin redemption", "usdt burned", "usdc burned"), ("btc", "bitcoin", "crypto")),
-    (EventType.CRYPTO_REGULATION, ("sec", "cftc", "crypto regulation",
-                                   "stablecoin bill", "custody rule",
-                                   "crypto bill", "ban on"), ()),
+    # STEP 4a: CRYPTO_REGULATION used to sit HERE, ahead of the signed
+    # REGULATION_CLAMP / REGULATION_CLARITY rules, and its trigger list began
+    # with the bare token "sec". That meant an SEC filing header, an FT letter
+    # about SEC quorum rules and a genuine crypto enforcement action all landed
+    # in the SAME directionless bucket at the map's largest magnitude (1.00),
+    # which is exactly the "unknown event type gets an inappropriate default"
+    # failure the audit recorded. It now sits AFTER both signed rules and only
+    # fires on crypto-qualified phrasing, so a signed rule wins whenever one
+    # applies. See the moved entry below REGULATION_CLARITY.
     (EventType.BTC_ETF_FLOW, ("bitcoin etf", "spot etf", "ibit", "fbtc",
                               "btco", "bitcoin fund", "etf inflow",
                               "etf outflow"), ("bitcoin", "btc", "crypto")),
-(EventType.GOLD_ETF_FLOW, ("gold etf", "gld", "gold fund", "gold inflows",
-                               "gold outflows", "etf inflows", "etf outflows"),
-      ("gold", "bullion")),
+    # STEP 4c: GOLD_ETF_FLOW was REMOVED from the detection tuple. Its keyword
+    # set (598-600) was a subset of GOLD_ETF_FLOW_IN / _OUT below, so a single
+    # gold-ETF headline fired TWO event types and was summed twice through
+    # resolve(). GOLD_ETF_FLOW_IN/OUT carry the sign themselves, so the
+    # unsigned GOLD_ETF_FLOW is now never detected.
     # ---- Gold-specific microstructure / derivatives mechanisms (intraday) ----
     (EventType.GOLD_FUNDING_RATE_SPIKE, ("gold funding rate spike", "gold funding rate surges", "gold funding rate spikes", "negative gold funding", "gold funding turned negative"), ("gold", "xau", "comex", "futures")),
     (EventType.GOLD_FUNDING_RATE_RESET, ("gold funding rate reset", "gold funding rate normalizes", "gold funding rate normalised", "gold funding back to neutral"), ("gold", "xau", "comex", "futures")),
@@ -617,7 +635,15 @@ EVENT_SIGNALS: tuple[tuple[EventType, tuple[str, ...], tuple[str, ...]], ...] = 
     # appetite FADED" scored exactly like "risk appetite IMPROVED". Subject+verb
     # resolution now lives in app/analysis/event_polarity.py; only phrases that
     # already carry a direction are kept below.
-    (EventType.RISK_ON, ("risk-on", "stocks rally", "equities surge"), ()),
+    # STEP 4d: "stocks rally" and "equities surge" were removed here - they
+    # duplicated STOCK_RALLY's own set, so every equity rally headline fired
+    # both rules and was counted twice. They stay in STOCK_RALLY, which is the
+    # equity-specific rule; RISK_ON now fires only on genuine risk-appetite
+    # phrasing.
+    (EventType.RISK_ON, ("risk-on", "risk on", "risk appetite improves",
+                         "risk appetite returns", "risk appetite rebuilds",
+                         "investors embrace risk", "embrace risk",
+                         "risk appetite eases higher"), ()),
     (EventType.RISK_OFF, ("risk-off", "risk aversion", "flight to quality",
                           "panic selling", "safe haven demand",
                           "safe-haven demand"), ()),
@@ -771,11 +797,21 @@ EVENT_SIGNALS: tuple[tuple[EventType, tuple[str, ...], tuple[str, ...]], ...] = 
                               "forecast cut", "profit warning",
                               "reduces forecast"), ()),
     # INDEX_FLOW: passive/index money moving in or out of the S&P 500.
-    (EventType.INDEX_FLOW, ("index inflow", "index inflows", "etf inflow",
-                            "etf inflows", "index fund", "index rebalance",
+    #
+    # STEP 4c: the bare "etf inflow" / "etf inflows" / "fund inflow" /
+    # "fund inflows" phrases were removed. INDEX_FLOW carried no qualifier, so
+    # EVERY ETF-flow headline - including gold-ETF and bitcoin-ETF stories -
+    # also fired as an equity index flow and added a third contribution. The
+    # entry now requires an equity/index context word in its qualifier set, so
+    # it cannot be reached by a headline about any single asset's fund flows.
+    (EventType.INDEX_FLOW, ("index inflow", "index inflows", "index fund",
+                            "index fund inflow", "index rebalance",
                             "index weight", "passive inflow", "passive inflows",
-                            "s&p inflow", "s&p 500 inflow", "record inflows",
-                            "fund inflows", "fund inflow"), ()),
+                            "s&p inflow", "s&p 500 inflow", "spx inflow",
+                            "record inflows into equity", "record inflows to equity",
+                            "equity fund inflow", "equity fund inflows"),
+     ("s&p", "index", "equity", "equities", "nasdaq", "nyse", "russell",
+      "passive", "spx", "djia", "dow")),
     # SECTOR_ROTATION: money moving BETWEEN sectors. Directionless by itself -
     # the sign is 0 in the map, so it contributes MIXED, not a lean.
     (EventType.SECTOR_ROTATION, ("sector rotation", "rotation into",
@@ -784,10 +820,20 @@ EVENT_SIGNALS: tuple[tuple[EventType, tuple[str, ...], tuple[str, ...]], ...] = 
     # RATE_REPRICING: equities reprice on a rate move. Same direction as the
     # metals here (higher rates = lower equity multiples) but reached through
     # its own keyword set rather than by inheriting HAWKISH_POLICY.
-    (EventType.RATE_REPRICING, ("rate hike", "raises rates", "raise rates",
-                                "rate increase", "higher rates", "hike rates",
-                                "fed hike", "rate rises", "rising rates",
-                                "real yields rise", "real yields rising"), ()),
+    #
+    # STEP 4d: this set used to duplicate nine of HAWKISH_POLICY's phrases
+    # ("rate hike", "raises rates", "raise rates", "rate increase",
+    # "higher rates", "hike rates", "fed hike", "rate rises", "rising rates"),
+    # so every hawkish headline double-counted. It now carries ONLY the
+    # repricing language HAWKISH_POLICY does not express.
+    (EventType.RATE_REPRICING, ("markets price", "markets are pricing",
+                                "priced in a cut", "priced in a hike",
+                                "odds of a hike", "odds of a cut",
+                                "rate expectations", "expectations for rates",
+                                "futures imply", "futures are pricing",
+                                "swaps imply", "rate path repricing",
+                                "repricing the rate path"),
+     ()),
     (EventType.STOCK_RALLY, ("stocks rally", "stock rally", "equities surge",
                              "equity surge", "s&p 500 rises", "s&p rises",
                              "spx rises", "nasdaq rises", "record highs",
@@ -836,9 +882,31 @@ EVENT_SIGNALS: tuple[tuple[EventType, tuple[str, ...], tuple[str, ...]], ...] = 
                                      "passes", "passed", "signs into law", "signed into law",
                                      "enacts", "enacted", "legalizes", "legalized",
                                      "adopts", "adopted"),
-     ("bitcoin", "btc", "crypto", "etf", "sec", "cftc", "coinbase", "exchange",
-      "custody", "stablecoin", "defi", "defi ")),
-# ---- Item 3: liquidity events. ----
+      ("bitcoin", "btc", "crypto", "etf", "sec", "cftc", "coinbase", "exchange",
+       "custody", "stablecoin", "defi", "defi ")),
+    # STEP 4a: CRYPTO_REGULATION, moved to after the signed rules.
+    #
+    # Only crypto-qualified phrasing triggers it, and a crypto context word is
+    # ALSO required in the qualifier set, so "SEC filing 10-Q over a bank's
+    # custody rule" cannot reach it. Placed here so that whenever a signed rule
+    # applies (REGULATION_CLARITY for an approval, REGULATION_CLAMP for a
+    # crackdown) that rule is the one that fires - this entry is the fallback
+    # for genuine regulatory ACTION that is neither clearly bullish nor clearly
+    # bearish from the wording.
+    #
+    # The map gives BTCUSD [-1, 0.80]: a regulatory action is bearish for the
+    # asset it regulates, which is the prior the audit found missing. The sign
+    # is data, in the map; if a particular headline proves to be clarity rather
+    # than a clamp, REGULATION_CLARITY's ordering means it is caught first.
+    (EventType.CRYPTO_REGULATION, ("crypto regulation", "regulates crypto",
+                                   "crypto bill", "stablecoin bill",
+                                   "stablecoin legislation", "custody rule",
+                                   "sec crypto", "sec bitcoin",
+                                   "sec charges crypto", "sec lawsuit crypto",
+                                   "sec targets crypto", "cftc crypto",
+                                   "ban on crypto"),
+     ("crypto", "bitcoin", "btc", "token", "stablecoin", "digital asset")),
+    # ---- Item 3: liquidity events. ----
     # QE/QT/balance-sheet/TGA/reserve moves reach BTC through the liquidity
     # channel (stablecoin DeFi collateral, exchange order books, risk appetite)
     # far more than they reach the metals, which are priced off real yields.

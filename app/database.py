@@ -206,6 +206,8 @@ def _add_missing_sentiment_columns() -> None:
 
     add_columns = {
         "raw_score": "FLOAT",
+        "bull": "FLOAT",
+        "bear": "FLOAT",
         "baseline_score": "FLOAT",
         "stale": "BOOLEAN DEFAULT 0",
         "confidence_label": "VARCHAR(8) DEFAULT 'LOW'",

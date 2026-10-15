@@ -212,7 +212,8 @@ def test_tier3_10_hours_near_zero_weight():
     from app.analysis.sentiment_engine import decay_weight
     old = NOW - timedelta(hours=10)
     w = decay_weight(old, "TIER_3", NOW)
-    assert w < 0.01, f"10h old TIER_3 weight should be near zero, got {w}"
+    # Step 7: past the cutoff the weight floors at DECAY_FLOOR (0.05), never 0.
+    assert w == 0.05, f"10h old TIER_3 weight should floor at 0.05, got {w}"
 
 
 def test_tier1_5_hours_keeps_half():
@@ -225,12 +226,12 @@ def test_tier1_5_hours_keeps_half():
     assert w >= 0.5 * fresh, f"30min old TIER_1 should keep >=50% fresh weight, got {w}/{fresh}"
 
 
-def test_item_older_than_the_cutoff_has_weight_zero(monkeypatch):
-    """An item older than the cutoff has weight exactly 0.
+def test_item_older_than_the_cutoff_has_weight_floor(monkeypatch):
+    """An item older than the cutoff has weight at the DECAY_FLOOR (Step 7).
 
     The cutoff is pinned to the declared default (2h): the shipped .env raises
     it to 8h for live day trading, so an unpinned test would pass or fail on
-    the deployment's env rather than on the rule "past the cutoff -> 0".
+    the deployment's env rather than on the rule "past the cutoff -> floor".
     """
     from app.analysis.sentiment_engine import decay_weight
     from app.config import settings
@@ -238,7 +239,8 @@ def test_item_older_than_the_cutoff_has_weight_zero(monkeypatch):
     monkeypatch.setattr(settings, "trading_day_cutoff_hours", 2.0,
                         raising=False)
     old = NOW - timedelta(hours=3)
-    assert decay_weight(old, "TIER_1", NOW) == 0.0
+    # Step 7: the floor is 0.05, not 0.0 - old news fades, it never vanishes.
+    assert decay_weight(old, "TIER_1", NOW) == 0.05
 
 
 def test_decay_applied_once_weight_ratio():

@@ -930,8 +930,18 @@ def test_event_key_collapse_scores_like_one_not_two():
     assert 1.0 <= agg_two["bull"] / agg_one["bull"] <= 1.30
 
 
-def test_opposite_directions_under_one_event_key_stay_two_votes():
-    """A bullish and a bearish reading of one event are two readings."""
+def test_opposite_directions_under_one_event_key_collapse_to_one_vote():
+    """STEP 9.3: opposite readings of ONE event are one uncertain reading.
+
+    Previously these survived as two balanced votes, which manufactured a
+    conviction out of an event whose direction was never established. They now
+    collapse to a single vote carrying the dominant direction, and the survivor
+    is flagged contradiction_detected so the engine reports the verdict as low
+    confidence rather than a call.
+
+    Two DIFFERENT events that merely disagree still stay two votes - see
+    test_different_event_keys_are_not_merged_by_identity.
+    """
     from app.analysis.event_clustering import cluster_signals
 
     bull = _mk_evt("Trump: Working with Russia to end war", 0,
@@ -941,9 +951,11 @@ def test_opposite_directions_under_one_event_key_stay_two_votes():
 
     clustered = cluster_signals([bull, bear], window_hours=0.5)
 
-    assert len(clustered) == 2
-    assert {s.direction for s in clustered} == {
-        Direction.BULLISH, Direction.BEARISH}
+    # One vote now, not two.
+    assert len(clustered) == 1
+    assert clustered[0].direction in (Direction.BULLISH, Direction.BEARISH)
+    # And the survivor records that the evidence was split.
+    assert clustered[0].contradiction_detected is True
 
 
 def test_different_event_keys_are_not_merged_by_identity():

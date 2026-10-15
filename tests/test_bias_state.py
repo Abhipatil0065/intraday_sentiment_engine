@@ -244,22 +244,32 @@ def test_delta_ignores_signals_older_than_the_window():
     assert compute(fresh + old, Asset.GOLD, now=NOW).delta_60m == 0.0
     assert compute(fresh, Asset.GOLD, now=NOW).delta_60m != 0.0
 def test_confidence_never_gates_the_label(monkeypatch):
-    """Binary bias: confidence is still reported, but a high floor can no
-    longer withhold the verdict - the side comes from the score's sign."""
-    from app.config import settings
+    """Binary bias: confidence is reported, but a high floor can no longer
+    withhold the verdict - the side comes from the score's sign.
+
+    STEP 11: this used to monkeypatch settings.bias_min_confidence, which
+    retired with the NO_BIAS design. The live gate is
+    sentiment_engine.FLIP_MIN_CONFIDENCE, so that is what is raised now - a
+    stronger test, because it targets the constant that is actually read.
+    """
+    from app.analysis import sentiment_engine as se
 
     strong = [make(direction=Direction.BULLISH, strength=ImpactStrength.VERY_HIGH,
                    importance=EconomicImportance.VERY_HIGH)]
-    baseline = compute(strong, Asset.GOLD)
+    baseline = se.compute(strong, Asset.GOLD)
     assert baseline.bias is Bias.BULLISH
 
-    monkeypatch.setattr(settings, "bias_min_confidence", 0.99, raising=False)
-    strict = compute(strong, Asset.GOLD)
-    assert strict.bias is Bias.BULLISH
+    monkeypatch.setattr(se, "FLIP_MIN_CONFIDENCE", 0.99)
+    strict = se.compute(strong, Asset.GOLD)
+    assert strict.bias is Bias.BULLISH, (
+        "raising the confidence floor must never withhold the label")
     assert 0.0 <= strict.confidence <= 1.0
+
+
 def _min_conf() -> float:
-    from app.config import settings
-    return float(getattr(settings, "bias_min_confidence", 0.25))
+    """The retired settings.bias_min_confidence, now the engine's own constant."""
+    from app.analysis.sentiment_engine import FLIP_MIN_CONFIDENCE
+    return float(FLIP_MIN_CONFIDENCE)
 
 
 def test_warm_bias_history_loads_without_overwriting():

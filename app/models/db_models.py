@@ -151,6 +151,19 @@ class SentimentSnapshot(Base):
     and a three-state bias that may be NO_BIAS. The explainability fields
     (item 10) are stored alongside so the dashboard never has to recompute
     them.
+
+    ``raw_score`` is the engine's pre-clamp net score; ``score`` is what the
+    payload publishes. They differ on a tie-break verdict, where ``score`` is
+    deliberately nudged to +/- TIEBREAK_LEAN so the badge cannot contradict
+    itself. The dashboard split is derived from ``raw_score`` so a card shows
+    the real lean instead of the published probe.
+
+    KEEP IN SYNC with _add_missing_sentiment_columns() in database.py, which
+    ALTERs both columns onto an existing database. The columns existed in the
+    live schema for a while WITHOUT the Mapped attribute here, so SQLAlchemy
+    never mapped them and main._block's getattr() fallback silently read
+    ``score``. Declaring the attribute is what makes the persisted value
+    reachable at all.
     """
 
     __tablename__ = "sentiment_snapshot"
@@ -160,6 +173,26 @@ class SentimentSnapshot(Base):
     scope: Mapped[str] = mapped_column(String(24), index=True)  # CURRENT / PREP / WRAP
 
     score: Mapped[float] = mapped_column(Float, default=0.0)      # -100..+100
+    # The pre-clamp net score the engine actually computed. The dashboard's
+    # bull/bear split is derived from THIS, not from ``score``: on a tie-break
+    # verdict ``score`` is a +/- TIEBREAK_LEAN probe, so projecting it would
+    # render a real lean as a fake 51/49. NULL only on rows written before the
+    # migration, which main._block detects and warns about.
+    raw_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # TASK 2: the two aggregate totals behind this verdict, so
+    # r = min(bull,bear)/max(bull,bear) is recoverable from history. Without
+    # them the net raw_score cannot be decomposed - infinitely many pairs give
+    # the same net. Data capture only: the scoring path never reads them, and
+    # the flip gates compare against `score`, not these.
+    # NULL on rows written before the migration, which main._block must
+    # tolerate. KEEP IN SYNC with _add_missing_sentiment_columns().
+    bull: Mapped[float | None] = mapped_column(Float, nullable=True)
+    bear: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # The rolling per-asset baseline this tick was normalised against, from
+    # app.analysis.bias_baseline.baseline_score(). NULL during warm-up or when
+    # the feature is off. Recorded for the audit trail; the engine never reads
+    # it back when scoring.
+    baseline_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     confidence: Mapped[float] = mapped_column(Float, default=0.0)  # 0..1
     bias: Mapped[str] = mapped_column(String(16), default="NO_BIAS")
     mode: Mapped[str] = mapped_column(String(24), default="heuristic")

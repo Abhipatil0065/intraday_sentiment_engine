@@ -95,7 +95,8 @@ def _leading_side(bull_pct: int) -> str:
     return DEFAULT_DISPLAY_BIAS
 
 
-def to_display(score: float, bias) -> dict:
+def to_display(score: float, bias, confidence: float | None = None,
+               tie_break: bool = False) -> dict:
     """
     Project an engine verdict onto the dashboard's bull/bear split.
 
@@ -111,11 +112,25 @@ def to_display(score: float, bias) -> dict:
     as the directional default. NEUTRAL is emitted only when the engine
     explicitly returns NO_BIAS, in which case the split is 50/50 and pct=50.
 
+    If ``confidence`` is provided (0.0..1.0), the split is shrunk toward 50/50
+    proportionally to confidence. At confidence=0 the split is 50/50; at
+    confidence>=TIEBREAK_MAX_CONFIDENCE (0.30) the full score is shown.
+    Intermediate values linearly interpolate.
+
+    If ``tie_break`` is True the engine took this label from its tie-break rule
+    rather than from the score, so a split that landed on exactly 50/50 is not a
+    verdict at all and renders as NEUTRAL rather than being forced to a 51/49
+    lean the evidence does not support.
+
     Args:
         score: the engine's signed score, nominally -100..+100.
         bias: Bias enum or string; anything unrecognised is treated as a missing
             verdict and resolved to the directional default (BULLISH). NO_BIAS
             produces label "NEUTRAL" with a 50/50 split.
+        confidence: optional confidence 0.0..1.0; when provided, shrinks the
+            split toward 50/50 proportionally. None means no shrinking.
+        tie_break: optional; True when the label came from the tie-break rule
+            (|raw_score| < EPS) rather than from the score's own sign.
 
     Returns:
         ``{"label", "pct", "bull_pct", "bear_pct"}``.
@@ -133,6 +148,41 @@ def to_display(score: float, bias) -> dict:
     # break the 100-total invariant, so it is clamped before the arithmetic.
     bull_pct = _clamp_pct(int(round(50 + numeric / 2.0)))
     bear_pct = 100 - bull_pct
+
+    # Confidence-aware shrinkage: if confidence is provided, shrink the split
+    # toward 50/50 proportionally to confidence. At confidence=0 the split is 50/50; at
+    # confidence>=TIEBREAK_MAX_CONFIDENCE (0.30) the full score is shown.
+    # Intermediate values linearly interpolate.
+    if confidence is not None:
+        try:
+            c = float(confidence)
+            if c != c or c in (float("inf"), float("-inf")):
+                c = 0.0
+        except (TypeError, ValueError):
+            c = 0.0
+        # Clamp to 0..1
+        c = max(0.0, min(1.0, c))
+        # Shrink factor: at c=0.30 -> 1.0 (full), at c=0 -> 0.0 (no lean)
+        shrink = min(1.0, c / 0.30)
+        # Shrink toward 50/50: bull_pct moves from its value toward 50
+        # New bull_pct = 50 + (bull_pct - 50) * shrink
+        bull_pct = int(round(50 + (bull_pct - 50) * shrink))
+        bear_pct = 100 - bull_pct
+
+    # STEP 8: a tie-break label with an even split is not a verdict.
+    #
+    # The engine takes a label from its tie-break rule when |raw| < EPS even
+    # though the weighted totals balance out. Left alone the lean-fixup below
+    # would turn that into a 51/49 named side, publishing a conviction the
+    # evidence does not support. Where the split is genuinely even it now reads
+    # NEUTRAL 50/50, and the card's flag carries the explanation.
+    if tie_break and name in (BULLISH, BEARISH) and bull_pct == 50:
+        return {
+            "label": "NEUTRAL",
+            "pct": 50,
+            "bull_pct": 50,
+            "bear_pct": 50,
+        }
 
     # The split must never contradict a named side. A tie-break verdict can
     # carry a raw score leaning the other way, and a bar that disagrees with

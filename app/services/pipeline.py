@@ -77,6 +77,9 @@ log = get_logger(__name__)
 
 # Shared across runs so dedup survives within a process session.
 _dedup = EventDeduplicator()
+# Boot reseed latch: the index is rebuilt from the DB exactly once per process
+# (STEP 9.2), not on every 180s tick.
+_dedup_seeded = False
 _last_update: datetime | None = None
 _last_successful_tick: str | None = None
 _news_since_update = 0
@@ -224,6 +227,54 @@ def _parse_timestamp_rank(value: str | None) -> float:
 def _current_market_day_key() -> str:
     """The market-local trading day as the suppression table's key."""
     return T.market_today().isoformat()
+
+
+def _final_weight_key(signal) -> tuple:
+    """Content identity of a signal for post-cluster final_weight routing."""
+    return (
+        signal.asset,
+        signal.title,
+        signal.direction,
+        signal.published_at,
+        signal.event_key,
+        signal.cluster_id,
+    )
+
+
+def seed_dedup_index_from_db(session) -> int:
+    """
+    Rebuild the in-process dedup index from stored headlines (STEP 9.2).
+
+    A restart starts with an empty ``EventDeduplicator``, which would admit
+    today's headlines as brand-new events and double-count them. This reseed is
+    latched by ``_dedup_seeded`` so it runs exactly once per process.
+
+    Rows without a ``published_at_utc`` cannot be placed in the 12h prune
+    window, so they are skipped rather than seeded with a bogus timestamp.
+    Returns the number of titles seeded.
+    """
+    global _dedup_seeded
+    if _dedup_seeded:
+        return 0
+
+    rows = session.execute(
+        select(NewsArticle.title)
+        .where(
+            NewsArticle.published_at_utc.is_not(None),
+            NewsArticle.is_today.is_(True),
+        )
+        .order_by(NewsArticle.id)
+    ).scalars().all()
+
+    titles = [t for t in rows if t]
+    if titles:
+        # Use one clock for the whole rebuild: the tick clock. Individual seed
+        # rows keep their own stored timestamps only for overlap scoring;
+        # the window is absolute from here.
+        _dedup.seed_from_titles(titles, T.now_utc())
+
+    _dedup_seeded = True
+    return len(titles)
 
 
 def _guid_suppressed(session, guid: str) -> bool:
@@ -612,7 +663,10 @@ async def _ingest_article(art: RawArticle, session, stats: IngestStats,
         )
 
     # --- EVENT DEDUPLICATION (section 16) ---
-    dedupe = _dedup.match(art.title, published)
+    # STEP 9.1: pass the tick's clock, so the prune window is absolute rather
+    # than the incoming article's own timestamp drifting it forward.
+    now_utc = T.now_utc()
+    dedupe = _dedup.match(art.title, published, now=now_utc)
     if is_fj:
         log.info(
             "FJ-SESSION DEDUP: %r -> event_key=%s is_new=%s score=%.2f",
@@ -977,6 +1031,7 @@ def _recompute_sentiment(session, stats: IngestStats):
     _recompute_sentiment._last_session = current_session
 
     from app.analysis.sentiment_engine import compute as compute_sentiment
+    from app.analysis.sentiment_engine import _signal_weight
 
     rows = session.scalars(
         select(NewsArticle).where(news_day_predicate())
@@ -998,6 +1053,11 @@ def _recompute_sentiment(session, stats: IngestStats):
 
     signals: list[WeightedSignal] = []
     category_weights: dict = {}
+    # TASK 1: remember which AssetImpact row each signal was built from, so
+    # final_weight can be persisted AFTER clustering from the signal's actual
+    # weight rather than before it.
+    _weight_targets: dict[int, object] = {}
+    _weight_targets_by_content: dict[tuple, list] = {}
     # Phase 2: verdicts collected per asset, logged once after the loop so the
     # snapshot rows are written after every asset's verdict is persisted.
     verdicts: list = []
@@ -1038,6 +1098,16 @@ def _recompute_sentiment(session, stats: IngestStats):
         # is the one on SESSION_REPORT_ALLOWED_ASSETS (today: EQUITY, the
         # region's own tape).
         is_session_report = is_fj_session_report_row(row)
+
+        # Map every impact row on this article by asset so a signal's bleed
+        # copy (same headline, other half of a precious-metals pair) still
+        # knows which AssetImpact row it must publish its final weight to.
+        impacts_by_asset = {}
+        for _imp in row.impacts:
+            try:
+                impacts_by_asset.setdefault(Asset(_imp.asset), _imp)
+            except ValueError:
+                continue
 
         for impact in row.impacts:
             # Phase 1: category drives the decay half-life, and the event key
@@ -1098,6 +1168,9 @@ def _recompute_sentiment(session, stats: IngestStats):
                 reason=impact.reason,
                 transmission=impact.transmission,
                 report_kind=kind,
+                # Step 3: carry the article's own analysis mode so the card
+                # reads "llm" / "mixed" instead of always "heuristic".
+                mode=(row.analysis_mode or "heuristic"),
                 surprise_weight=release_surprise.surprise_weight(
                     printed, release_text),
                 session_multiplier=asset_session_multiplier(
@@ -1112,6 +1185,10 @@ def _recompute_sentiment(session, stats: IngestStats):
                 age_reference_utc=age_reference_utc,
             )
             signals.append(signal)
+            _weight_targets[id(signal)] = impacts_by_asset.get(signal.asset, impact)
+            _weight_targets_by_content.setdefault(
+                _final_weight_key(signal), []
+            ).append(impacts_by_asset.get(signal.asset, impact))
 
             # IMPROVEMENT 5: gold/silver cross-asset bleed. A high-relevance,
             # high-strength macro story lands on both precious metals; the
@@ -1120,6 +1197,16 @@ def _recompute_sentiment(session, stats: IngestStats):
             bleed = build_bleed_signal(signal)
             if bleed is not None:
                 signals.append(bleed)
+                # A bleed copy has its own asset. If this article did not store
+                # an impact row for that asset, it must NOT be routed back to
+                # the primary impact row: it would overwrite the primary's
+                # final_weight with the bleed's (different) weight.
+                bleed_target = impacts_by_asset.get(bleed.asset)
+                if bleed_target is not None:
+                    _weight_targets[id(bleed)] = bleed_target
+                    _weight_targets_by_content.setdefault(
+                        _final_weight_key(bleed), []
+                    ).append(bleed_target)
             category_weights[cat_enum] = (
                 category_weights.get(cat_enum, 0.0) + impact.relevance
             )
@@ -1176,6 +1263,33 @@ def _recompute_sentiment(session, stats: IngestStats):
     from app.analysis.event_clustering import cluster_signals
     signals = cluster_signals(signals, window_hours=0.5)
 
+    # TASK 1: persist the weight the aggregation actually summed. Writing this
+    # before cluster_signals() would publish the pre-cluster weight, so the
+    # feed and the score could disagree when a near-duplicate dominated the
+    # raw list. Now every surviving impact row receives its own post-cluster
+    # _signal_weight; recency_weight mirrors it because the score path
+    # recomputes the same single weight and nothing else is stored for it.
+    recompute_now = T.now_utc()
+    for surviving in signals:
+        # The surviving object is usually the mapped signal itself, but
+        # cluster_signals() may return a freshly constructed representative
+        # when a cluster had several copies. Fall back to the signal's content
+        # so the impact row the score actually used still receives the weight.
+        targets = []
+        direct = _weight_targets.get(id(surviving))
+        if direct is not None:
+            targets.append(direct)
+        else:
+            targets.extend(_weight_targets_by_content.get(
+                _final_weight_key(surviving), ()))
+        if not targets:
+            continue
+        final_weight = _signal_weight(surviving, recompute_now)
+        if final_weight and final_weight > 0.0:
+            for impact in targets:
+                impact.final_weight = final_weight
+                impact.recency_weight = final_weight
+
     # Item 8: an imminent high-impact release makes any standing bias unreliable.
     # Read from the RAW event list, not from the signals: only RELEASED prints
     # become signals, but an unreleased high-impact print is exactly the thing
@@ -1216,11 +1330,18 @@ def _recompute_sentiment(session, stats: IngestStats):
             ("MARKET_PREP", prep.sentiment),
             ("MARKET_WRAP", wrap.sentiment),
         ):
+            # Step 6 (Option A): the EQUITY proxy is dashboard-only. It is
+            # scored from the equity card and never receives a CURRENT
+            # SentimentSnapshot row, while MARKET_PREP / MARKET_WRAP remain for
+            # history.
+            if scope == "CURRENT" and asset is Asset.EQUITY:
+                continue
             session.add(
                 SentimentSnapshot(
                     asset=asset.value,
                     scope=scope,
                     score=result.score,
+                    raw_score=result.raw_score,
                     confidence=result.confidence,
                     bias=result.bias.value,
                     mode=result.mode,
@@ -1251,9 +1372,11 @@ note=result.note,
                       burst_bull=result.burst_bull,
                       burst_bear=result.burst_bear,
                       stale=result.stale,
-                      confidence_label=result.confidence_label,
-                      price_note=_price_note(asset),
-                )
+                    confidence_label=result.confidence_label,
+                    price_note=_price_note(asset),
+                    bull=result.bull_weight,
+                    bear=result.bear_weight,
+            )
             )
         log.info(
             "%s: %s score=%+.1f (n=%d conf=%.2f event_risk=%s)",
@@ -1570,6 +1693,9 @@ async def run_once() -> IngestStats:
         stats.calendar_signals = len(_calendar_signals)
 
         with session_scope() as session:
+            # STEP 9.2: reseed the dedup index from stored headlines once per
+            # process so a restart does not re-admit today's events.
+            seed_dedup_index_from_db(session)
             # Bookkeeping row for the dashboard's last-run panel. It is
             # best-effort: a transient SQLite write lock (e.g. the morning
             # brief holding an open write transaction) must never abort the
@@ -1653,7 +1779,7 @@ async def run_once() -> IngestStats:
                             from app.models.db_models import NewsArticle as _NA
                             from sqlalchemy import select as _sel, func as _fn
                             cnt = probe.scalar(
-                                _fn.count(_NA.id).where(_NA.guid == art.guid))
+                                _sel(_fn.count()).where(_NA.guid == art.guid))
                             log.error(
                                 "GUID-COLLISION DIAG: guid=%s in_existing=%s "
                                 "db_count=%s source=%s",

@@ -42,6 +42,7 @@ from app.analysis.sentiment_engine import (
     WeightedSignal,
     payload_score,
     recall_bias,
+    EPS,
 )
 from app.analysis.sentiment_engine import (
     compute as compute_sentiment,
@@ -72,6 +73,11 @@ class EquityCardResult:
     # The pre-clamp net score, for logging only: `score` is what the payload
     # shows, so a tie-break can never contradict its badge.
     raw_score: float = 0.0
+    # TASK 2: the aggregate totals, so the session card reports the same r as
+    # the asset cards. Zero (not None) because this object is constructed
+    # in-memory rather than read back from a nullable column.
+    bull: float = 0.0
+    bear: float = 0.0
     confidence: float = 0.0
     bias: str = Bias.BULLISH.value
     mode: str = "heuristic"
@@ -402,6 +408,8 @@ def build_equity_card(all_signals: Sequence[WeightedSignal],
         symbol=str(info.get("symbol", "")),
         score=float(score),
         raw_score=float(result.raw_score),
+        bull=float(getattr(result, "bull_weight", 0.0)),
+        bear=float(getattr(result, "bear_weight", 0.0)),
         confidence=float(result.confidence),
         bias=bias,
         mode=getattr(result, "mode", "heuristic"),
@@ -440,5 +448,13 @@ def to_payload(card: EquityCardResult) -> dict:
         "burst_bull": int(card.burst_bull),
         "burst_bear": int(card.burst_bear),
     }
-    result["display"] = to_display(card.score, card.bias)
+    # Step 8: pass the same tie-break flag the asset cards use, derived from the
+    # card's own raw score, so a balanced regional verdict reads NEUTRAL 50/50
+    # instead of a forced 51/49 lean.
+    result["bull"] = float(card.bull)
+    result["bear"] = float(card.bear)
+    result["display"] = to_display(
+        card.score, card.bias, card.confidence,
+        tie_break=abs(float(card.raw_score)) < EPS,
+    )
     return result

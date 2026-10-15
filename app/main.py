@@ -22,7 +22,7 @@ from sqlalchemy import func, select
 
 from app.analysis import fj_sessions, llm_client
 from app.analysis.display import to_display
-from app.analysis.sentiment_engine import DEFAULT_BIAS
+from app.analysis.sentiment_engine import DEFAULT_BIAS, EPS
 from app.config import settings
 from app.database import init_db, session_scope
 from app.ingestion.base import parse_source_config
@@ -292,7 +292,7 @@ def _block(session, asset: str, scope: str) -> dict:
         return {
             "asset": asset, "scope": scope,
             "score": 0.0, "confidence": 0.0, "bias": "NO_BIAS",
-            "display": to_display(0.0, "NO_BIAS"),
+            "display": to_display(0.0, "NO_BIAS", 0.0),
             # No snapshots at all, so there is no stance to date.
             "bias_since_utc": None,
             "mode": "heuristic", "delta_60m": 0.0,
@@ -314,9 +314,26 @@ def _block(session, asset: str, scope: str) -> dict:
     # (raw_score), NOT the baseline-adjusted score. The adjusted score
     # centres around 0 and is therefore useless for a magnitude-based
     # percentage - using it would make every card read 50/50.
-    _display_raw = getattr(snap, "raw_score", snap.score)
+    #
+    # Step 1: ``raw_score`` is now a declared column on SentimentSnapshot, so
+    # it is read DIRECTLY. On a tie-break verdict ``score`` is a
+    # +/- TIEBREAK_LEAN probe, so projecting it would render a real lean as a
+    # fake 51/49 and the weak-evidence branch would be compressed instead of
+    # shown at full strength.
+    #
+    # Step 8: the same raw value tells the display whether the engine took this
+    # label from its tie-break rule (|raw| < EPS). When it did and the split is
+    # even, the card reads NEUTRAL 50/50 rather than a forced 51/49 lean.
+    _display_raw = snap.raw_score
     if _display_raw is None:
+        # Rows written before the migration. Fall back to the published score
+        # so a legacy database still renders, but say so loudly: the split on
+        # those rows is NOT the raw lean the docstring promises.
+        log.warning(
+            "sentiment_snapshot %s/%s has no raw_score (legacy row); "
+            "displaying the published score instead", asset, scope)
         _display_raw = snap.score
+    _tie_break = abs(float(_display_raw)) < EPS
     return {
         "asset": asset, "scope": scope,
         # score / confidence / bias are the ENGINE's answers and stay exactly
@@ -324,10 +341,18 @@ def _block(session, asset: str, scope: str) -> dict:
         # consumer read these fields. "display" is added alongside them for the
         # dashboard's own use and is never written back.
         "score": snap.score,
+        "raw_score": _display_raw,
+        # TASK 2: the aggregate totals behind this verdict, so a consumer can
+        # compute r = min(bull,bear)/max(bull,bear) and see how split the
+        # evidence actually was. NULL on legacy rows - the reader must treat
+        # None as "not captured", not as zero.
+        "bull": snap.bull,
+        "bear": snap.bear,
         "damped_score": snap.damped_score,
         "confidence": snap.confidence,
         "bias": snap.bias,
-        "display": to_display(_display_raw, snap.bias),
+        "display": to_display(_display_raw, snap.bias, snap.confidence,
+                               tie_break=_tie_break),
         # When this dominant side began, from snapshot history. The card uses it
         # to show "since ..." on a fresh page load, before the browser has
         # witnessed a flip of its own.
@@ -353,10 +378,10 @@ def _block(session, asset: str, scope: str) -> dict:
         "burst_bull": int(getattr(snap, "burst_bull", 0) or 0),
         "burst_bear": int(getattr(snap, "burst_bear", 0) or 0),
         # Item 1: baseline audit fields. raw_score is the unadjusted level the
-        # engine computed; baseline_score is the per-asset reference it was
-        # normalised against (None during warm-up / feature off).
-        "raw_score": getattr(snap, "raw_score", None),
-        "baseline_score": getattr(snap, "baseline_score", None),
+        # engine computed (same value the display split is projected from);
+        # baseline_score is the per-asset reference it was normalised against
+        # (None during warm-up / feature off).
+        "baseline_score": snap.baseline_score,
         "price_note": snap.price_note or "Price-action confirmation unavailable.",
         "last_updated": T.local_clock(snap.computed_at),
     }
@@ -461,6 +486,12 @@ def build_payload(session) -> dict:
 
     assets_out = []
     for asset in Asset:
+        # Step 6 (Option A): Skip Asset.EQUITY - equity is served via the
+        # session-aware equity card (top-level "equity" key), not as a
+        # regular asset card. The asset-level EQUITY snapshot is no longer
+        # computed in _recompute_sentiment.
+        if asset is Asset.EQUITY:
+            continue
         assets_out.append({
             "asset": asset.value,
             "label": asset.label,

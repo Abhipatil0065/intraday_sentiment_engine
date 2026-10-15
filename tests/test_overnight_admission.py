@@ -235,7 +235,15 @@ def test_overnight_signal_survives_the_cutoff_when_aged_from_the_boot(monkeypatc
     live_aged = _signal_weight(_signal(published), BOOT)
     boot_aged = _signal_weight(_signal(published, age_reference=BOOT), BOOT)
 
-    assert live_aged == 0.0, "without the reference the 8h cutoff zeroes it"
+    # Step 7: past the cutoff the decay floors at DECAY_FLOOR (0.05) instead
+    # of dropping to 0.0. That floor then propagates through the remaining
+    # multipliers (relevance/persistence/quality/session), so the final weight
+    # is a small POSITIVE number - not exactly 0.05, and not zero either.
+    assert live_aged > 0.0, (
+        "Step 7: without the reference the 8h cutoff must floor, not zero it")
+    assert live_aged < 0.5 * boot_aged, (
+        "Step 7: a floored stale headline must carry far less weight than one "
+        "aged from the boot")
     assert boot_aged > 0.0, "aged from the boot it must still count"
     assert boot_aged <= 1.0
 
@@ -320,10 +328,19 @@ def test_recompute_scores_the_overnight_headline(state_file, monkeypatch,
     )
 
 
-def test_recompute_without_the_flag_leaves_the_headline_weightless(
+def test_recompute_without_the_flag_floors_the_headline(
         state_file, monkeypatch, _quiet_recompute):
-    """OVERNIGHT_COUNTS_AS_FRESH=false: visible in the feed, but publication-
-    time ageing applies, so the 8h cutoff keeps it out of the score."""
+    """OVERNIGHT_COUNTS_AS_FRESH=false: visible in the feed, and publication-
+    time ageing applies.
+
+    STEP 7 changed this from "weighs nothing" to "weighs the DECAY_FLOOR".
+    A 9-hour-old headline used to hit the 8h cutoff and return weight 0.0,
+    which produced score 0.0. It now floors at 0.05, so the recompute scores
+    it through the weak-evidence branch (total_weight < MIN_TOTAL_WEIGHT):
+    a real but small contribution, never a full lean. Contrast with
+    test_recompute_scores_the_overnight_headline above, which admits it fresh
+    and gets the full lean.
+    """
     freeze_now(monkeypatch, BOOT)
     write_admission(state_file)
     monkeypatch.setattr(settings, "overnight_counts_as_fresh", False)
@@ -334,6 +351,11 @@ def test_recompute_without_the_flag_leaves_the_headline_weightless(
         gold = _gold_snapshots(session)
 
     assert gold
-    assert gold[0].score == 0.0, (
-        "with the flag off the stale headline must weigh nothing"
+    score = gold[0].score
+    assert score != 0.0, (
+        "Step 7: a floored signal must still move the score"
+    )
+    assert abs(score) < 50.0, (
+        "Step 7: the floored contribution must stay in the weak band, "
+        "never a full lean (got %s)" % score
     )

@@ -90,7 +90,7 @@ def build_rows(verdicts: Sequence[AssetVerdict],
     stamp = now or T.now_utc()
     rows: list[dict] = []
     for v in verdicts:
-        shown = to_display(v.score, v.bias)
+        shown = to_display(v.score, v.bias, v.confidence)
         rows.append({
             "timestamp_utc": stamp,
             "timestamp_ist": ist_stamp(stamp),

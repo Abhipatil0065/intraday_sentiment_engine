@@ -179,6 +179,64 @@ def _event_identity(s) -> str:
             .strip())
 
 
+def _collapse_keyed_events(keyed: dict) -> list:
+    """
+    STEP 9.3: collapse each event_key to exactly one directional vote.
+
+    The dominant direction wins by summed cluster weight, so a reading backed
+    by three independent outlets beats one lone take. When the directions
+    actually disagreed, the survivor is flagged ``contradiction_detected`` so
+    the engine reports the verdict as low confidence rather than a conviction.
+    """
+    from dataclasses import replace
+
+    out: list[WeightedSignal] = []
+    for event_key, group in keyed.items():
+        directions = {s.direction for s in group}
+        if len(directions) == 1:
+            # No disagreement: ordinary corroboration path, unchanged.
+            out.extend(_collapse_members_unkeyed(group))
+            continue
+
+        # Weight per direction, using the same weight the score will apply.
+        def _w(s):
+            try:
+                from app.analysis.sentiment_engine import _signal_weight
+                from datetime import datetime, timezone
+                return _signal_weight(s, datetime.now(timezone.utc))
+            except Exception:  # noqa: BLE001 - never break a cluster over a weight
+                return float(getattr(s, "relevance", 0.0) or 0.0)
+
+        by_dir: dict = {}
+        for s in group:
+            by_dir[s.direction] = by_dir.get(s.direction, 0.0) + _w(s)
+
+        winner = max(by_dir, key=lambda d: by_dir[d])
+        winners = [s for s in group if s.direction is winner]
+        losers = [s for s in group if s.direction is not winner]
+
+        # One vote for the dominant reading. Only the winners are passed, so
+        # the corroboration path yields exactly ONE signal and its direction is
+        # the winner by construction (rather than whichever dict happens to
+        # come first). The losing reading is dropped: the event still happened
+        # and is still weighted, it just no longer argues both sides.
+        collapsed = _collapse_members_unkeyed(winners)
+        keep = collapsed[0] if collapsed else None
+        if keep is None:
+            continue
+
+        flagged = replace(keep, contradiction_detected=True)
+        log.debug(
+            "cluster %s: readings disagreed (%s); kept %s and flagged "
+            "contradiction_detected",
+            event_key,
+            "/".join(sorted(d.value for d in directions)),
+            winner.value,
+        )
+        out.append(flagged)
+    return out
+
+
 def _collapse_members(members: list) -> list[WeightedSignal]:
     """One vote per direction inside a finished cluster.
 
@@ -198,6 +256,39 @@ def _collapse_members(members: list) -> list[WeightedSignal]:
     if len(members) == 1:
         return [members[0]]
 
+    # STEP 9.3: one event is one vote, even when its reports disagree.
+    #
+    # Two headlines filed under the SAME event_key are the same underlying
+    # event seen twice. If they carry opposite directions that is not two
+    # balanced votes - it is one uncertain reading, and scoring both doubled
+    # the evidence for an event whose direction was never actually
+    # established. Members that share an event_key now collapse to the
+    # dominant direction as a single vote; the losing reading is dropped and
+    # the survivor is flagged contradiction_detected so the verdict is
+    # reported as low confidence instead of a conviction.
+    #
+    # Members with NO event_key keep the original two-vote behaviour: those are
+    # two genuinely different stories that merely landed in one cluster.
+    keyed: dict[str, list] = {}
+    unkeyed: list = []
+    for s in members:
+        k = (getattr(s, "event_key", "") or "").strip()
+        if k:
+            keyed.setdefault(k, []).append(s)
+        else:
+            unkeyed.append(s)
+
+    if keyed:
+        collapsed = _collapse_keyed_events(keyed)
+        if unkeyed:
+            collapsed = collapsed + _collapse_members_unkeyed(unkeyed)
+        return collapsed
+
+    return _collapse_members_unkeyed(unkeyed)
+
+
+def _collapse_members_unkeyed(members: list) -> list:
+    """Original path: one vote per direction inside a cluster with no event_key."""
     # Split by direction so opposing readings never share a cluster.
     by_dir: dict = {}
     for s in members:
@@ -208,7 +299,6 @@ def _collapse_members(members: list) -> list[WeightedSignal]:
         if len(direction_members) == 1:
             collapsed.append(direction_members[0])
             continue
-
         # Representative = highest ACTUAL weight, recomputed here with the
         # same formula _signal_weight uses downstream. This is the weight
         # that will decide the contribution, so it is the right thing to
@@ -309,12 +399,19 @@ def cluster_signals(signals: list, window_hours: float = 0.5) -> list:
         # counted 2-3 times, each copy adding its own weight to the bull
         # total. Mirrors equity_card._collapse_cross_asset, which already
         # collapses by event_key first.
-        keyed: dict[tuple[str, Direction], list[WeightedSignal]] = {}
+        #
+        # STEP 9.3: the group key is the event ALONE, not (event, direction).
+        # Grouping by direction as well meant _collapse_members never saw the
+        # disagreement it exists to resolve, so two opposite readings of one
+        # event survived as two balanced votes and manufactured a conviction
+        # out of an event whose direction was never established. _collapse_members
+        # now owns the direction decision and flags the contradiction.
+        keyed: dict[str, list[WeightedSignal]] = {}
         unkeyed: list[WeightedSignal] = []
         for s in asset_signals:
             event_id = _event_identity(s)
             if event_id:
-                keyed.setdefault((event_id, s.direction), []).append(s)
+                keyed.setdefault(event_id, []).append(s)
             else:
                 unkeyed.append(s)
         for members in keyed.values():

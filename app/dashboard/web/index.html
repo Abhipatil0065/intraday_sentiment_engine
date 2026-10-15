@@ -271,6 +271,12 @@
      not like a rendering error or an empty state. */
   .verdict.NO_BIAS{color:var(--dim);border-color:var(--dim);border-style:dashed}
   .mfoot .risk{color:var(--bear);font-weight:700;letter-spacing:.5px}
+  /* STEP 8: the CONFLICTING SIGNALS chip sits in the verdict row beside the
+     confidence badge. It uses the amber/warning colour rather than the bear
+     red, because it describes the EVIDENCE being split - not a bearish call. */
+  .mrow .risk.conflict{color:#e0a33e;border:1px solid currentColor;border-radius:4px;
+    padding:1px 6px;font-size:10px;font-weight:700;letter-spacing:.6px;
+    text-transform:uppercase;white-space:nowrap}
   /* Score bar is a CENTRED diverging bar, not a 100% stacked pair: the fill
      starts at the midpoint and grows left or right from there. */
   .bar{position:relative;display:block;height:15px;border-radius:8px;
@@ -711,26 +717,45 @@ function mnote(cls,title,items,limit){
       +(extra?('<li>+' +extra+' more</li>'):'')+'</ul>';
   return '<div class="note '+cls+'"><h4>'+title+'</h4>'+body+'</div>';
 }
-/* Top strip: one compact MARKET PREP card per asset, gold / silver / bitcoin. */
-function prepCard(a){
-  var b=a.market_prep||{};
+/* Top strip: one compact CURRENT card per asset, gold / silver / bitcoin.
+
+   Reads the CURRENT scope - the same verdict /api/console advertises as
+   "current intraday sentiment". Step 2: this used to read `market_prep`, which
+   is scored from the IDENTICAL signal set as CURRENT (market_prep.build folds
+   prep + non-prep signals back together), so the strip and the console were
+   labelling the same numbers with different names, and MARKET_PREP lagged by
+   one pass through the shared bias history. MARKET_PREP is still published on
+   every asset for consumers that want the forward-looking view; it is simply
+   no longer what these cards show.
+
+   The payload block is passed straight through, so `b.asset` is the symbol and
+   the flip-tracking key for msplit. */
+function scopeCard(b, label){
+  b=b||{};
   var d=disp(b);
   var risk=b.event_risk?'<span class="risk">EVENT RISK</span>':'';
   var isWeak=(b.confidence_label==='LOW' || b.stale);
-  return '<div class="mcard '+String(a.label||'').toLowerCase()
-    +'" data-goto="asset-'+esc(a.symbol)+'" title="Jump to the '
-    +esc(String(a.label||'').toUpperCase())+' economic calendar">'
+  /* STEP 8: both sides heavily weighted. The engine widens the flip margin and
+     caps confidence to LOW here, and the score is damped, so the split reads as
+     a lean rather than a verdict. Say so on the card - a reader who sees
+     "BEARISH 54%" next to CONFLICTING SIGNALS knows not to size up on it. */
+  var conflictChip=b.contradiction_detected
+    ?'<span class="risk conflict">CONFLICTING SIGNALS</span>':'';
+  return '<div class="mcard '+String(label||'').toLowerCase()
+    +'" data-goto="asset-'+esc(b.asset||'')+'" title="Jump to the '
+    +esc(String(label||'').toUpperCase())+' economic calendar">'
     +'<div class="mtop"><span class="mname">'
-    +esc(String(a.label||'').toUpperCase())+'</span>'
-    +'<span class="msym">'+esc(a.symbol)+'</span></div>'
+    +esc(String(label||'').toUpperCase())+'</span>'
+    +'<span class="msym">'+esc(b.asset||'')+'</span></div>'
     +'<div class="mrow"><span class="mlabel">SESSIONS</span>'
     +'<span class="msess">'+sessionChain()+'</span></div>'
-    +'<div class="mrow"><span class="mlabel">MARKET PREP</span>'
+    +'<div class="mrow"><span class="mlabel">CURRENT</span>'
     +'<span class="verdict '+verdictClass(d.label)+(isWeak?' weak':'')+'">'+d.label+' '+d.pct+'%</span>'
     +'<span class="conf-badge '+String(b.confidence_label||'LOW').toLowerCase()+'">'
     +(b.stale?'STALE \u00b7 ':'')+(b.confidence_label||'LOW')+'</span>'
+    +conflictChip
     +'</div>'
-    +'<div class="msub">expected / forward-looking setup</div>'
+    +'<div class="msub">news-weighted intraday sentiment \u00b7 n=<b>'+(+b.signal_count||0)+'</b></div>'
     +mbar(b)
      /* Second arg keys the flip tracking to this asset, so every card keeps its
         own independent flip time.
@@ -741,7 +766,7 @@ function prepCard(a){
         gone. Only the verdict chip above carries the weak state
         (.verdict.weak) - the green/red boxes keep the same colour at every
         confidence level, including a stale one. */
-     +msplit(b,a.symbol)
+     +msplit(b,b.asset)
     +'<div class="mdrv">'
     +mnote('bull','BULLISH DRIVERS',b.bull_drivers,3)
     +mnote('bear','BEARISH DRIVERS',b.bear_drivers,3)+'</div>'
@@ -758,7 +783,7 @@ function prepCard(a){
 }
 
 /* ONE session-aware global equity card in the 4th strip slot.
-   It renders the server's `equity` block, NOT the EQUITY asset's MARKET PREP
+   It renders the server's `equity` block, NOT the EQUITY asset's CURRENT
    block: the payload is re-scored for whichever session is open right now
    (ASIA 20:00-03:00, EUROPE 03:00-08:00, US 08:00-17:00 NY, newest session
    wins the overlaps), so the title/symbol/bias change the moment the next
@@ -812,13 +837,15 @@ function renderPrepStrip(assets){
   var box=document.getElementById('prepStrip');
   if(!assets||!assets.length){ box.innerHTML=''; return; }
   /* EQUITY is rendered as the 4th session-aware card below rather than as a
-     prep card: its prep block aggregates every region's news at once, which is
-     exactly the failure mode the session card replaces. */
+     CURRENT card: the CURRENT block aggregates every region's news at once,
+     which is exactly the failure mode the session card replaces. */
   var strip=(assets||[]).filter(function(a){return a.asset!=='EQUITY';});
   box.innerHTML='<div class="strip-head">'
-    +'<span class="st">MARKET PREP &mdash; EXPECTED / FORWARD-LOOKING SETUP</span>'
+    +'<span class="st">CURRENT INTRADAY SENTIMENT &mdash; NEWS-WEIGHTED</span>'
     +'<span class="ss">SESSIONS '+sessionChain()+'</span></div>'
-    +'<div class="strip-cards">'+strip.map(prepCard).join('')+equityCard()+'</div>'
+    +'<div class="strip-cards">'+strip.map(function(a){
+        return scopeCard(a.current, a.label);
+      }).join('')+equityCard()+'</div>'
     +'<div class="hr"></div>';
 }
 /* ---- Economic calendar ------------------------------------------------

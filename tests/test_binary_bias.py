@@ -133,21 +133,22 @@ def test_equity_tie_break_payload_score_matches_label():
             relevance=weight, persistence=0.7,
             category=category, cluster_id=cluster)
 
-    # Bearish signal uses EQUITIES category (equity_relevance=1.0), VERY_HIGH strength, 5 min old.
-    # Three bullish signals use RISK_SENTIMENT category (equity_relevance=0.60, TIER_2 for HIGH importance),
-    # MEDIUM strength, 3 min old (triggering 1.20x burst bonus). Their aggregate slightly exceeds
-    # the bearish signal, keeping raw score inside the tie-break band (~+7); but the bearish signal's
-    # single magnitude is highest (VERY_HIGH + 1.0 relevance vs MEDIUM + 0.60 relevance),
-    # so the tie-break correctly picks BEARISH.
+    # Bearish signal uses EQUITIES category (equity_relevance=1.0), VERY_HIGH
+    # strength, 5 min old. The four bullish signals use RISK_SENTIMENT
+    # category, HIGH strength, 3 min old. Their aggregate leans bullish, but
+    # the bearish signal's single magnitude remains highest, so the tie-break
+    # still names BEARISH while the payload score follows the label.
     sigs = [
         eq(Direction.BEARISH, ImpactStrength.VERY_HIGH, 1.0, 5, "bear",
            "Nasdaq slides as yields jump", NewsCategory.EQUITIES),
-        eq(Direction.BULLISH, ImpactStrength.MEDIUM, 1.0, 3, "b1",
-           "Nasdaq climbs on earnings", NewsCategory.RISK_SENTIMENT),
-        eq(Direction.BULLISH, ImpactStrength.MEDIUM, 1.0, 3, "b2",
+        eq(Direction.BULLISH, ImpactStrength.HIGH, 1.0, 3, "b1",
+           "Stocks rally on strong data", NewsCategory.RISK_SENTIMENT),
+        eq(Direction.BULLISH, ImpactStrength.HIGH, 1.0, 3, "b2",
+           "Equities surge on strong data", NewsCategory.RISK_SENTIMENT),
+        eq(Direction.BULLISH, ImpactStrength.HIGH, 1.0, 3, "b3",
+           "Nasdaq rises on strong data", NewsCategory.RISK_SENTIMENT),
+        eq(Direction.BULLISH, ImpactStrength.HIGH, 1.0, 3, "b4",
            "S&P 500 rises on strong data", NewsCategory.RISK_SENTIMENT),
-        eq(Direction.BULLISH, ImpactStrength.MEDIUM, 1.0, 3, "b3",
-           "Dow jumps on strong data", NewsCategory.RISK_SENTIMENT),
     ]
     clear_bias_history()
     card = build_equity_card(sigs, now=NOW, session=SessionName.US)
