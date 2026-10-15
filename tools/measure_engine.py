@@ -17,23 +17,17 @@ SECTIONS
 
 DATA PROVENANCE (read this before trusting any number)
 ------------------------------------------------------
-``bull`` and ``bear`` are NOT stored. SentimentSnapshot keeps only the derived
-``score``/``raw_score``/``confidence``. Two consequences:
+``bull`` and ``bear`` are stored on SentimentSnapshot, populated from the
+engine's aggregation totals in ``pipeline._recompute_sentiment``. Historical
+ticks written before that migration still have NULL there; they are reported
+as missing rows, not as zero evidence.
 
-  * Historical ticks: bull/bear cannot be recovered without re-running the tick,
-    and re-running is impossible (the articles are still there but the exact
-    inputs - release text, corroboration state, clock - are not). Section C and
-    Section D therefore report ``r`` as UNRECOVERABLE for history and measure it
-    from a live recompute instead.
+  * Recent ticks: r = min(bull,bear)/max(bull,bear) is directly recoverable
+    from the two persisted totals.
 
-  * The live process currently running was started BEFORE Steps 1-8, so it has
-    written ``raw_score = NULL`` for every row it produced. The 1,620 rows that
-    do carry a raw_score date from 2026-10-10, before any of this work.
-
-The smallest change that would make Sections C and D measurable from history is
-two Float columns on SentimentSnapshot - ``bull_weight`` and ``bear_weight`` -
-populated from ``agg["bull"]``/``agg["bear"]`` in
-``pipeline._recompute_sentiment``. That is a pure addition: no score changes.
+  * Legacy ticks: rows without bull/bear are counted as NOT CAPTURED, while
+    rows with both totals are still used whenever they exist. Section C no
+    longer reports r as UNRECOVERABLE.
 """
 from __future__ import annotations
 
@@ -75,7 +69,8 @@ def fetch_ticks(db: str, limit: int) -> list[dict]:
         q = """
             SELECT id, computed_at, asset, scope, score, raw_score, confidence,
                    confidence_label, mode, stale, contradiction_detected,
-                   burst_bull, burst_bear, signal_count, bias, event_risk
+                   burst_bull, burst_bear, signal_count, bias, event_risk,
+                   bull, bear
             FROM sentiment_snapshot
             WHERE scope = 'CURRENT'
             ORDER BY id DESC
@@ -100,7 +95,7 @@ def fetch_all_current(db: str) -> list[dict]:
         q = """
             SELECT id, computed_at, asset, score, raw_score, confidence,
                    confidence_label, mode, stale, contradiction_detected,
-                   signal_count, bias
+                   signal_count, bias, bull, bear
             FROM sentiment_snapshot
             WHERE scope = 'CURRENT'
             ORDER BY id
@@ -147,11 +142,12 @@ def section_a(ticks: list[dict]) -> None:
             r = tick.get(asset)
             if not r:
                 continue
-            if r.get("raw_score") is None:
+            if r.get("bull") is None or r.get("bear") is None:
                 n_bull_missing += 1
             row = [
                 r["computed_at"][:19], asset,
-                "NA", "NA",          # bull / bear: not stored
+                ("%.6f" % r["bull"]) if r.get("bull") is not None else "NA",
+                ("%.6f" % r["bear"]) if r.get("bear") is not None else "NA",
                 ("%.1f" % r["score"]) if r["score"] is not None else "NA",
                 ("%.1f" % r["raw_score"]) if r.get("raw_score") is not None else "NA",
                 ("%.3f" % r["confidence"]) if r["confidence"] is not None else "NA",
@@ -165,7 +161,8 @@ def section_a(ticks: list[dict]) -> None:
             ]
             print(",".join(row))
     print()
-    print("bull/bear reported NA on %d of %d rows: NOT STORED anywhere."
+    print("bull/bear missing on %d of %d rows: NULL legacy ticks are NOT "
+          "CAPTURED, while rows with values are stored for r."
           % (n_bull_missing, len(ticks) * len(ASSETS)))
 
 
@@ -227,10 +224,35 @@ def section_c(db: str, live: bool) -> None:
 
     print()
     print("r = min(bull,bear)/max(bull,bear) for historical ticks:")
-    print("    UNRECOVERABLE. bull and bear are not stored, and a stored")
-    print("    raw_score is a NET figure that cannot be decomposed back into")
-    print("    the two totals - infinitely many (bull,bear) pairs give the same")
-    print("    raw_score. Section D measures r from a live recompute instead.")
+    stored = []
+    missing = 0
+    no_evidence = 0
+    for r in rows:
+        b, be = r.get("bull"), r.get("bear")
+        if b is None or be is None:
+            missing += 1
+            continue
+        hi = max(b, be)
+        if hi <= 0:
+            no_evidence += 1
+            continue
+        stored.append(min(b, be) / hi)
+
+    print("    stored rows      : %d of %d CURRENT rows" % (len(stored), len(rows)))
+    print("    missing rows     : %d  (NULL legacy ticks: NOT CAPTURED)" % missing)
+    print("    zero-evidence    : %d  (both totals stored as 0.0)" % no_evidence)
+    if stored:
+        print("    r min            : %.3f" % min(stored))
+        print("    r p25            : %.3f" % _pct(stored, 25))
+        print("    r p50            : %.3f" % statistics.median(stored))
+        print("    r p75            : %.3f" % _pct(stored, 75))
+        print("    r max            : %.3f" % max(stored))
+        above = sum(1 for x in stored if x > 0.6)
+        print("    r>0.6            : %d of %d (%.1f%%)  <- the 0.6 dampener split"
+              % (above, len(stored), 100.0 * above / len(stored)))
+        print("    dampener>0.6     : %s ticks" % ("enabled" if above else "not"))
+    else:
+        print("    no historical tick has both bull and bear captured")
 
     if live:
         _live_r()
@@ -385,16 +407,12 @@ def main(argv=None) -> int:
 
     print()
     print("=" * 78)
-    print("DATA LIMITATION - the smallest change that fixes Sections C and D")
+    print("DATA COVERAGE - bull/bear capture")
     print("=" * 78)
-    print("Add two Float columns to SentimentSnapshot and populate them in")
-    print("pipeline._recompute_sentiment from agg['bull'] / agg['bear']:")
-    print()
-    print("    bull_weight: Mapped[float | None] = mapped_column(Float, nullable=True)")
-    print("    bear_weight: Mapped[float | None] = mapped_column(Float, nullable=True)")
-    print()
-    print("Pure addition: no score changes, and r becomes recoverable for every")
-    print("future tick. Until then Sections C and D are history-blind.")
+    print("bull and bear are stored on SentimentSnapshot and populated from")
+    print("pipeline._recompute_sentiment. Rows written before that migration")
+    print("remain NULL and are reported as NOT CAPTURED, while future ticks are")
+    print("directly usable for r = min(bull,bear)/max(bull,bear).")
     return 0
 
 

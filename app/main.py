@@ -307,6 +307,8 @@ def _block(session, asset: str, scope: str) -> dict:
             "burst_bull": 0, "burst_bear": 0,
             # Item 1: no baseline yet during warm-up.
             "raw_score": None, "baseline_score": None,
+            # TASK 2: no snapshot means no captured totals, not zero evidence.
+            "bull": None, "bear": None,
             "price_note": "Price-action confirmation unavailable.",
             "last_updated": "",
         }

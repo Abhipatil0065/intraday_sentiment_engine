@@ -1330,12 +1330,10 @@ def _recompute_sentiment(session, stats: IngestStats):
             ("MARKET_PREP", prep.sentiment),
             ("MARKET_WRAP", wrap.sentiment),
         ):
-            # Step 6 (Option A): the EQUITY proxy is dashboard-only. It is
-            # scored from the equity card and never receives a CURRENT
-            # SentimentSnapshot row, while MARKET_PREP / MARKET_WRAP remain for
-            # history.
-            if scope == "CURRENT" and asset is Asset.EQUITY:
-                continue
+            # TASK 2: collect bull/bear on every snapshot row for every asset,
+            # including EQUITY and all three scopes, so historical r is
+            # reconstructable. EQUITY still has its own top-level card in
+            # build_payload, but its snapshots are no longer suppressed.
             session.add(
                 SentimentSnapshot(
                     asset=asset.value,

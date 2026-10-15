@@ -406,9 +406,9 @@ def test_pipeline_raw_score_matches_the_engine_verdict(tmp_path):
             for r in session.query(models.SentimentSnapshot)
             .filter_by(scope="CURRENT").all()
         }
-        # Step 6 (Option A): EQUITY is no longer in the CURRENT scope.
-        # Only XAUUSD, XAGUSD, BTCUSD have CURRENT rows.
-        assert len(stored) == 3, "one CURRENT row per asset (no EQUITY)"
+        # Task 2 requires bull/bear capture on every snapshot row, so EQUITY
+        # is back in the CURRENT scope alongside the other three assets.
+        assert len(stored) == 4, "one CURRENT row per asset (including EQUITY)"
 
         # Recompute the same verdict from the same inputs and compare.
         for asset, row in stored.items():

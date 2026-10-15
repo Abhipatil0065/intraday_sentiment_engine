@@ -37,7 +37,7 @@ def _session_for(tmp_path):
 
 
 def _article(session, models, guid, title, direction, strength,
-             minutes_ago=25):
+             minutes_ago=25, asset="XAUUSD"):
     from app.models.enums import Direction, ImpactStrength
 
     art = models.NewsArticle(
@@ -52,7 +52,7 @@ def _article(session, models, guid, title, direction, strength,
     session.add(art)
     session.flush()
     session.add(models.AssetImpact(
-        article_id=art.id, asset="XAUUSD",
+        article_id=art.id, asset=asset,
         direction=Direction[direction].value,
         strength=ImpactStrength[strength].value,
         relevance=0.85, persistence=0.75))
@@ -122,22 +122,44 @@ def test_bull_bear_populated_on_every_row(tmp_path):
             assert isinstance(r.bear, float)
 
 
-def test_bull_bear_not_both_zero_when_signals_reached(tmp_path):
-    """signal_count > 0 must mean at least one side has weight."""
+def test_bull_bear_populated_for_every_asset_and_scope(tmp_path):
+    """TASK 2: one signal per asset, every scope, values not NULL."""
     Session, models = _session_for(tmp_path)
     with Session() as session:
-        _article(session, models, "bb-2",
-                 "Fed officials signal interest rates will stay lower",
-                 "BULLISH", "VERY_HIGH")
+        for i, asset in enumerate(("XAUUSD", "XAGUSD", "BTCUSD", "EQUITY")):
+            _article(session, models, f"bb-all-{asset}",
+                     "Fed officials signal rates will stay lower for longer",
+                     "BULLISH", "VERY_HIGH", asset=asset)
         _run(session)
 
-        rows = session.query(models.SentimentSnapshot).filter(
-            models.SentimentSnapshot.signal_count > 0).all()
-        assert rows, "the fixture must reach the score"
+        rows = session.query(models.SentimentSnapshot).all()
+        assert rows, "no snapshots written"
+        assets_written = {r.asset for r in rows}
+        scopes_written = {r.scope for r in rows}
+        assert {"XAUUSD", "XAGUSD", "BTCUSD", "EQUITY"} <= assets_written, (
+            f"expected all assets written, got {sorted(assets_written)}")
+        assert {"CURRENT", "MARKET_PREP", "MARKET_WRAP"} <= scopes_written, (
+            f"expected all scopes written, got {sorted(scopes_written)}")
+
+        current = []
         for r in rows:
-            assert not (r.bull == 0.0 and r.bear == 0.0), (
-                f"{r.asset}/{r.scope}: {r.signal_count} signals but both "
-                f"totals are zero")
+            assert r.bull is not None, f"{r.asset}/{r.scope}: bull is NULL"
+            assert r.bear is not None, f"{r.asset}/{r.scope}: bear is NULL"
+            assert isinstance(r.bull, float)
+            assert isinstance(r.bear, float)
+            if r.signal_count > 0:
+                assert not (r.bull == 0.0 and r.bear == 0.0), (
+                    f"{r.asset}/{r.scope}: {r.signal_count} signals but both "
+                    f"totals are zero")
+            if r.scope == "CURRENT":
+                current.append(r)
+
+        assert current, "no CURRENT rows written"
+        for r in current:
+            replay = _replay(r.raw_score, r.bull, r.bear)
+            assert abs(replay - r.raw_score) < 0.05, (
+                f"{r.asset}: replaying persisted bull/bear gives {replay}, "
+                f"but raw_score is {r.raw_score}; bull={r.bull}, bear={r.bear}")
 
 
 # ---------------------------------------------------------------------------
