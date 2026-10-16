@@ -122,10 +122,15 @@ def test_evidence_split_and_cluster_conflict_both_true(monkeypatch):
     _force_aggregate_totals(monkeypatch, 3.0, 2.5)
     monkeypatch.setattr(se, "_signal_weight", lambda s, now: 0.8)
     result = compute(
-        [_signal(
-            "Fed signals patience",
-            Direction.BULLISH,
-            cluster_conflict=True,
+        [replace(
+            _signal(
+                "Fed signals patience",
+                Direction.BULLISH,
+                cluster_conflict=True,
+            ),
+            # One fully-conflicted signal: its magnitude is the conflicted
+            # share (0.8 x HIGH strength mult = 0.576 >= 0.5 floor).
+            conflict_weight=0.8 * se.STRENGTH_MULT[ImpactStrength.HIGH],
         )],
         Asset.GOLD,
         now=NOW,
@@ -146,10 +151,12 @@ def test_cluster_conflict_with_balanced_totals(monkeypatch):
         replace(
             _signal("Fed signals patience", Direction.BULLISH),
             cluster_conflict=True,
+            conflict_weight=0.4 * se.STRENGTH_MULT[ImpactStrength.HIGH],
         ),
         replace(
             _signal("Fed signals patience", Direction.BEARISH, mins_ago=2),
             cluster_conflict=True,
+            conflict_weight=0.4 * se.STRENGTH_MULT[ImpactStrength.HIGH],
         ),
     ]
     # Keep score-magnitude total above the absolute floor while preserving the
@@ -167,9 +174,13 @@ def test_cluster_conflict_does_not_fire_on_low_share(monkeypatch):
     """One conflicted signal out of 100 is a long-tail sliver, not a flag."""
     import app.analysis.sentiment_engine as se
 
+    high_mult = se.STRENGTH_MULT[ImpactStrength.HIGH]
     signals = [
-        _signal(f"Neutral note {i}", Direction.BULLISH,
-                cluster_conflict=(i == 0))
+        replace(
+            _signal(f"Neutral note {i}", Direction.BULLISH),
+            cluster_conflict=(i == 0),
+            conflict_weight=(high_mult if i == 0 else 0.0),
+        )
         for i in range(100)
     ]
     monkeypatch.setattr(se, "_signal_weight", lambda s, now: 1.0)
@@ -183,9 +194,13 @@ def test_cluster_conflict_fires_on_meaningful_share(monkeypatch):
     """Two conflicted signals out of 20 is a 10% share, so the gate fires."""
     import app.analysis.sentiment_engine as se
 
+    high_mult = se.STRENGTH_MULT[ImpactStrength.HIGH]
     signals = [
-        _signal(f"Neutral note {i}", Direction.BULLISH,
-                cluster_conflict=(i < 2))
+        replace(
+            _signal(f"Neutral note {i}", Direction.BULLISH),
+            cluster_conflict=(i < 2),
+            conflict_weight=(high_mult if i < 2 else 0.0),
+        )
         for i in range(20)
     ]
     monkeypatch.setattr(se, "_signal_weight", lambda s, now: 1.0)
@@ -226,8 +241,11 @@ def test_cluster_conflict_fires_at_threshold_boundary(monkeypatch):
     signal_weight = 0.5 / (20 * strength_mult)
 
     signals = [
-        _signal(f"Boundary note {i}", Direction.BULLISH,
-                cluster_conflict=(i == 0))
+        replace(
+            _signal(f"Boundary note {i}", Direction.BULLISH),
+            cluster_conflict=(i == 0),
+            conflict_weight=(signal_weight * strength_mult if i == 0 else 0.0),
+        )
         for i in range(20)
     ]
     monkeypatch.setattr(se, "_signal_weight", lambda s, now: signal_weight)

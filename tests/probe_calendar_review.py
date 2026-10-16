@@ -1,10 +1,9 @@
 """
 STEP 1 REVIEW, before enabling the flag.
 
-  a) the merge disagreements, both providers' values side by side;
-  b) the skipped-row count broken down BY REASON, with samples.
+  a) the skipped-row count broken down BY REASON, with samples.
 
-Runs the REAL providers and the REAL merge. Read-only.
+Runs the REAL FinancialJuice provider and the REAL merge. Read-only.
 
 Run:  python -m tests.probe_calendar_review
 """
@@ -22,43 +21,32 @@ from app.analysis.calendar_merge import (
 from app.config import settings
 from app.ingestion import fj_calendar as fjmod
 from app.ingestion.calendar_merge_stats import collect_disagreements
-from app.ingestion.economic_calendar import _fetch_faireconomy, _fetch_fj
+from app.ingestion.economic_calendar import _fetch_fj
 
 
 async def main() -> None:
     settings.financialjuice_calendar_enabled = True
     print("=" * 78)
-    print("STEP 1 REVIEW")
+    print("STEP 1 REVIEW (FinancialJuice only)")
     print("=" * 78)
 
     fj_events, fj_err = await _fetch_fj()
-    fe_events, fe_err = await _fetch_faireconomy()
     print("financialjuice : %d events %s" % (len(fj_events), fj_err or ""))
-    print("faireconomy    : %d events %s"
-          % (len(fe_events), (fe_err[:1] if fe_err else "")))
     print()
 
-    # ---------- (a) disagreements ----------
+    # ---------- (a) self-disagreements within FJ ----------
     print("-" * 78)
-    print("(a) MERGE DISAGREEMENTS - both providers, side by side")
+    print("(a) MERGE DISAGREEMENTS (FJ vs itself - should be none)")
     print("-" * 78)
-    pairs = collect_disagreements(
-        [("financialjuice", fj_events), ("faireconomy", fe_events)])
+    pairs = collect_disagreements([("financialjuice", fj_events)])
     if not pairs:
-        print("  (none - either faireconomy was unavailable, or every")
-        print("   overlapping pair agreed on every field)")
+        print("  (none - no overlapping pair disagreed on any field)")
     for i, p in enumerate(pairs, 1):
         print()
         print("  %d. %s  [%s]" % (i, p["title"][:60], p["country"]))
         print("     similarity : %.3f  (threshold %.2f)"
               % (p["similarity"], settings.calendar_merge_similarity))
         print("     time delta : %s" % p["time_delta"])
-        print("     %-9s %-12s %-12s" % ("field", "financialjuice", "faireconomy"))
-        for field in ("forecast", "previous", "actual"):
-            a, b = p["fj"][field], p["fe"][field]
-            flag = "  <-- DISAGREE" if (a is not None and b is not None
-                                        and a != b) else ""
-            print("     %-9s %-12s %-12s%s" % (field, a, b, flag))
         print("     verdict    : %s" % p["verdict"])
     print()
 

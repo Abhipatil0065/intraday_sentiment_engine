@@ -2,7 +2,7 @@
 FINANCIALJUICE ECONOMIC CALENDAR PROVIDER (phase 1).
 
 A SECOND, INDEPENDENT source of scheduled macro releases, alongside
-faireconomy. It exists because faireconomy only publishes the current week -
+external calendar. It exists because external calendar only publishes the current week -
 ``ff_calendar_nextweek.json`` is a genuine 404 - so a longer forward horizon
 was never available. FinancialJuice renders several days at once.
 
@@ -215,8 +215,8 @@ def resolve_when(clock: str, day: date | None,
 
     The page renders times in the BROWSER's timezone, so the wall clock must be
     interpreted in ``render_tz`` before conversion. That offset is NOT guessed:
-    it was verified against faireeconomy's copy of the same event (Italian
-    Services PMI rendered 13:15 while faireconomy published 07:45 UTC, i.e.
+    it was verified against external calendar's copy of the same event (Italian
+    Services PMI rendered 13:15 while external calendar published 07:45 UTC, i.e.
     UTC+05:30) and is configuration.
     """
     match = re.match(r"^(\d{1,2}):(\d{2})$", (clock or "").strip())
@@ -497,7 +497,7 @@ def note_challenge(reason: str = "challenge") -> None:
     failure and once on recovery - not on every poll.
 
     The challenge is never attempted to be solved, and we never retry inside
-    the backoff window; faireconomy remains the provider.
+    the backoff window; external calendar remains the provider.
     """
     global _backoff_until, _failure_logged
     minutes = int(settings.fj_calendar_backoff_minutes)
@@ -506,7 +506,7 @@ def note_challenge(reason: str = "challenge") -> None:
         log.warning(
             "FinancialJuice calendar: %s - marking this poll FAILED and "
             "backing off %d min. Not retrying, not solving. "
-            "faireeconomy's schedule is unaffected.", reason, minutes)
+            "external calendar's schedule is unaffected.", reason, minutes)
         _failure_logged = True
 
 
@@ -630,7 +630,7 @@ async def fetch_fj_calendar() -> ProviderResult:
     Poll the FinancialJuice calendar ONCE. Never raises.
 
     Returns a ``ProviderResult`` the caller can merge or ignore. A failure
-    here must never affect faireconomy or the news pipeline, so every failure
+    here must never affect external calendar or the news pipeline, so every failure
     mode - disabled, backed off, challenge, hydration timeout, network error -
     returns ``ok=False`` with an explanation rather than propagating.
     """

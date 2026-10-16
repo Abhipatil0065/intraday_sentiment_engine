@@ -34,7 +34,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from app.analysis.sentiment_engine import WeightedSignal
+from app.analysis.sentiment_engine import STRENGTH_MULT, WeightedSignal
 from app.config import settings
 from app.logging_conf import get_logger
 from app.models.enums import Direction
@@ -185,12 +185,17 @@ def _collapse_keyed_events(keyed: dict) -> list:
 
     The dominant direction wins by summed cluster weight, so a reading backed
     by three independent outlets beats one lone take. When the directions
-    actually disagreed, the survivor is flagged ``contradiction_detected`` so
-    the engine reports the verdict as low confidence rather than a conviction.
+    actually disagreed, the survivor is flagged ``cluster_conflict`` and
+    carries ``conflict_weight``: the summed magnitude of the losing side(s)
+    - the evidence that genuinely conflicted with the dominant reading.
+    compute() uses that (not the survivor's full weight) as the conflicted
+    share of the tick's evidence, so a lopsided collapse does not masquerade
+    as a torn market and permanently widen the flip margin.
     """
     from dataclasses import replace
 
     out: list[WeightedSignal] = []
+    _now = datetime.now(timezone.utc)
     for event_key, group in keyed.items():
         directions = {s.direction for s in group}
         if len(directions) == 1:
@@ -202,8 +207,7 @@ def _collapse_keyed_events(keyed: dict) -> list:
         def _w(s):
             try:
                 from app.analysis.sentiment_engine import _signal_weight
-                from datetime import datetime, timezone
-                return _signal_weight(s, datetime.now(timezone.utc))
+                return _signal_weight(s, _now)
             except Exception:  # noqa: BLE001 - never break a cluster over a weight
                 return float(getattr(s, "relevance", 0.0) or 0.0)
 
@@ -215,6 +219,12 @@ def _collapse_keyed_events(keyed: dict) -> list:
         winners = [s for s in group if s.direction is winner]
         losers = [s for s in group if s.direction is not winner]
 
+        # Conflict weight: magnitude of the losing side(s) only, on the same
+        # magnitude basis the score aggregates (_signal_weight x strength).
+        loser_weight = 0.0
+        for s in losers:
+            loser_weight += _w(s) * STRENGTH_MULT.get(s.strength, 0.45)
+
         # One vote for the dominant reading. Only the winners are passed, so
         # the corroboration path yields exactly ONE signal and its direction is
         # the winner by construction (rather than whichever dict happens to
@@ -225,13 +235,15 @@ def _collapse_keyed_events(keyed: dict) -> list:
         if keep is None:
             continue
 
-        flagged = replace(keep, cluster_conflict=True)
+        flagged = replace(keep, cluster_conflict=True,
+                          conflict_weight=loser_weight)
         log.debug(
             "cluster %s: readings disagreed (%s); kept %s and flagged "
-            "cluster_conflict",
+            "cluster_conflict with conflict_weight=%.4f",
             event_key,
             "/".join(sorted(d.value for d in directions)),
             winner.value,
+            loser_weight,
         )
         out.append(flagged)
     return out

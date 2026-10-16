@@ -1,6 +1,6 @@
 """
-LIVE cross-provider MERGE check: FinancialJuice (higher priority) vs
-faireconomy, both polled for real and merged by the real code path.
+LIVE FJ-only MERGE check: FinancialJuice polled for real and run through
+merge_events for dedup.
 
 Run:  python -m tests.probe_calendar_merge
 """
@@ -26,12 +26,12 @@ except ImportError:                     # pragma: no cover - Windows path
 from app.analysis.calendar_merge import MergeStats, merge_events
 from app.config import settings
 from app.ingestion.calendar_cache import save_cache
-from app.ingestion.economic_calendar import _fetch_faireconomy, _fetch_fj
+from app.ingestion.economic_calendar import _fetch_fj
 
 
 async def main() -> None:
     print("=" * 74)
-    print("LIVE CROSS-PROVIDER MERGE")
+    print("LIVE FINANCIALJUICE CALENDAR + MERGE")
     print("=" * 74)
     print("provider order    : %s" % settings.calendar_provider_list)
     print("merge similarity  : %s" % settings.calendar_merge_similarity)
@@ -42,16 +42,12 @@ async def main() -> None:
     settings.financialjuice_calendar_enabled = True
 
     fj_events, fj_errors = await _fetch_fj()
-    fe_events, fe_errors = await _fetch_faireconomy()
     print("financialjuice    : %d events %s"
           % (len(fj_events), fj_errors or ""))
-    print("faireconomy       : %d events %s"
-          % (len(fe_events), fe_errors[:2] if fe_errors else ""))
     print()
 
     stats = MergeStats()
-    merged = merge_events([("financialjuice", fj_events),
-                           ("faireconomy", fe_events)], stats)
+    merged = merge_events([("financialjuice", fj_events)], stats)
 
     print("-- merge stats --")
     for key, value in stats.as_dict().items():

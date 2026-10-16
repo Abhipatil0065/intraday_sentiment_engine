@@ -13,7 +13,6 @@ from app.analysis.economic_impact import (
     resolve_calendar_signals,
     signals_for_event,
 )
-from app.ingestion.economic_calendar import _parse_feed
 from app.config import settings
 from app.models.enums import Asset
 
@@ -174,98 +173,7 @@ def test_the_cap_never_reverses_a_direction():
 # --------------------------------------------------------------------------
 # --------------------------------------------------------------------------
 # Phase 8: conditional requests
-# --------------------------------------------------------------------------
-FEED = ('[{"title":"US CPI","country":"USD","date":"2026-10-08 12:30:00",'
-        '"impact":"High","forecast":"0.3","previous":"0.2"}]')
-URL = "http://provider/cal.json"
 
-
-class _Resp:
-    def __init__(self, code, body="", headers=None):
-        self.status_code = code
-        self.text = body
-        self.headers = headers or {}
-
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            raise RuntimeError("HTTP %d" % self.status_code)
-
-
-class _Client:
-    """Captures the headers passed to the CONSTRUCTOR, not just per-request."""
-
-    def __init__(self, resp, seen, **client_kwargs):
-        self._resp = resp
-        self._seen = seen
-        self._client_kwargs = client_kwargs
-        seen.append({"headers": dict(client_kwargs.get("headers") or {})})
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *a):
-        return False
-
-    async def get(self, url, **kw):
-        return self._resp
-
-
-def _run_fetch(resp, seen):
-    import app.ingestion.economic_calendar as ec
-
-    real = ec.httpx.AsyncClient
-
-    def factory(**client_kwargs):
-        # Forward the constructor kwargs so the test can inspect the headers
-        # the provider actually built.
-        return _Client(resp, seen, **client_kwargs)
-
-    ec.httpx.AsyncClient = factory
-    try:
-        return asyncio.run(ec._fetch_one(URL))
-    finally:
-        ec.httpx.AsyncClient = real
-
-
-def test_a_changed_feed_sends_its_etag_on_the_next_poll():
-    import app.ingestion.economic_calendar as ec
-
-    ec.reset_http_state()
-    seen = []
-    _run_fetch(_Resp(200, FEED, {"ETag": '"abc"'}), seen)
-    assert ec.get_etag(URL) == '"abc"'
-
-    _run_fetch(_Resp(200, FEED, {"ETag": '"abc"'}), seen)
-    assert seen[1].get("headers", {}).get("If-None-Match") == '"abc"'
-    ec.reset_http_state()
-
-
-# --------------------------------------------------------------------------
-# Regression: the importance floor must be numeric
-# --------------------------------------------------------------------------
-def test_high_impact_events_survive_the_importance_floor():
-    """
-    EconomicImportance is a str Enum, so comparing members with < compares the
-    VALUES alphabetically and "HIGH" < "MEDIUM" is True. The floor used to hold
-    enum members, so every high-impact faireconomy event was silently dropped
-    while the logs looked healthy.
-    """
-    feed = json.dumps([{
-        "title": "US CPI", "country": "USD",
-        "date": "2026-10-08 12:30:00", "impact": "High",
-        "forecast": "0.3", "previous": "0.2",
-    }])
-    events = _parse_feed(feed)
-    assert len(events) == 1, "a High-impact print must not be filtered out"
-
-
-def test_the_floor_still_drops_low_impact_events():
-    feed = json.dumps([{
-        "title": "US Trade Balance", "country": "USD",
-        "date": "2026-10-08 12:30:00", "impact": "Low",
-        "forecast": "-10.0", "previous": "-5.0",
-    }])
-    assert _parse_feed(feed) == []
 
 # --------------------------------------------------------------------------
 # Phase 6: the composite cap covers the real multi-print releases
@@ -473,49 +381,7 @@ def test_the_cap_is_the_configured_one_not_a_hardcoded_constant():
     assert sum(s.relevance for s in loose) > sum(s.relevance for s in tight)
 
 
-def test_a_304_reuses_the_previous_rows():
-    """An empty 304 body must never be read as 'no events today'."""
-    import app.ingestion.economic_calendar as ec
 
-    ec.reset_http_state()
-    seen = []
-    first = _run_fetch(_Resp(200, FEED, {"ETag": '"abc"'}), seen)
-    second = _run_fetch(_Resp(304, "", {}), seen)
-    assert len(first) == 1
-    assert len(second) == 1, "304 must return the remembered rows"
-    ec.reset_http_state()
-
-
-def test_a_dropped_etag_stops_the_conditional_request():
-    """
-    If the server stops sending a validator, a retained one would keep sending
-    a stale If-None-Match and suppress real changes indefinitely.
-    """
-    import app.ingestion.economic_calendar as ec
-
-    ec.reset_http_state()
-    seen = []
-    _run_fetch(_Resp(200, FEED, {"ETag": '"abc"'}), seen)
-    _run_fetch(_Resp(200, FEED, {}), seen)
-    assert ec.get_etag(URL) is None
-
-    seen.clear()
-    _run_fetch(_Resp(200, FEED, {}), seen)
-    assert "If-None-Match" not in seen[0].get("headers", {})
-    ec.reset_http_state()
-
-
-def test_conditional_requests_can_be_turned_off(monkeypatch):
-    from app.config import settings
-    import app.ingestion.economic_calendar as ec
-
-    ec.reset_http_state()
-    monkeypatch.setattr(settings, "calendar_conditional_requests", False)
-    seen = []
-    _run_fetch(_Resp(200, FEED, {"ETag": '"abc"'}), seen)
-    _run_fetch(_Resp(200, FEED, {"ETag": '"abc"'}), seen)
-    assert "If-None-Match" not in seen[1].get("headers", {})
-    ec.reset_http_state()
 def test_the_pipeline_applies_every_stage_in_order():
     """The CPI pair collapses, then the shared timestamp is capped."""
     events = [

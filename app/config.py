@@ -401,20 +401,13 @@ class Settings(BaseSettings):
 
     # ---------------- economic calendar ----------------
     economic_calendar_enabled: bool = True
-    economic_calendar_url: str = (
-        "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
-    )
-    economic_calendar_nextweek_url: str = ""
     # Only Medium/High/Holiday prints are kept; Low prints are noise.
     economic_calendar_min_importance: str = "MEDIUM"
     # How far ahead an event is allowed to influence PREP (hours).
     economic_calendar_horizon_hours: int = 48
 
-    # ---------------- calendar providers (phase 1/2) ----------------
-    # Order is PRIORITY: the first provider holding a value for a field wins
-    # and the others only fill gaps. Merging is by country + normalised title +
-    # time proximity, so priority decides which value is authoritative.
-    calendar_providers: str = "financialjuice,faireconomy"
+    # FinancialJuice is the sole calendar provider.
+    calendar_providers: str = "financialjuice"
 
     # FinancialJuice economic calendar. Ships OFF until live-verified.
     #
@@ -451,13 +444,7 @@ class Settings(BaseSettings):
     calendar_merge_similarity: float = 0.85
     calendar_merge_time_tolerance_minutes: int = 5
 
-    # Phase 1 follow-up: faireeconomy rate-limits (HTTP 429) under repeated
-    # polling. Back off rather than retrying into the limit - FinancialJuice
-    # and the cache cover the gap. A Retry-After header wins when present.
-    calendar_fe_429_backoff_minutes: int = 15
-    # Ceiling applied to a Retry-After header, so a hostile or absurd value
-    # cannot park the calendar for a day.
-    calendar_fe_429_max_retry_after_minutes: int = 60
+    # Phase 8 cache: serve the last good payload when the provider fails.
 # Shared Chromium render slot. Measured concurrent news + calendar renders
     # cost +12 processes and ~1.0 GB RSS at peak, so the two serialise. A
     # waiter that cannot get the slot within this many seconds skips its render
@@ -483,7 +470,7 @@ class Settings(BaseSettings):
     calendar_cache_max_age_days: int = 7
 
     # Phase 8: conditional requests where a provider supports them. FJ is a
-    # browser render and cannot send ETag; faireconomy can.
+    # browser render and cannot send ETag.
     calendar_conditional_requests: bool = True
     # Serve a stale cache when every provider fails. Never for older than
     # calendar_cache_max_age_days.

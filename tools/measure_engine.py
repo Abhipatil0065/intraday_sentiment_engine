@@ -354,8 +354,11 @@ def _live_cluster_conflict_metrics(db: str) -> None:
             total_weight = sum(
                 getattr(s, "magnitude", 0.0) or 0.0 for s in signals
             )
+            # Only the losing side's weight of each collapsed cluster counts
+            # as conflicted evidence (the survivor's own weight is dominant
+            # evidence, not a torn market).
             conflicted_weight = sum(
-                getattr(s, "magnitude", 0.0) or 0.0
+                getattr(s, "conflict_weight", 0.0) or 0.0
                 for s in signals
                 if getattr(s, "cluster_conflict", False)
             )

@@ -296,7 +296,7 @@ def test_mom_and_yoy_of_the_same_release_do_not_merge():
     mom = ev(title="Turkish CPI MoM", country="TRY", when=REF,
              actual=1.84, forecast=2.28)
     assert not same_release(yoy, mom)
-    out = merge_events([("financialjuice", [yoy]), ("faireconomy", [mom])])
+    out = merge_events([("financialjuice", [yoy]), ("external", [mom])])
     assert len(out) == 2
     assert out[0].forecast == pytest.approx(30.26)
     assert out[1].forecast == pytest.approx(2.28)
@@ -322,10 +322,10 @@ def test_same_cpi_from_both_providers_becomes_one_event():
     fj_row = ev(title="US CPI m/m", when=REF, forecast=0.2, previous=0.3,
                 actual=None, provider="financialjuice")
     fe_row = ev(title="US CPI m/m", when=REF + timedelta(minutes=2),
-                forecast=0.2, previous=0.3, actual=0.4, provider="faireconomy")
+                forecast=0.2, previous=0.3, actual=0.4, provider="external")
     stats = MergeStats()
     out = merge_events([("financialjuice", [fj_row]),
-                        ("faireconomy", [fe_row])], stats)
+                        ("external", [fe_row])], stats)
     assert len(out) == 1
     assert stats.merged == 1
     assert out[0].actual == pytest.approx(0.4)
@@ -335,8 +335,8 @@ def test_higher_priority_wins_and_fills_gaps():
     high = ev(title="US CPI m/m", forecast=0.2, previous=0.3, actual=None,
               provider="financialjuice")
     low = ev(title="US CPI m/m", forecast=9.9, previous=9.9, actual=0.4,
-             provider="faireconomy")
-    out = merge_events([("financialjuice", [high]), ("faireconomy", [low])])
+             provider="external")
+    out = merge_events([("financialjuice", [high]), ("external", [low])])
     assert len(out) == 1
     assert out[0].forecast == pytest.approx(0.2)   # priority stands
     assert out[0].actual == pytest.approx(0.4)     # gap filled
@@ -344,9 +344,9 @@ def test_higher_priority_wins_and_fills_gaps():
 
 def test_actual_disagreement_prefers_priority_and_is_counted_once():
     high = ev(title="US CPI m/m", actual=0.4, provider="financialjuice")
-    low = ev(title="US CPI m/m", actual=0.5, provider="faireconomy")
+    low = ev(title="US CPI m/m", actual=0.5, provider="external")
     stats = MergeStats()
-    out = merge_events([("financialjuice", [high]), ("faireconomy", [low])],
+    out = merge_events([("financialjuice", [high]), ("external", [low])],
                        stats)
     assert len(out) == 1
     assert out[0].actual == pytest.approx(0.4)
@@ -355,7 +355,7 @@ def test_actual_disagreement_prefers_priority_and_is_counted_once():
 
 def test_disjoint_events_are_all_kept():
     out = merge_events([("financialjuice", [ev(title="US CPI m/m")]),
-                        ("faireconomy", [ev(title="Japan GDP q/q")])])
+                        ("external", [ev(title="Japan GDP q/q")])])
     assert len(out) == 2
 
 
@@ -368,7 +368,7 @@ def test_merge_preserves_event_key_format():
 
 def test_merge_does_not_mutate_inputs():
     row = ev(title="US CPI m/m", actual=None)
-    merge_events([("financialjuice", [row]), ("faireconomy", [row])])
+    merge_events([("financialjuice", [row]), ("external", [row])])
     assert row.actual is None
 
 
@@ -382,7 +382,7 @@ def test_empty_batches_are_safe():
 # --------------------------------------------------------------------------
 def test_one_provider_failing_leaves_the_other_working():
     out = merge_events([("financialjuice", []),
-                        ("faireconomy", [ev(title="US CPI m/m")])])
+                        ("external", [ev(title="US CPI m/m")])])
     assert len(out) == 1
 
 
@@ -526,134 +526,6 @@ def test_provider_never_reads_price():
         for word in banned:
             assert word not in low, f"{word!r} in {node.value[:60]!r}"
 
-
-# --------------------------------------------------------------------------
-# Step 2: faireconomy 429 handling
-# --------------------------------------------------------------------------
-def test_429_sets_a_backoff(monkeypatch):
-    import app.ingestion.economic_calendar as ec
-
-    ec.reset_provider_state()
-    monkeypatch.setattr(ec.settings, "calendar_fe_429_backoff_minutes", 15,
-                        raising=False)
-    assert ec.faireconomy_in_backoff() is False
-    assert ec.note_rate_limit() == 15
-    assert ec.faireconomy_in_backoff() is True
-
-
-def test_retry_after_header_wins_over_the_default(monkeypatch):
-    """The server knows when it will accept requests again."""
-    import app.ingestion.economic_calendar as ec
-
-    ec.reset_provider_state()
-    monkeypatch.setattr(ec.settings, "calendar_fe_429_backoff_minutes", 15,
-                        raising=False)
-    assert ec.note_rate_limit("300") == 5      # 300 seconds == 5 minutes
-
-
-def test_retry_after_is_capped(monkeypatch):
-    """A hostile or absurd header must not park the calendar indefinitely."""
-    import app.ingestion.economic_calendar as ec
-
-    ec.reset_provider_state()
-    monkeypatch.setattr(ec.settings,
-                        "calendar_fe_429_max_retry_after_minutes", 60,
-                        raising=False)
-    assert ec.note_rate_limit("86400") == 60   # 24h requested, capped to 60m
-
-
-def test_unparseable_retry_after_falls_back_to_the_default(monkeypatch):
-    import app.ingestion.economic_calendar as ec
-
-    monkeypatch.setattr(ec.settings, "calendar_fe_429_backoff_minutes", 15,
-                        raising=False)
-    for junk in ("Wed, 21 Oct 2026 07:28:00 GMT", "", "soon"):
-        ec.reset_provider_state()
-        assert ec.note_rate_limit(junk) == 15
-
-
-def test_success_clears_the_rate_limit():
-    import app.ingestion.economic_calendar as ec
-
-    ec.reset_provider_state()
-    ec.note_rate_limit()
-    assert ec.faireconomy_in_backoff() is True
-    ec.clear_rate_limit()
-    assert ec.faireconomy_in_backoff() is False
-
-
-def test_backoff_expiry_lets_polling_resume():
-    import app.ingestion.economic_calendar as ec
-
-    ec.reset_provider_state()
-    ec.note_rate_limit()
-    later = datetime.now(timezone.utc) + timedelta(hours=2)
-    assert ec.faireconomy_in_backoff(now=later) is False
-
-
-def test_a_429_degrades_instead_of_raising():
-    """The provider must never propagate into the pipeline."""
-    import asyncio
-
-    import httpx
-
-    import app.ingestion.economic_calendar as ec
-
-    ec.reset_provider_state()
-
-    class FakeResponse:
-        status_code = 429
-        headers = {"Retry-After": "120"}
-
-        def raise_for_status(self):
-            raise httpx.HTTPStatusError("429", request=None, response=self)
-
-    class FakeClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *a):
-            return False
-
-        async def get(self, url, **kw):
-            return FakeResponse()
-
-    real = ec.httpx.AsyncClient
-    ec.httpx.AsyncClient = lambda **kw: FakeClient()
-    try:
-        events, errors = asyncio.run(ec._fetch_faireconomy())
-    finally:
-        ec.httpx.AsyncClient = real
-
-    assert events == []
-    assert any("429" in e for e in errors)
-    assert ec.faireconomy_in_backoff() is True
-
-
-def test_during_backoff_faireconomy_is_not_fetched_at_all():
-    """No request is issued, so the rate limit is not extended."""
-    import asyncio
-
-    import app.ingestion.economic_calendar as ec
-
-    ec.reset_provider_state()
-    ec.note_rate_limit()
-
-    called = {"n": 0}
-    real = ec._fetch_one
-
-    async def spy(url):
-        called["n"] += 1
-        return []
-
-    ec._fetch_one = spy
-    try:
-        events, errors = asyncio.run(ec._fetch_faireconomy())
-    finally:
-        ec._fetch_one = real
-
-    assert called["n"] == 0
-    assert events == [] and errors == []
 
 
 # --------------------------------------------------------------------------

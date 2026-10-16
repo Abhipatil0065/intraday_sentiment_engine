@@ -3,8 +3,7 @@ LIVE VERIFICATION of the FinancialJuice calendar provider (phase 1).
 
 Runs the REAL provider with the REAL flag still OFF, then reports:
   * rows parsed, events produced, wall time, peak memory;
-  * how many FJ events match faireeconomy's events;
-  * the timezone cross-check (FJ time vs faireeconomy's UTC);
+  * the timezone cross-check (FJ rendered UTC vs configured tz);
   * whether a challenge page was seen.
 
 Does not modify settings. To enable the provider afterwards, set
@@ -16,28 +15,12 @@ Run:  python -m tests.probe_fj_calendar
 from __future__ import annotations
 
 import asyncio
-import json
-import re
-import urllib.request
 
-from app.analysis.economic_impact import to_float
 from app.analysis.calendar_merge import title_similarity
 from app.config import settings
 from app.ingestion.fj_calendar import PROVIDER_NAME, fetch_fj_calendar
 
 MATCH_THRESHOLD = 0.85
-
-
-def _faireconomy_events() -> list[dict]:
-    req = urllib.request.Request(
-        settings.economic_calendar_url,
-        headers={"User-Agent": settings.http_user_agent,
-                 "Accept": "application/json"})
-    try:
-        return json.load(urllib.request.urlopen(req, timeout=25))
-    except Exception as exc:  # noqa: BLE001
-        print("faireconomy unavailable: %s" % exc)
-        return []
 
 
 async def main() -> None:
@@ -95,38 +78,6 @@ async def main() -> None:
                  "-" if e.previous is None else e.previous))
     print()
 
-    fe = _faireconomy_events()
-    print("-- cross-check vs faireconomy --")
-    print("faireconomy events: %d" % len(fe))
-    matched = 0
-    samples = []
-    for e in result.events:
-        for f in fe:
-            if title_similarity(e.title, str(f.get("title") or "")) >= MATCH_THRESHOLD:
-                matched += 1
-                if len(samples) < 10:
-                    samples.append((e, f))
-                break
-    print("FJ events matching a faireconomy event: %d / %d"
-          % (matched, len(result.events)))
-    print()
-
-    print("-- timezone evidence (FJ local vs faireconomy UTC) --")
-    for e, f in samples[:8]:
-        fe_when = f.get("date")
-        try:
-            from datetime import datetime as _dt
-
-            fe_utc = _dt.fromisoformat(str(fe_when)).astimezone(
-                settings.fj_render_tz.utcoffset(None) and
-                __import__("datetime").timezone.utc)
-        except Exception:
-            fe_utc = None
-        print("  %-38s FJ %s | FE %s"
-              % (e.title[:38], e.when_utc.strftime("%Y-%m-%d %H:%M UTC"),
-                 fe_when))
-
-    print()
     print("=" * 74)
     if result.ok and result.event_count >= 10:
         print("VERIFICATION PASSED - safe to set "

@@ -2,7 +2,7 @@
 CROSS-PROVIDER CALENDAR MERGE (phase 2).
 
 Two providers reporting the same release is the NORMAL case, not an error:
-FinancialJuice renders a multi-day calendar while faireconomy publishes the
+FinancialJuice renders a multi-day calendar while external calendar publishes the
 current week, so they overlap heavily. Counting one release twice would double
 its weight in the aggregate, so events are matched and merged.
 

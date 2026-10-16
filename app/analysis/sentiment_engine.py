@@ -516,6 +516,14 @@ class WeightedSignal:
     # cluster-level directional conflict, so the verdict can be reported with
     # a wider flip margin.
     cluster_conflict: bool = False
+    # STEP 9.3: when this signal is the survivor of a cluster whose members
+    # carried opposing directions, this holds the summed magnitude of the
+    # losing side(s) - the evidence that genuinely conflicted with the
+    # dominant reading. Zero on every other signal. compute() uses this as
+    # the conflicted share of the tick's evidence: a lopsided collapse
+    # (ten-to-one) contributes only the minority side's weight instead of
+    # counting the dominant survivor's full weight as a torn market.
+    conflict_weight: float = 0.0
     # Task 3: surprise-size multiplier for ACTUAL scheduled-data reports
     # (release_surprise.surprise_weight). Constant 1.0 for every other
     # signal, so no existing behaviour changes.
@@ -1310,7 +1318,11 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
         )
         cluster_total_weight += signal_weight
         if getattr(s, "cluster_conflict", False):
-            cluster_conflicted_weight += signal_weight
+            # Only the evidence that actually disagreed - the losing side of
+            # the cluster collapse - counts as conflicted. The survivor's own
+            # weight is dominant evidence, not a torn market; counting it in
+            # full made this gate fire on nearly every tick.
+            cluster_conflicted_weight += getattr(s, "conflict_weight", 0.0)
 
     cluster_share = (
         cluster_conflicted_weight / cluster_total_weight

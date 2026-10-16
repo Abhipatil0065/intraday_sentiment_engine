@@ -329,7 +329,12 @@ def test_engine_ors_the_clustered_contradiction_into_the_flag():
         _mk("Fed signals patience", Direction.BULLISH, "evt-fed", 5),
     ]
     from dataclasses import replace
-    signals = [replace(s, cluster_conflict=True) for s in signals]
+    signals = [
+        replace(s, cluster_conflict=True,
+                conflict_weight=se._signal_weight(s, NOW)
+                * se.STRENGTH_MULT.get(s.strength, 0.45))
+        for s in signals
+    ]
 
     se.clear_bias_history()
     result = se.compute(signals, Asset.GOLD, now=NOW)
