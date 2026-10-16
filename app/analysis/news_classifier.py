@@ -48,7 +48,10 @@ MAX_BODY_CHARS = 2000
 
 # Per-article LLM wall-clock budget. One article that hangs cannot stall the
 # entire tick: after this many seconds the classifier falls back to heuristics.
-LLM_PER_ARTICLE_TIMEOUT = 30
+# meta/llama-3.2-11b-vision-instruct consistently returns in ~6-16s; the 60s
+# ceiling gives it headroom for cold starts and variance without treating it
+# as a failure.
+LLM_PER_ARTICLE_TIMEOUT = 60
 
 # Max concurrent LLM calls per tick. Keeps the event loop responsive and
 # respects provider rate limits.

@@ -1288,6 +1288,9 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
 
     score = _score_from(bull, bear)
     confidence = _confidence_from(bull, bear, agg["directionless"], agg["used"])
+    # The un-capped formula value: used below so a tie-break that confirms the
+    # raw score's lean is not forced down to TIEBREAK_MAX_CONFIDENCE.
+    raw_confidence = confidence
 
     # --- CONTRADICTION SPLIT ---
     # ``cluster_conflict`` widens the flip margin when the conflicted clusters
@@ -1419,9 +1422,24 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
         if confidence < FLIP_MIN_CONFIDENCE:
             confidence = min(confidence, TIEBREAK_MAX_CONFIDENCE)
         computed_bias = _tie_break_bias(relevant, history_key=key, now=now)
-        # A tie-break is a weak call: cap the confidence low so the payload
-        # still reads as weak once the label is forced to name a side.
-        confidence = min(confidence, TIEBREAK_MAX_CONFIDENCE)
+        # The cap applies only when the tie-break contradicts the raw score's
+        # lean: the tie-break names the opposite side of the lean. When the
+        # tie-break confirms the lean (or there is no lean to contradict,
+        # raw == 0), the cap does not apply - the tie-break is corroborating,
+        # not overriding, the verdict.
+        disagrees = (
+            (raw > 0 and computed_bias is Bias.BEARISH)
+            or (raw < 0 and computed_bias is Bias.BULLISH)
+        )
+        if disagrees:
+            # Tie-break names the opposite side of the raw score's lean: cap
+            # confidence low so the payload reads as weak once a side is named.
+            confidence = min(confidence, TIEBREAK_MAX_CONFIDENCE)
+        else:
+            # Tie-break confirms the lean (or there is no lean to contradict,
+            # raw == 0): the cap does not apply, confidence stays at the
+            # formula value.
+            confidence = raw_confidence
 
     # Dampened score for display/cue strength (raw used for bias/flip/stability)
     damped = _damped_score(raw, total_weight)

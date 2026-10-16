@@ -25,10 +25,10 @@ from app.logging_conf import get_logger
 
 log = get_logger(__name__)
 
-# Per-call timeout for a single LLM classification request. 30s ceiling so a
-# single failing article cannot stall the tick. The circuit breaker will
-# skip LLM entirely after 3 consecutive 503s/timeouts.
-LLM_CALL_TIMEOUT_SECONDS: int = 30
+# Per-call timeout for a single LLM classification request. 60s ceiling so a
+# single slow-but-valid model response cannot be mistaken for a dead endpoint.
+# The circuit breaker will skip LLM entirely after 3 consecutive 503s/timeouts.
+LLM_CALL_TIMEOUT_SECONDS: int = 60
 
 _SEMAPHORE: asyncio.Semaphore | None = None
 _CLIENT: httpx.AsyncClient | None = None

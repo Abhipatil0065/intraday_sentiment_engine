@@ -310,3 +310,35 @@ def test_payload_exposes_both_new_flags(tmp_path):
     assert block["contradiction_detected"] is True
     for existing in ("score", "raw_score", "confidence", "bias", "display"):
         assert existing in block, f"_block lost {existing}"
+
+
+def test_cluster_conflict_true_does_not_cap_confidence(monkeypatch):
+    """Semantics A regression guard: cluster_conflict widens the flip margin
+    only; it must never cap confidence.
+
+    One-sided bullish evidence (bear = 0) is not evidence_split, so the
+    confidence cap cannot fire from that side either. A conflicted cluster
+    flag set on one signal must leave the formula confidence untouched
+    (> TIEBREAK_MAX_CONFIDENCE), not force it down to 0.30."""
+    import app.analysis.sentiment_engine as se
+
+    strength_mult = se.STRENGTH_MULT[ImpactStrength.HIGH]
+    signal_weight = 0.5 / (20 * strength_mult)  # total magnitude exactly 0.5
+
+    signals = [
+        replace(
+            _signal(f"One-sided note {i}", Direction.BULLISH),
+            cluster_conflict=(i == 0),
+            conflict_weight=(signal_weight * strength_mult if i == 0 else 0.0),
+        )
+        for i in range(20)
+    ]
+    monkeypatch.setattr(se, "_signal_weight", lambda s, now: signal_weight)
+
+    result = compute(signals, Asset.GOLD, now=NOW)
+
+    assert result.cluster_conflict is True
+    assert result.evidence_split is False
+    assert result.confidence > TIEBREAK_MAX_CONFIDENCE, (
+        "cluster_conflict must not cap confidence under Semantics A"
+    )

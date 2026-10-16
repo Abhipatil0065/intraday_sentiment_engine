@@ -237,3 +237,44 @@ def test_sub_floor_evidence_publishes_the_lean_not_zero():
     assert r3.confidence == 0.0
     assert r3.confidence_label == "LOW"
     assert r3.bias in (Bias.BULLISH, Bias.BEARISH)
+
+
+def test_strong_score_is_not_capped():
+    """|score| >= EPS never reaches the tie-break branch, so the cap does not
+    apply and confidence stays at the formula value."""
+    signals = [make(direction=Direction.BULLISH, title=f"bull {i}",
+                    cluster_id=f"v{i}") for i in range(6)]
+    r = compute(signals, Asset.GOLD, now=NOW)
+    assert abs(r.raw_score) >= EPS, "six bullish headlines must score strongly"
+    assert r.bias is Bias.BULLISH
+    assert r.confidence > TIEBREAK_MAX_CONFIDENCE, "strong verdict must not be capped"
+
+
+def test_tie_break_disagreement_caps_confidence():
+    """Inside EPS, when the tie-break names the side opposite the raw score's
+    lean, confidence is capped at TIEBREAK_MAX_CONFIDENCE."""
+    bear = make(direction=Direction.BEARISH, strength=ImpactStrength.VERY_HIGH,
+                weight=1.0, minutes_ago=2, title="fresh bear",
+                cluster_id="bear")
+    bulls = [make(direction=Direction.BULLISH, strength=ImpactStrength.HIGH,
+                  weight=0.45, minutes_ago=2, title=f"old bull {i}",
+                  cluster_id=f"b{i}") for i in range(3)]
+    r = compute([bear] + bulls, Asset.GOLD, now=NOW)
+    assert 0.0 < r.raw_score < EPS, "raw score leans bullish but is tiny"
+    assert r.bias is Bias.BEARISH, "tie-break names the opposite side"
+    assert r.confidence <= TIEBREAK_MAX_CONFIDENCE, "disagreeing tie-break is capped"
+
+
+def test_tie_break_agreement_is_not_capped():
+    """Inside EPS, when the tie-break names the same side as the raw score's
+    lean, confidence is NOT capped: it stays at the formula value."""
+    bull = make(direction=Direction.BULLISH, strength=ImpactStrength.VERY_HIGH,
+                weight=1.0, minutes_ago=20, title="fresh bull",
+                cluster_id="bull")
+    bears = [make(direction=Direction.BEARISH, strength=ImpactStrength.HIGH,
+                  weight=0.15, minutes_ago=20, title=f"bear{i}",
+                  cluster_id=f"be{i}") for i in range(7)]
+    r = compute([bull] + bears, Asset.GOLD, now=NOW)
+    assert 0.0 < r.raw_score < EPS, "raw score leans bullish but is tiny"
+    assert r.bias is Bias.BULLISH, "tie-break confirms the lean"
+    assert r.confidence > TIEBREAK_MAX_CONFIDENCE, "agreeing tie-break is uncapped"

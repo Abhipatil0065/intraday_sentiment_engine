@@ -66,7 +66,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("LLM_BASE_URL", "DEEPSEEK_BASE_URL"),
     )
     llm_model: str = Field(
-        default="deepseek-chat",
+        default="meta/llama-3.2-11b-vision-instruct",
         validation_alias=AliasChoices("LLM_MODEL", "DEEPSEEK_MODEL"),
     )
     llm_timeout_seconds: int = Field(

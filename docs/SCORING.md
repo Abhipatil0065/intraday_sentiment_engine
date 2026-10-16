@@ -135,6 +135,24 @@ The engine is **binary**: it always names BULLISH or BEARISH, never withholds.
 A contradiction caps confidence at `TIEBREAK_MAX_CONFIDENCE` (0.30) and forces
 `confidence_label = "LOW"` (Step 8).
 
+### cluster_conflict vs evidence_split routing
+
+The two conflict-related flags are NOT interchangeable and neither one caps
+confidence on its own:
+
+* **`cluster_conflict`** (cluster-level, from Step 9.3): two readings of one
+  event were collapsed into a single vote after disagreeing. It widens the
+  flip margin only, via `effective_flip_margin()` (+`CONTRADICTION_FLIP_MARGIN_ADJUSTMENT`
+  when true). It does **not** read or write confidence.
+* **`evidence_split`** (aggregate-ratio): the bull/bear totals are balanced
+  above `EVIDENCE_SPLIT_RATIO`. This is the flag that caps confidence at
+  `TIEBREAK_MAX_CONFIDENCE` (0.30) via `cap_confidence_for_evidence_split()`.
+
+So `cluster_conflict=true` never lowers confidence, and `evidence_split=true`
+never widens the flip margin. A BTCUSD/EQUITY tick can legitimately show higher
+median confidence on `cluster_conflict=true` ticks: the flag signals a wider
+flip margin, not uncertainty in the verdict itself.
+
 ## From the score to the displayed percentage
 
 `app/analysis/display.py::to_display(score, bias, confidence, tie_break)`
