@@ -306,19 +306,20 @@ def test_cluster_contradiction_flows_into_the_verdict():
     # Simulate what _collapse_members produces on a disagreeing event.
     from dataclasses import replace
     collapsed = cluster_and_flag(signals)
-    assert all(s.contradiction_detected for s in collapsed)
+    assert all(s.cluster_conflict for s in collapsed)
 
 
 def cluster_and_flag(signals):
     from dataclasses import replace
 
-    return [replace(s, contradiction_detected=True) for s in signals]
+    return [replace(s, cluster_conflict=True) for s in signals]
 
 
 def test_engine_ors_the_clustered_contradiction_into_the_flag():
     """
     compute() must treat a clustered contradiction exactly like one it spots
-    itself, so the Step 8 confidence cap applies.
+    itself, so the cluster_conflict flag is set on the verdict. The confidence
+    cap no longer belongs to this flag: that routing moved to evidence_split.
     """
     from app.analysis import sentiment_engine as se
     from app.models.enums import Asset, Direction
@@ -328,15 +329,17 @@ def test_engine_ors_the_clustered_contradiction_into_the_flag():
         _mk("Fed signals patience", Direction.BULLISH, "evt-fed", 5),
     ]
     from dataclasses import replace
-    signals = [replace(s, contradiction_detected=True) for s in signals]
+    signals = [replace(s, cluster_conflict=True) for s in signals]
 
     se.clear_bias_history()
     result = se.compute(signals, Asset.GOLD, now=NOW)
 
-    assert result.contradiction_detected is True, (
-        "a clustered contradiction must set the flag on the verdict")
-    assert result.confidence <= 0.30, (
-        "and therefore cap confidence at TIEBREAK_MAX_CONFIDENCE")
+    assert result.cluster_conflict is True, (
+        "a clustered contradiction must set cluster_conflict on the verdict")
+    assert result.evidence_split is False, (
+        "a one-sided cluster conflict is not evidence_split by itself")
+    assert result.confidence > 0.30, (
+        "cluster_conflict must not trigger the evidence_split confidence cap")
 
 
 # ---------------------------------------------------------------------------

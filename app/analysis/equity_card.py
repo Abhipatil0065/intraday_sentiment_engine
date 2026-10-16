@@ -90,9 +90,12 @@ class EquityCardResult:
     stale: bool = False
     note: str = ""
     last_updated: str = ""
-    # Same three fields the asset cards expose: contradiction flag and the
+    # Same four fields the asset cards expose after the contradiction split:
+    # deprecated alias, cluster-level conflict, evidence split, and the
     # 15-minute same-direction burst counts behind the score.
     contradiction_detected: bool = False
+    cluster_conflict: bool = False
+    evidence_split: bool = False
     burst_bull: int = 0
     burst_bear: int = 0
 
@@ -422,6 +425,10 @@ def build_equity_card(all_signals: Sequence[WeightedSignal],
         last_updated=T.stamp(),
         contradiction_detected=bool(getattr(
             result, "contradiction_detected", False)),
+        cluster_conflict=bool(getattr(
+            result, "cluster_conflict", False)),
+        evidence_split=bool(getattr(
+            result, "evidence_split", False)),
         burst_bull=int(getattr(result, "burst_bull", 0) or 0),
         burst_bear=int(getattr(result, "burst_bear", 0) or 0),
     )
@@ -445,6 +452,8 @@ def to_payload(card: EquityCardResult) -> dict:
         "note": card.note,
         "last_updated": card.last_updated,
         "contradiction_detected": bool(card.contradiction_detected),
+        "cluster_conflict": bool(card.cluster_conflict),
+        "evidence_split": bool(card.evidence_split),
         "burst_bull": int(card.burst_bull),
         "burst_bear": int(card.burst_bear),
     }

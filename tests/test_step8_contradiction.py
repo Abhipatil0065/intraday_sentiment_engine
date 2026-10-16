@@ -295,25 +295,30 @@ def test_opposing_headlines_produce_a_lean_not_a_verdict():
 
 
 def test_pipeline_flags_a_contradiction_for_the_card():
-    """The card payload carries contradiction_detected so the chip can render."""
+    """The card payload carries both split flags so the chip can render."""
     from app.analysis.sentiment_engine import SentimentResult
     from app.models.enums import Asset
 
-    r = SentimentResult(asset=Asset.GOLD, contradiction_detected=True)
-    assert r.contradiction_detected is True
+    r = SentimentResult(asset=Asset.GOLD, cluster_conflict=True,
+                        evidence_split=True)
+    assert r.cluster_conflict is True
+    assert r.evidence_split is True
+    assert r.contradiction_detected is True  # deprecated alias
 
 
 # ---------------------------------------------------------------------------
 # 5. The frontend chip
 # ---------------------------------------------------------------------------
-def test_html_renders_the_conflicting_signals_chip():
-    """The asset strip card must show a CONFLICTING SIGNALS chip on flag."""
+def test_html_renders_the_contradiction_split_chip():
+    """The asset strip card must show SPLIT and/or CONFLICT chips on flags."""
     from pathlib import Path
 
     html = (Path(__file__).resolve().parents[1]
-            / "app" / "dashboard" / "web" / "index.html").read_text(encoding="utf-8")
-    assert "CONFLICTING SIGNALS" in html, (
-        "the asset card must carry a CONFLICTING SIGNALS chip")
+             / "app" / "dashboard" / "web" / "index.html").read_text(encoding="utf-8")
+    assert "SPLIT + CONFLICT" in html, (
+        "the asset card must label the both-flags case")
     assert "conflictChip" in html
-    assert "b.contradiction_detected" in html, (
-        "the chip must be driven by the payload's contradiction_detected flag")
+    assert "b.evidence_split" in html, (
+        "the chip must be driven by the payload's evidence_split flag")
+    assert "b.cluster_conflict" in html, (
+        "the chip must be driven by the payload's cluster_conflict flag")

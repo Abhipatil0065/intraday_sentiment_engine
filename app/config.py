@@ -874,6 +874,19 @@ CONTRADICTION_RATIO = 0.6
 CONTRADICTION_DAMPENER_FACTOR = 0.5
 
 # ---------------------------------------------------------------------------
+# CONTRADICTION SPLIT: row-level cluster_conflict gate.
+#
+# The signal-level flag means one event cluster collapsed opposing readings.
+# The row-level flag must not fire merely because one low-weight conflicted
+# cluster exists somewhere in a 3000-signal tick. These constants gate it by
+# the conflicted signals' share of the same weight the score aggregates.
+# ---------------------------------------------------------------------------
+# Fraction of total signal weight carried by cluster_conflict=True signals.
+CLUSTER_CONFLICT_WEIGHT_SHARE = 0.05
+# Absolute total-weight floor; below this the tick is negligible evidence.
+CLUSTER_CONFLICT_MIN_TOTAL_WEIGHT = 0.5
+
+# ---------------------------------------------------------------------------
 # STEP 10: confidence calibration.
 #
 # The confidence blend in sentiment_engine._confidence_from uses fixed

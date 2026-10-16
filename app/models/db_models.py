@@ -214,8 +214,15 @@ class SentimentSnapshot(Base):
     # (carried-forward) verdict - the point of stale is that nothing new was
     # seen. Mirrors contributing_articles on a fresh verdict.
     signal_count: Mapped[int] = mapped_column(Integer, default=0)
-    # True when both sides are heavily weighted (bull > 80 and bear > 80):
-    # the news is genuinely torn, so a flip is held to a wider margin.
+    # CONTRADICTION SPLIT: the old single contradiction_detected column is
+    # retained as a deprecated alias populated from ``cluster_conflict`` for
+    # backward compatibility. New consumers must use the two fields below.
+    cluster_conflict: Mapped[bool] = mapped_column(
+        Boolean, default=False)
+    evidence_split: Mapped[bool] = mapped_column(
+        Boolean, default=False)
+    # Deprecated alias. Populated from ``cluster_conflict`` only; see
+    # sentiment_engine.SentimentResult.contradiction_detected.
     contradiction_detected: Mapped[bool] = mapped_column(
         Boolean, default=False)
     # News-velocity burst counts in the last 15 minutes: how many same-side

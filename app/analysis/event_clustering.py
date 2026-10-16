@@ -225,10 +225,10 @@ def _collapse_keyed_events(keyed: dict) -> list:
         if keep is None:
             continue
 
-        flagged = replace(keep, contradiction_detected=True)
+        flagged = replace(keep, cluster_conflict=True)
         log.debug(
             "cluster %s: readings disagreed (%s); kept %s and flagged "
-            "contradiction_detected",
+            "cluster_conflict",
             event_key,
             "/".join(sorted(d.value for d in directions)),
             winner.value,

@@ -71,7 +71,11 @@ from enum import Enum
 import re
 
 from app.analysis.text_match import contains_cue
-from app.config import settings
+from app.config import (
+    CLUSTER_CONFLICT_MIN_TOTAL_WEIGHT,
+    CLUSTER_CONFLICT_WEIGHT_SHARE,
+    settings,
+)
 from app.logging_conf import get_logger
 from app.models.enums import (
     Asset,
@@ -276,6 +280,33 @@ COOLING_MARGIN = settings.COOLING_MARGIN if hasattr(settings, 'COOLING_MARGIN') 
 FLIP_MARGIN = settings.FLIP_MARGIN if hasattr(settings, 'FLIP_MARGIN') else 8.0
 FLIP_HOLD_MINUTES = settings.FLIP_HOLD_MINUTES if hasattr(settings, 'FLIP_HOLD_MINUTES') else 5
 
+# CONTRADICTION SPLIT - placeholder, NOT tuned.
+# ``evidence_split`` is the ratio-based meaning of the old contradiction flag.
+# ``cluster_conflict`` is the cluster-level meaning. The threshold below is a
+# placeholder for the tuning phase and must not be adjusted here.
+EVIDENCE_SPLIT_RATIO = 0.7
+CONTRADICTION_FLIP_MARGIN_ADJUSTMENT = 10.0
+
+
+def evidence_split_from_totals(bull: float, bear: float) -> bool:
+    """Whether the two aggregate evidence totals are balanced enough to count."""
+    larger = max(bull, bear)
+    if larger <= 0.0:
+        return False
+    return min(bull, bear) / larger > EVIDENCE_SPLIT_RATIO
+
+
+def effective_flip_margin(cluster_conflict: bool) -> float:
+    """Widen the flip margin only on a cluster-level directional conflict."""
+    return FLIP_MARGIN + (
+        CONTRADICTION_FLIP_MARGIN_ADJUSTMENT if cluster_conflict else 0.0
+    )
+
+
+def cap_confidence_for_evidence_split(confidence: float) -> float:
+    """Cap confidence when the aggregate evidence is genuinely split."""
+    return min(confidence, TIEBREAK_MAX_CONFIDENCE)
+
 # Last published bias per state key: the asset symbol ("GOLD" ...) or
 # "EQUITY:<region>" for the session-aware equity card, so a signal-free poll
 # can carry the previous verdict forward instead of inventing one.
@@ -466,9 +497,10 @@ class WeightedSignal:
     # STEP 9.3: set by event_clustering._collapse_members when two readings of
     # the SAME event (one event_key) pointed in opposite directions and were
     # collapsed to a single vote. The signal survives with the dominant
-    # direction, and this flag tells compute() the evidence behind it was split
-    # so the verdict can be reported as low confidence rather than a call.
-    contradiction_detected: bool = False
+    # direction, and this flag tells compute() the evidence behind it had a
+    # cluster-level directional conflict, so the verdict can be reported with
+    # a wider flip margin.
+    cluster_conflict: bool = False
     # Task 3: surprise-size multiplier for ACTUAL scheduled-data reports
     # (release_surprise.surprise_weight). Constant 1.0 for every other
     # signal, so no existing behaviour changes.
@@ -492,6 +524,17 @@ class WeightedSignal:
     final_weight: float = 0.0
     magnitude: float = 0.0
     contribution: float = 0.0
+
+    @property
+    def contradiction_detected(self) -> bool:
+        """
+        Deprecated read-only alias for ``cluster_conflict``.
+
+        The old name covered two meanings; the cluster-level meaning now lives
+        in ``cluster_conflict`` and the ratio-based meaning lives in the
+        SentimentResult's ``evidence_split``.
+        """
+        return self.cluster_conflict
 
 
 @dataclass
@@ -552,9 +595,12 @@ class SentimentResult:
     # (carried-forward) verdict - the point of stale is that nothing new was
     # seen. Mirrors contributing_articles on a fresh verdict.
     signal_count: int = 0
-    # True when both sides are heavily weighted (bull > 80 and bear > 80):
-    # the news is genuinely torn, so a flip is held to a wider margin.
-    contradiction_detected: bool = False
+    # TASK 3/SPLIT: two separate flags, replacing the old contradiction_detected.
+    # ``cluster_conflict`` means a cluster collapsed opposing readings.
+    cluster_conflict: bool = False
+    # ``evidence_split`` means the two aggregate totals are balanced above a
+    # ratio threshold. Placeholder threshold, not tuned.
+    evidence_split: bool = False
     # News-velocity burst counts in the last 15 minutes: how many same-side
     # headlines landed together. 0 on a stale verdict. Exposed on the
     # dashboard so a reader can see the momentum behind the score.
@@ -562,6 +608,17 @@ class SentimentResult:
     burst_bear: int = 0
     note: str = ""
     confidence_label: str = "LOW"
+
+    @property
+    def contradiction_detected(self) -> bool:
+        """
+        Deprecated read-only alias for ``cluster_conflict``.
+
+        Payload consumers should migrate to ``cluster_conflict`` and
+        ``evidence_split``. The alias is retained only for existing payload
+        readers and is documented as deprecated.
+        """
+        return self.cluster_conflict
 
 
 def decay_weight(published_at: datetime | None, tier: str,
@@ -1217,19 +1274,47 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
     score = _score_from(bull, bear)
     confidence = _confidence_from(bull, bear, agg["directionless"], agg["used"])
 
-    # --- High contradiction holds bias stronger (IMPROVEMENT 2) ---
-    # When both sides are heavily weighted the news is genuinely torn, so a
-    # flip should be harder: the score must cross by an extra 10 points.
-    contradiction_detected = (bull > 80.0 and bear > 80.0)
-    effective_flip_margin = FLIP_MARGIN + (10 if contradiction_detected else 0)
+    # --- CONTRADICTION SPLIT ---
+    # ``cluster_conflict`` widens the flip margin when the conflicted clusters
+    # are a meaningful minority of the evidence, not a long-tail sliver. The
+    # observed baseline was 75 conflicted signals carrying 2.8-2.9% of total
+    # weight, which is exactly the case this gate must not flag.
+    #
+    # Weight with the same scoring factor _aggregate applies, i.e. the
+    # signal's magnitude, not merely its pre-strength _signal_weight. The score
+    # is driven by magnitude, so the conflict share below must be a share of
+    # the same evidence the score sums.
+    cluster_conflicted_weight = 0.0
+    cluster_total_weight = 0.0
+    for s in relevant:
+        signal_weight = (
+            _signal_weight(s, now) * STRENGTH_MULT.get(s.strength, 0.45)
+        )
+        cluster_total_weight += signal_weight
+        if getattr(s, "cluster_conflict", False):
+            cluster_conflicted_weight += signal_weight
 
-    # STEP 9.3: a cluster may already carry a recorded contradiction - two
-    # readings of the SAME event key that pointed opposite ways and were
-    # collapsed to one vote. That is evidence the direction was uncertain, so
-    # it counts towards the flag exactly as if the engine had spotted the
-    # imbalance itself, and it caps confidence and forces the LOW label below.
-    if any(getattr(s, "contradiction_detected", False) for s in relevant):
-        contradiction_detected = True
+    cluster_share = (
+        cluster_conflicted_weight / cluster_total_weight
+        if cluster_total_weight > 0.0
+        else 0.0
+    )
+    # ``>=`` is the intended comparison. The tie tolerance only keeps a
+    # nominally exact 5% boundary from being a false negative through binary
+    # floating-point division.
+    cluster_conflict = (
+        cluster_total_weight >= CLUSTER_CONFLICT_MIN_TOTAL_WEIGHT
+        and (
+            cluster_share >= CLUSTER_CONFLICT_WEIGHT_SHARE
+            or abs(cluster_share - CLUSTER_CONFLICT_WEIGHT_SHARE) < 1e-12
+        )
+    )
+    flip_margin = effective_flip_margin(cluster_conflict)
+
+    # ``evidence_split`` caps confidence: the aggregate bull/bear totals are
+    # balanced above the placeholder ratio. The confidence cap reads this flag
+    # only.
+    evidence_split = evidence_split_from_totals(bull, bear)
 
     # STEP 8: a detected contradiction must not be reported as a call.
     #
@@ -1239,8 +1324,8 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
     # show "BEARISH 67%" alongside confidence 0.62 and be read as conviction.
     # The flip-margin widening above already handles the "should we flip" half;
     # this handles the "how loudly do we speak" half.
-    if contradiction_detected:
-        confidence = min(confidence, TIEBREAK_MAX_CONFIDENCE)
+    if evidence_split:
+        confidence = cap_confidence_for_evidence_split(confidence)
 
     # Total directional weight for dampening
     total_weight = bull + bear
@@ -1302,7 +1387,8 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
             stale=is_stale, signal_count=len(relevant),
             burst_bull=agg["burst_bull"], burst_bear=agg["burst_bear"],
             note=stale_note,
-            contradiction_detected=contradiction_detected,
+            cluster_conflict=cluster_conflict,
+            evidence_split=evidence_split,
             confidence_label=confidence_label_for(weak_confidence, True),
         )
 
@@ -1340,7 +1426,7 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
     last_bias = recall_bias(key)
     should_flip, flipped_bias = _should_flip(
         bull, bear, last_bias, relevant, now, key,
-        flip_margin_override=effective_flip_margin)
+        flip_margin_override=flip_margin)
 
     low_quality = False
 
@@ -1374,11 +1460,11 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
         # Tie-break case (raw inside EPS) is low quality
         low_quality = abs(raw) < EPS
 
-        # STEP 8: a detected contradiction is low quality too, however the
-        # score landed. The two sides are both heavily weighted, so the label
+        # CONTRADICTION SPLIT: an evidence-split verdict is low quality too,
+        # however the score landed. The two sides are balanced, so the label
         # names which side happened to be heavier - not a conviction. This
         # forces confidence_label to LOW regardless of the numeric confidence.
-        if contradiction_detected:
+        if evidence_split:
             low_quality = True
 
     # Dampened score for display/cue strength (raw used for bias/flip/stability)
@@ -1427,7 +1513,8 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
         burst_bull=agg["burst_bull"],
         burst_bear=agg["burst_bear"],
         note=note,
-        contradiction_detected=contradiction_detected,
+        cluster_conflict=cluster_conflict,
+        evidence_split=evidence_split,
         confidence_label=confidence_label_for(confidence, low_quality),
     )
 

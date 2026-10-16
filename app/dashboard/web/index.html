@@ -735,12 +735,13 @@ function scopeCard(b, label){
   var d=disp(b);
   var risk=b.event_risk?'<span class="risk">EVENT RISK</span>':'';
   var isWeak=(b.confidence_label==='LOW' || b.stale);
-  /* STEP 8: both sides heavily weighted. The engine widens the flip margin and
-     caps confidence to LOW here, and the score is damped, so the split reads as
-     a lean rather than a verdict. Say so on the card - a reader who sees
-     "BEARISH 54%" next to CONFLICTING SIGNALS knows not to size up on it. */
-  var conflictChip=b.contradiction_detected
-    ?'<span class="risk conflict">CONFLICTING SIGNALS</span>':'';
+  /* CONTRADICTION SPLIT: SPLIT means the bull/bear ratio is balanced;
+     CONFLICT means a collapsed cluster had opposing readings. A card can
+     show one without the other, so the label names the actual evidence. */
+  var conflictChip=((b.evidence_split||b.cluster_conflict)
+    ?'<span class="risk conflict">'
+      +(b.evidence_split&&b.cluster_conflict?'SPLIT + CONFLICT'
+        :(b.evidence_split?'SPLIT':'CONFLICT'))+'</span>':'');
   return '<div class="mcard '+String(label||'').toLowerCase()
     +'" data-goto="asset-'+esc(b.asset||'')+'" title="Jump to the '
     +esc(String(label||'').toUpperCase())+' economic calendar">'
@@ -817,7 +818,7 @@ function equityCard(){
     +'<div class="msub">region '+esc(region||'n/a')
     +(e.no_data?' &middot; no regional news &middot; carried forward':'')
     +(e.stale?' &middot; stale':'')
-    +(e.contradiction_detected?' &middot; conflicting headlines':'')+'</div>'
+    +(e.evidence_split?' &middot; split':'')+(e.cluster_conflict?' &middot; conflict':'')+'</div>'
     +mbar(e)
     /* Same rule as the asset cards: the boxes never dim with confidence. The
        weak state stays on the verdict chip only. */

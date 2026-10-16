@@ -304,6 +304,8 @@ def _block(session, asset: str, scope: str) -> dict:
             "contributing_articles": 0, "contributing_clusters": 0,
             "signal_count": 0,
             "contradiction_detected": False,
+            "cluster_conflict": False,
+            "evidence_split": False,
             "burst_bull": 0, "burst_bear": 0,
             # Item 1: no baseline yet during warm-up.
             "raw_score": None, "baseline_score": None,
@@ -377,6 +379,8 @@ def _block(session, asset: str, scope: str) -> dict:
         "contributing_clusters": 0,
         "signal_count": getattr(snap, "signal_count", 0),
         "contradiction_detected": bool(getattr(snap, "contradiction_detected", False)),
+        "cluster_conflict": bool(getattr(snap, "cluster_conflict", False)),
+        "evidence_split": bool(getattr(snap, "evidence_split", False)),
         "burst_bull": int(getattr(snap, "burst_bull", 0) or 0),
         "burst_bear": int(getattr(snap, "burst_bear", 0) or 0),
         # Item 1: baseline audit fields. raw_score is the unadjusted level the

@@ -453,6 +453,8 @@ def test_migration_adds_raw_and_baseline_to_a_legacy_database(tmp_path, monkeypa
             contributing_articles INTEGER,
             signal_count INTEGER,
             contradiction_detected BOOLEAN,
+            cluster_conflict BOOLEAN DEFAULT 0,
+            evidence_split BOOLEAN DEFAULT 0,
             burst_bull INTEGER,
             burst_bear INTEGER,
             price_note TEXT,
@@ -508,15 +510,17 @@ def _write_rows(path):
             conflict JSON,
             note TEXT,
             contributing_articles INTEGER,
-            signal_count INTEGER,
-            contradiction_detected BOOLEAN,
-            burst_bull INTEGER,
-            burst_bear INTEGER,
-            price_note TEXT,
-            stale BOOLEAN,
-            confidence_label VARCHAR(8),
-            computed_at DATETIME NOT NULL
-        );
+             signal_count INTEGER,
+             contradiction_detected BOOLEAN,
+             cluster_conflict BOOLEAN DEFAULT 0,
+             evidence_split BOOLEAN DEFAULT 0,
+             burst_bull INTEGER,
+             burst_bear INTEGER,
+             price_note TEXT,
+             stale BOOLEAN,
+             confidence_label VARCHAR(8),
+             computed_at DATETIME NOT NULL
+         );
         INSERT INTO sentiment_snapshot
             (asset,scope,score,raw_score,baseline_score,confidence,bias,mode,
              delta_60m,event_risk,event_risk_note,damped_score,drivers,

@@ -1366,7 +1366,10 @@ def _recompute_sentiment(session, stats: IngestStats):
 note=result.note,
                       contributing_articles=result.contributing_articles,
                       signal_count=result.signal_count,
-                      contradiction_detected=result.contradiction_detected,
+                      cluster_conflict=result.cluster_conflict,
+                      evidence_split=result.evidence_split,
+                      # Deprecated alias: old consumers read contradiction_detected.
+                      contradiction_detected=result.cluster_conflict,
                       burst_bull=result.burst_bull,
                       burst_bear=result.burst_bear,
                       stale=result.stale,

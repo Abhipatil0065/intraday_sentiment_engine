@@ -1,6 +1,6 @@
 # Transmission map reference
 
-_Generated 2026-10-15 13:58 UTC by `tools/generate_transmission_docs.py`. Do not edit by hand._
+_Generated 2026-10-16 07:01 UTC by `tools/generate_transmission_docs.py`. Do not edit by hand._
 
 ## How to read this
 

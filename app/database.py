@@ -211,6 +211,10 @@ def _add_missing_sentiment_columns() -> None:
         "baseline_score": "FLOAT",
         "stale": "BOOLEAN DEFAULT 0",
         "confidence_label": "VARCHAR(8) DEFAULT 'LOW'",
+        # CONTRADICTION SPLIT: the old flag is now an alias. Preserve historical
+        # cluster-conflict counts by backfilling cluster_conflict from it.
+        "cluster_conflict": "BOOLEAN DEFAULT 0",
+        "evidence_split": "BOOLEAN DEFAULT 0",
     }
     try:
         with engine.begin() as conn:
@@ -224,6 +228,24 @@ def _add_missing_sentiment_columns() -> None:
                 if column not in present:
                     conn.execute(text(
                         f"ALTER TABLE sentiment_snapshot ADD COLUMN {column} {ddl}"))
+            # Existing rows predate the split. Their old flag only ever meant
+            # a cluster-level conflict, so preserve that count as
+            # cluster_conflict. evidence_split is derived from the captured
+            # bull/bear totals at the same placeholder threshold the engine
+            # uses now; this is historical capture, not threshold tuning.
+            conn.execute(text(
+                "UPDATE sentiment_snapshot "
+                "SET cluster_conflict = 1 "
+                "WHERE contradiction_detected = 1 "
+                "AND cluster_conflict = 0"))
+            conn.execute(text(
+                "UPDATE sentiment_snapshot "
+                "SET evidence_split = CASE "
+                "    WHEN max(bull, bear) > 0.0 "
+                "         AND min(bull, bear) / max(bull, bear) > 0.7 "
+                "    THEN 1 ELSE 0 END "
+                "WHERE bull IS NOT NULL "
+                "AND bear IS NOT NULL"))
     except Exception as exc:  # noqa: BLE001 - never block startup
         log.warning("sentiment_snapshot migration skipped: %s", exc)
 

@@ -69,6 +69,7 @@ def fetch_ticks(db: str, limit: int) -> list[dict]:
         q = """
             SELECT id, computed_at, asset, scope, score, raw_score, confidence,
                    confidence_label, mode, stale, contradiction_detected,
+                   cluster_conflict, evidence_split,
                    burst_bull, burst_bear, signal_count, bias, event_risk,
                    bull, bear
             FROM sentiment_snapshot
@@ -95,6 +96,7 @@ def fetch_all_current(db: str) -> list[dict]:
         q = """
             SELECT id, computed_at, asset, score, raw_score, confidence,
                    confidence_label, mode, stale, contradiction_detected,
+                   cluster_conflict, evidence_split,
                    signal_count, bias, bull, bear
             FROM sentiment_snapshot
             WHERE scope = 'CURRENT'
@@ -134,8 +136,8 @@ def _line(title: str) -> None:
 def section_a(ticks: list[dict]) -> None:
     _line("SECTION A - per-asset per-tick dump (last %d ticks)" % len(ticks))
     print("tick_time,asset,bull,bear,score,raw_score,confidence,"
-          "confidence_label,signal_count,mode,stale,contradiction_detected,"
-          "burst_bull,burst_bear")
+          "confidence_label,signal_count,mode,stale,cluster_conflict,"
+          "evidence_split,contradiction_detected_alias,burst_bull,burst_bear")
     n_bull_missing = 0
     for tick in ticks:
         for asset in ASSETS:
@@ -155,6 +157,8 @@ def section_a(ticks: list[dict]) -> None:
                 str(r["signal_count"] or 0),
                 r["mode"] or "-",
                 "1" if r["stale"] else "0",
+                "1" if r["cluster_conflict"] else "0",
+                "1" if r["evidence_split"] else "0",
                 "1" if r["contradiction_detected"] else "0",
                 str(r["burst_bull"] or 0),
                 str(r["burst_bear"] or 0),
@@ -209,37 +213,66 @@ def section_b(db: str) -> None:
               % (thin, 100.0 * thin / len(counts)))
 
         contra = sum(1 for r in ar if r["contradiction_detected"])
-        print("    contradiction   : %d  (expected 0)" % contra)
+        cluster = sum(1 for r in ar if r["cluster_conflict"])
+        split = sum(1 for r in ar if r["evidence_split"])
+        print("    contradiction   : alias=%d cluster_conflict=%d "
+              "evidence_split=%d" % (contra, cluster, split))
 
 
 # ---------------------------------------------------------------------------
 # Section C
 # ---------------------------------------------------------------------------
 def section_c(db: str, live: bool) -> None:
-    _line("SECTION C - the contradiction_detected question")
+    _line("SECTION C - contradiction split: cluster_conflict vs evidence_split")
     rows = fetch_all_current(db)
-    print("contradiction_detected = bull>80 AND bear>80, across ALL history:")
-    n = sum(1 for r in rows if r["contradiction_detected"])
-    print("    ticks with the flag : %d of %d   (expected 0)" % (n, len(rows)))
+    captured = [
+        r for r in rows
+        if r.get("bull") is not None and r.get("bear") is not None
+    ]
+    missing_bull_bear = len(rows) - len(captured)
+
+    # Denominators are explicit. Flag counts below are against captured rows,
+    # i.e. rows where bull and bear are stored, so they can be compared with
+    # the r distribution on the next line.
+    print("all CURRENT rows     : %d" % len(rows))
+    print("captured bull/bear   : %d  (rows where evidence_split is computable)"
+          % len(captured))
+    print("missing bull/bear    : %d  (NULL legacy ticks: NOT CAPTURED)"
+          % missing_bull_bear)
+
+    cluster_conflict = sum(1 for r in captured if r["cluster_conflict"])
+    evidence_split = sum(1 for r in captured if r["evidence_split"])
+    both = sum(1 for r in captured
+               if r["cluster_conflict"] and r["evidence_split"])
+
+    print("cluster_conflict = cluster collapsed opposing readings:")
+    print("    ticks with the flag : %d of %d"
+          % (cluster_conflict, len(captured)))
+    print("evidence_split     = ratio > 0.7 placeholder threshold:")
+    print("    ticks with the flag : %d of %d"
+          % (evidence_split, len(captured)))
+    print("overlap:")
+    print("    both flags          : %d of %d" % (both, len(captured)))
+    print("    cluster_conflict only: %d of %d"
+          % (cluster_conflict - both, len(captured)))
+    print("    evidence_split only  : %d of %d"
+          % (evidence_split - both, len(captured)))
+
+    _live_cluster_conflict_metrics(db)
 
     print()
-    print("r = min(bull,bear)/max(bull,bear) for historical ticks:")
+    print("r = min(bull,bear)/max(bull,bear) for captured rows:")
     stored = []
-    missing = 0
     no_evidence = 0
-    for r in rows:
-        b, be = r.get("bull"), r.get("bear")
-        if b is None or be is None:
-            missing += 1
-            continue
-        hi = max(b, be)
+    for r in captured:
+        hi = max(r["bull"], r["bear"])
         if hi <= 0:
             no_evidence += 1
             continue
-        stored.append(min(b, be) / hi)
+        stored.append(min(r["bull"], r["bear"]) / hi)
 
-    print("    stored rows      : %d of %d CURRENT rows" % (len(stored), len(rows)))
-    print("    missing rows     : %d  (NULL legacy ticks: NOT CAPTURED)" % missing)
+    print("    stored rows      : %d of %d captured rows"
+          % (len(stored), len(captured)))
     print("    zero-evidence    : %d  (both totals stored as 0.0)" % no_evidence)
     if stored:
         print("    r min            : %.3f" % min(stored))
@@ -247,15 +280,114 @@ def section_c(db: str, live: bool) -> None:
         print("    r p50            : %.3f" % statistics.median(stored))
         print("    r p75            : %.3f" % _pct(stored, 75))
         print("    r max            : %.3f" % max(stored))
-        above = sum(1 for x in stored if x > 0.6)
-        print("    r>0.6            : %d of %d (%.1f%%)  <- the 0.6 dampener split"
-              % (above, len(stored), 100.0 * above / len(stored)))
-        print("    dampener>0.6     : %s ticks" % ("enabled" if above else "not"))
+        for threshold in (0.6, 0.7, 0.8, 0.85, 0.9):
+            n = sum(1 for x in stored if x > threshold)
+            print("    r>%s             : %d of %d (%.1f%%)"
+                  % (threshold, n, len(stored),
+                     100.0 * n / len(stored)))
     else:
-        print("    no historical tick has both bull and bear captured")
+        print("    no captured row has nonzero bull and bear")
 
     if live:
         _live_r()
+
+
+def _live_cluster_conflict_metrics(db: str) -> None:
+    """
+    Recompute one tick on a DB copy and report the cluster-conflict share.
+
+    Historical stored flags are not rewritten here; this shows what the new
+    share-based row-level gate computes for the current captured asset rows.
+    """
+    import os
+    import sqlite3
+    import tempfile
+
+    import app.analysis.event_clustering as event_clustering
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.config import (
+        CLUSTER_CONFLICT_MIN_TOTAL_WEIGHT,
+        CLUSTER_CONFLICT_WEIGHT_SHARE,
+    )
+    from app.models.db_models import Base
+    from app.services.pipeline import IngestStats, _recompute_sentiment
+
+    tmp_dir = tempfile.mkdtemp(prefix="measure_cluster_")
+    tmp_db = os.path.join(tmp_dir, "sentiment.db")
+    try:
+        src = sqlite3.connect(db)
+        dst = sqlite3.connect(tmp_db)
+        src.backup(dst)
+        dst.close()
+        src.close()
+
+        engine = create_engine(f"sqlite:///{tmp_db}")
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(bind=engine, expire_on_commit=False)
+
+        real_cluster_signals = event_clustering.cluster_signals
+        last = {}
+
+        def wrapped_cluster_signals(signals, **kwargs):
+            clustered = real_cluster_signals(signals, **kwargs)
+            last["signals"] = clustered
+            return clustered
+
+        event_clustering.cluster_signals = wrapped_cluster_signals
+        try:
+            with Session() as session:
+                _recompute_sentiment(session, IngestStats())
+                session.commit()
+        finally:
+            event_clustering.cluster_signals = real_cluster_signals
+
+        by_asset = {}
+        for signal in last.get("signals", []):
+            by_asset.setdefault(signal.asset.value, []).append(signal)
+
+        shares = []
+        weights = []
+        flagged_rows = 0
+        for signals in by_asset.values():
+            total_weight = sum(
+                getattr(s, "magnitude", 0.0) or 0.0 for s in signals
+            )
+            conflicted_weight = sum(
+                getattr(s, "magnitude", 0.0) or 0.0
+                for s in signals
+                if getattr(s, "cluster_conflict", False)
+            )
+            share = conflicted_weight / total_weight if total_weight else 0.0
+            shares.append(share)
+            weights.append(conflicted_weight)
+            if (
+                total_weight >= CLUSTER_CONFLICT_MIN_TOTAL_WEIGHT
+                and share >= CLUSTER_CONFLICT_WEIGHT_SHARE
+            ):
+                flagged_rows += 1
+
+        if shares:
+            print()
+            print("live recompute: current captured asset rows under new gate")
+            print("    current_flagged_rows: %d of %d"
+                  % (flagged_rows, len(shares)))
+            print("    cluster_conflict mean share : %.6f"
+                  % (sum(shares) / len(shares)))
+            print("    cluster_conflict mean weight: %.6f"
+                  % (sum(weights) / len(weights)))
+    except Exception as exc:  # noqa: BLE001 - measurement must not crash
+        print()
+        print("live cluster-conflict metrics skipped: %s" % exc)
+    finally:
+        try:
+            if os.path.exists(tmp_db):
+                os.remove(tmp_db)
+            if os.path.isdir(tmp_dir):
+                os.rmdir(tmp_dir)
+        except OSError:
+            pass
 
 
 def _live_r() -> None:
