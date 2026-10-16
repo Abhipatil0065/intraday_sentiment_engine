@@ -331,13 +331,14 @@ def recall_bias(key: str) -> Bias | None:
 
 
 def _recall_flip_time(key: str) -> datetime | None:
-    """The last time a bias flip occurred for this key."""
-    return _LAST_FLIP_TIME.get(key)
+    """The last time a bias flip occurred for this key (aware UTC)."""
+    dt = _LAST_FLIP_TIME.get(key)
+    return _to_aware_utc(dt) if dt is not None else None
 
 
 def _record_flip_time(key: str, now: datetime) -> None:
-    """Record a bias flip time for this key."""
-    _LAST_FLIP_TIME[key] = now
+    """Record a bias flip time for this key (always aware UTC)."""
+    _LAST_FLIP_TIME[key] = _to_aware_utc(now)
 
 
 def clear_bias_history() -> None:
@@ -368,6 +369,20 @@ def _ensure_aware(dt: datetime | None) -> datetime | None:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+def _to_aware_utc(dt: datetime | None) -> datetime | None:
+    """Normalize any datetime to aware UTC.
+
+    Naive values are treated as UTC (matching ``_ensure_aware``); aware values
+    are converted to UTC. Aware and naive values are never mixed in
+    :data:`_LAST_FLIP_TIME`.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def _has_fresh_tier1_opposite(relevant: Sequence[WeightedSignal],
@@ -1450,7 +1465,7 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
         final_bias = flipped_bias if last_bias is not None else computed_bias
         score = payload_score(raw, final_bias)
         if last_bias is not None and final_bias != last_bias:
-            _record_flip_time(key, now or datetime.now())
+            _record_flip_time(key, _now_aware(now))
             note = f"Bias flipped: {last_bias.value} -> {final_bias.value} (raw {raw:.1f})."
         else:
             note = ""

@@ -12,6 +12,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
+from datetime import datetime
+
 from app.analysis.sentiment_engine import (
     SentimentResult,
     WeightedSignal,
@@ -97,6 +99,7 @@ def build(
     signals: Sequence[WeightedSignal],
     category_weights: dict[NewsCategory, float],
     asset: Asset,
+    now: datetime | None = None,
 ) -> PrepResult:
     """
     Build the prep view for one asset.
@@ -115,10 +118,10 @@ def build(
     if explicit:
         blended = list(prep_signals)
         blended.extend(s for s in asset_signals if s.report_kind is not ReportKind.PREP)
-        sentiment = compute_sentiment(blended, asset)
+        sentiment = compute_sentiment(blended, asset, now=now)
         note = "Built from today's MARKET_PREP reports plus supporting macro flow."
     else:
-        sentiment = compute_sentiment(asset_signals, asset)
+        sentiment = compute_sentiment(asset_signals, asset, now=now)
         note = (
             "No MARKET_PREP article found today - setup inferred from "
             "general intraday news flow."

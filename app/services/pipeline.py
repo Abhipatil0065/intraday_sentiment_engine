@@ -1306,9 +1306,11 @@ def _recompute_sentiment(session, stats: IngestStats):
 
         current_result = compute_sentiment(
             asset_signals, asset, event_risk=at_risk,
-            event_risk_note=risk_note)
-        prep = market_prep.build(asset_signals, category_weights, asset)
-        wrap = market_wrap.build(asset_signals, asset)
+            event_risk_note=risk_note,
+            now=recompute_now)
+        prep = market_prep.build(asset_signals, category_weights, asset,
+                                 now=recompute_now)
+        wrap = market_wrap.build(asset_signals, asset, now=recompute_now)
 
         # Item 11: persist every published bias so it can be scored later.
         try:
@@ -1415,7 +1417,8 @@ note=result.note,
     try:
         from app.analysis.equity_card import build_equity_card, to_payload
         _last_equity_signals = list(signals)
-        _last_equity_card = to_payload(build_equity_card(signals))
+        _last_equity_card = to_payload(build_equity_card(signals,
+                                                         now=recompute_now))
     except Exception as exc:  # noqa: BLE001 - equity card never breaks a poll
         log.debug("equity card build failed: %s", exc)
         _last_equity_card = None
