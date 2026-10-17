@@ -1046,6 +1046,39 @@ def detect_event_types(text: str, category: NewsCategory) -> list:
     return found
 
 
+# Event types that describe a single risk-regime theme. When two or more of
+# them fire on the same headline they are overlapping reads of the same story,
+# so resolve() keeps only the strongest one for the asset being resolved.
+# Detection (detect_event_types) is intentionally untouched - it still reports
+# every match for inspection and for tests that count event types.
+_RISK_REGIME_GROUP: frozenset[EventType] = frozenset({
+    EventType.GEOPOLITICAL_RISK,
+    EventType.GEOPOLITICAL_DEESCALATION,
+    EventType.RISK_ON,
+    EventType.RISK_OFF,
+    EventType.STOCK_RALLY,
+    EventType.STOCK_PLUNGE,
+    EventType.VIX_SPIKE,
+    EventType.VIX_COMPRESSION,
+})
+
+
+def _filter_risk_regime(event_types: list[EventType], asset: Asset) -> list[EventType]:
+    """When 2+ risk-regime types fire on one headline, keep only the strongest
+    for this asset. The others describe the same theme and must not be summed.
+
+    "Strongest" means the largest transmission(et, asset).magnitude, which is
+    asset-specific, so the caller must invoke this once per asset on the
+    original (unfiltered) detection list.
+    """
+    regime = [et for et in event_types if et in _RISK_REGIME_GROUP]
+    if len(regime) <= 1:
+        return event_types
+    best = max(regime, key=lambda et: transmission(et, asset).magnitude)
+    others = [et for et in event_types if et not in _RISK_REGIME_GROUP]
+    return others + [best]
+
+
 def resolve(text: str, category: NewsCategory,
             cue_magnitude: float | None = None) -> dict:
     """
@@ -1117,10 +1150,14 @@ def resolve(text: str, category: NewsCategory,
     # Flow events carry their own sign from the flow wording (see _FLOW_*).
     flow_sign = _flow_sign(text)
     for asset in Asset:
+        # Risk-regime filter: one headline, one risk-regime contribution per
+        # asset. Run on the original detection list so each asset sees all of
+        # them (the strongest magnitude is asset-specific).
+        asset_event_types = _filter_risk_regime(event_types, asset)
         signed = 0.0
         best_weight = -1.0
         dominant = None
-        for index, event_type in enumerate(event_types):
+        for index, event_type in enumerate(asset_event_types):
             entry = transmission(event_type, asset)
             if entry.magnitude <= 0.0:
                 continue

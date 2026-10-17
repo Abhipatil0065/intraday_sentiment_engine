@@ -292,3 +292,93 @@ def test_recession_driven_cut_is_bullish_gold_and_mixed_for_silver_btc():
     assert tm.direction_for(tm.EventType.RECESSION_CUT, Asset.GOLD) is Direction.BULLISH
     assert tm.direction_for(tm.EventType.RECESSION_CUT, Asset.SILVER) is Direction.MIXED
     assert tm.direction_for(tm.EventType.RECESSION_CUT, Asset.BITCOIN) is Direction.MIXED
+
+
+# --------------------------------------------------------------------------
+# Risk-regime multi-counting filter (resolve() only)
+# --------------------------------------------------------------------------
+# detect_event_types is intentionally untouched: it still reports every
+# risk-regime match. The de-duplication lives in resolve(), where the score
+# contribution is computed.
+def test_detection_still_reports_all_risk_regime_types():
+    """Headlines that trip two risk-regime mechanisms still report all of them
+    from detect_event_types - only resolve() collapses them to one."""
+    found = tm.detect_event_types("VIX spikes as stocks plunge", NewsCategory.EQUITIES)
+    assert tm.EventType.STOCK_PLUNGE in found
+    assert tm.EventType.VIX_SPIKE in found
+
+    found = tm.detect_event_types("stocks rally on earnings", NewsCategory.EQUITIES)
+    assert tm.EventType.STOCK_RALLY in found
+    assert tm.EventType.RISK_ON in found
+
+
+def test_filter_keeps_strongest_risk_regime_for_btc():
+    """For BTC, STOCK_PLUNGE (0.55) beats VIX_SPIKE (0.5): only the strongest
+    risk-regime type survives the filter."""
+    filtered = tm._filter_risk_regime(
+        [tm.EventType.STOCK_PLUNGE, tm.EventType.VIX_SPIKE], Asset.BITCOIN)
+    assert filtered == [tm.EventType.STOCK_PLUNGE]
+
+
+def test_filter_strength_is_asset_specific():
+    """The strongest magnitude is per-asset: XAUUSD prefers VIX_SPIKE (0.4)
+    over STOCK_PLUNGE (0.35), the opposite of BTC."""
+    filtered = tm._filter_risk_regime(
+        [tm.EventType.STOCK_PLUNGE, tm.EventType.VIX_SPIKE], Asset.GOLD)
+    assert filtered == [tm.EventType.VIX_SPIKE]
+
+
+def test_filter_single_and_non_risk_regimes_are_unaffected():
+    """One risk-regime type passes through unchanged (backward compatibility),
+    as do non-risk-regime event types."""
+    assert tm._filter_risk_regime([tm.EventType.GEOPOLITICAL_RISK], Asset.BITCOIN) == [
+        tm.EventType.GEOPOLITICAL_RISK]
+    assert tm._filter_risk_regime([tm.EventType.GEOPOLITICAL_DEESCALATION], Asset.BITCOIN) == [
+        tm.EventType.GEOPOLITICAL_DEESCALATION]
+    assert tm._filter_risk_regime([tm.EventType.GOLD_ETF_FLOW_IN], Asset.BITCOIN) == [
+        tm.EventType.GOLD_ETF_FLOW_IN]
+
+
+def test_resolve_produces_single_risk_regime_contribution():
+    """End-to-end: 2+ risk-regime types on one headline yield a single
+    risk-regime contribution, headed by the strongest type for that asset."""
+    # War headline: only GEOPOLITICAL_RISK fires - a single risk-regime type,
+    # so BTC's contribution is unchanged (no double counting to remove).
+    resolved = tm.resolve(
+        "Iran war: missiles strike Saudi oil hub", NewsCategory.GEOPOLITICS)
+    assert tm.detect_event_types(
+        "Iran war: missiles strike Saudi oil hub", NewsCategory.GEOPOLITICS) == [
+            tm.EventType.GEOPOLITICAL_RISK]
+    assert resolved[Asset.BITCOIN].dominant is tm.EventType.GEOPOLITICAL_RISK
+
+    # Cease-fire headline: only GEOPOLITICAL_DEESCALATION fires.
+    resolved = tm.resolve("Cease-fire declared in Iran", NewsCategory.GEOPOLITICS)
+    assert tm.detect_event_types(
+        "Cease-fire declared in Iran", NewsCategory.GEOPOLITICS) == [
+            tm.EventType.GEOPOLITICAL_DEESCALATION]
+    assert resolved[Asset.BITCOIN].dominant is tm.EventType.GEOPOLITICAL_DEESCALATION
+
+    # VIX spike headline: STOCK_PLUNGE and VIX_SPIKE both fire; BTC keeps the
+    # stronger one (STOCK_PLUNGE, 0.55 > 0.5) - one contribution, not two.
+    resolved = tm.resolve("VIX spikes as stocks plunge", NewsCategory.EQUITIES)
+    assert tm.detect_event_types(
+        "VIX spikes as stocks plunge", NewsCategory.EQUITIES) == [
+            tm.EventType.STOCK_PLUNGE, tm.EventType.VIX_SPIKE]
+    assert resolved[Asset.BITCOIN].dominant is tm.EventType.STOCK_PLUNGE
+
+    # Non-risk headline: no risk-regime type involved, contributions unchanged.
+    resolved = tm.resolve("Gold ETF inflows surge", NewsCategory.ETF_FLOWS)
+    assert tm.detect_event_types(
+        "Gold ETF inflows surge", NewsCategory.ETF_FLOWS) == [
+            tm.EventType.GOLD_ETF_FLOW_IN]
+    assert resolved[Asset.BITCOIN].dominant is tm.EventType.GOLD_ETF_FLOW_IN
+
+    # Backward compatibility: "stocks rally on earnings" fires STOCK_RALLY and
+    # RISK_ON; the filter drops STOCK_RALLY and keeps RISK_ON (1.0 > 0.55 for
+    # BTC) - a single risk-regime contribution, headed by RISK_ON.
+    resolved = tm.resolve("stocks rally on earnings", NewsCategory.EQUITIES)
+    assert tm.detect_event_types(
+        "stocks rally on earnings", NewsCategory.EQUITIES) == [
+            tm.EventType.STOCK_RALLY, tm.EventType.RISK_ON]
+    assert resolved[Asset.BITCOIN].dominant is tm.EventType.RISK_ON
+    assert resolved[Asset.BITCOIN].direction is Direction.BULLISH
