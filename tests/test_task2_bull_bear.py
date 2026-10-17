@@ -123,10 +123,12 @@ def test_bull_bear_populated_on_every_row(tmp_path):
 
 
 def test_bull_bear_populated_for_every_asset_and_scope(tmp_path):
-    """TASK 2: one signal per asset, every scope, values not NULL."""
+    """TASK 2: one signal per market asset, every scope, values not NULL.
+    EQUITY snapshots are no longer written (equity is served by the
+    session-aware card), so only XAUUSD, XAGUSD, BTCUSD are expected."""
     Session, models = _session_for(tmp_path)
     with Session() as session:
-        for i, asset in enumerate(("XAUUSD", "XAGUSD", "BTCUSD", "EQUITY")):
+        for i, asset in enumerate(("XAUUSD", "XAGUSD", "BTCUSD")):
             _article(session, models, f"bb-all-{asset}",
                      "Fed officials signal rates will stay lower for longer",
                      "BULLISH", "VERY_HIGH", asset=asset)
@@ -136,8 +138,9 @@ def test_bull_bear_populated_for_every_asset_and_scope(tmp_path):
         assert rows, "no snapshots written"
         assets_written = {r.asset for r in rows}
         scopes_written = {r.scope for r in rows}
-        assert {"XAUUSD", "XAGUSD", "BTCUSD", "EQUITY"} <= assets_written, (
-            f"expected all assets written, got {sorted(assets_written)}")
+        assert "EQUITY" not in assets_written, "EQUITY snapshot must not be written"
+        assert {"XAUUSD", "XAGUSD", "BTCUSD"} <= assets_written, (
+            f"expected market assets written, got {sorted(assets_written)}")
         assert {"CURRENT", "MARKET_PREP", "MARKET_WRAP"} <= scopes_written, (
             f"expected all scopes written, got {sorted(scopes_written)}")
 

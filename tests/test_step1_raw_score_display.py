@@ -295,6 +295,34 @@ def test_pipeline_persists_raw_score_for_every_scope(tmp_path, seeder):
             assert r.raw_score is not None and r.score is not None
 
 
+def test_no_equity_snapshot_written_equity_card_still_produced(tmp_path):
+    """
+    ``_recompute_sentiment`` must not write SentimentSnapshot rows for
+    Asset.EQUITY (equity is served by the session-aware card), while still
+    writing snapshots for the three market assets and producing the equity
+    top-level payload field.
+    """
+    from app.services.pipeline import (
+        _recompute_sentiment, IngestStats, current_equity_card)
+
+    Session, models = _make_db(tmp_path)
+    with Session() as session:
+        _seed_one_article(session, models)  # BTCUSD, XAUUSD, XAGUSD, EQUITY
+        _recompute_sentiment(session, IngestStats())
+        session.commit()
+
+        rows = session.query(models.SentimentSnapshot).all()
+        assets_written = {r.asset for r in rows}
+        assert "EQUITY" not in assets_written, "EQUITY snapshot must not be written"
+        assert {"BTCUSD", "XAUUSD", "XAGUSD"} <= assets_written, (
+            "market-asset snapshots must still be written")
+
+        # The session-aware equity card (top-level "equity" payload field) is
+        # still produced even though no EQUITY snapshot row exists.
+        card = current_equity_card()
+        assert isinstance(card, dict) and card, "equity card must still be produced"
+
+
 def _seed_balanced_article(session, models, direction, guid, title,
                            minutes_ago=25, relevance=0.85, persistence=0.75):
     """One article + one very-high impact, weighted to sit near the other side."""
@@ -406,9 +434,12 @@ def test_pipeline_raw_score_matches_the_engine_verdict(tmp_path):
             for r in session.query(models.SentimentSnapshot)
             .filter_by(scope="CURRENT").all()
         }
-        # Task 2 requires bull/bear capture on every snapshot row, so EQUITY
-        # is back in the CURRENT scope alongside the other three assets.
-        assert len(stored) == 4, "one CURRENT row per asset (including EQUITY)"
+        # Equity snapshots are no longer written (equity is served by the
+        # session-aware card), so CURRENT scope holds only the three market
+        # assets and never EQUITY.
+        assert "EQUITY" not in stored
+        assert {"XAUUSD", "XAGUSD", "BTCUSD"} == set(stored)
+        assert len(stored) == 3
 
         # Recompute the same verdict from the same inputs and compare.
         for asset, row in stored.items():

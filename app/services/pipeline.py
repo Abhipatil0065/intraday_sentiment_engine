@@ -1332,6 +1332,13 @@ def _recompute_sentiment(session, stats: IngestStats):
             ("MARKET_PREP", prep.sentiment),
             ("MARKET_WRAP", wrap.sentiment),
         ):
+            if asset is Asset.EQUITY:
+                # Equity is served by the session-aware card
+                # (build_equity_card / top-level "equity" key), not by
+                # SentimentSnapshot rows. Skip writing those rows - the
+                # EQUITY computation above still runs so internal state
+                # (bias, verdicts) is unaffected.
+                continue
             # TASK 2: collect bull/bear on every snapshot row for every asset,
             # including EQUITY and all three scopes, so historical r is
             # reconstructable. EQUITY still has its own top-level card in
