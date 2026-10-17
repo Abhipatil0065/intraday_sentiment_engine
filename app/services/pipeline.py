@@ -89,7 +89,7 @@ _last_regime = None  # RegimeAssessment from the most recent recompute
 _calendar_signals: list[CalendarSignal] = []
 # The raw calendar events behind those signals. Kept separately because the
 # imminent-release EVENT RISK warning must see un-released events too, even
-# though only RELEASED prints become signals (calendar_include_upcoming).
+# though only today's prints become signals.
 _calendar_events: list = []
 
 # Down-weight news that duplicates a calendar release.

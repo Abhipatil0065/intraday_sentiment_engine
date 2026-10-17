@@ -291,7 +291,29 @@ def test_relevance_gate_still_blocks_irrelevant_assets():
 def test_recession_driven_cut_is_bullish_gold_and_mixed_for_silver_btc():
     assert tm.direction_for(tm.EventType.RECESSION_CUT, Asset.GOLD) is Direction.BULLISH
     assert tm.direction_for(tm.EventType.RECESSION_CUT, Asset.SILVER) is Direction.MIXED
-    assert tm.direction_for(tm.EventType.RECESSION_CUT, Asset.BITCOIN) is Direction.MIXED
+    assert tm.direction_for(tm.EventType.RECESSION_CUT, Asset.BITCOIN) is Direction.BEARISH
+
+
+def test_recession_cut_bearish_for_bitcoin():
+    result = tm.transmission(tm.EventType.RECESSION_CUT, Asset.BITCOIN)
+    assert result.sign == -1, "RECESSION_CUT should be bearish for BTC"
+    assert result.magnitude == 0.55
+
+
+def test_risk_off_bearish_for_silver():
+    result = tm.transmission(tm.EventType.RISK_OFF, Asset.SILVER)
+    assert result.sign == -1, "RISK_OFF should be bearish for silver"
+    assert result.magnitude == 0.35
+
+
+def test_unverified_sign_zero_entries_unchanged():
+    # These are unverified or correct by design; do not change without data.
+    assert tm.transmission(tm.EventType.RECESSION_CUT, Asset.SILVER).sign == 0
+    assert tm.transmission(tm.EventType.BANKING_STRESS, Asset.BITCOIN).sign == 0
+    assert tm.transmission(tm.EventType.RISK_ON, Asset.SILVER).sign == 0
+    assert tm.transmission(tm.EventType.LIQUIDITY_EASING, Asset.EQUITY).sign == 0
+    assert tm.transmission(tm.EventType.LIQUIDITY_TIGHTENING, Asset.EQUITY).sign == 0
+    assert tm.transmission(tm.EventType.BTC_WHALE_ALERT, Asset.BITCOIN).sign == 0
 
 
 # --------------------------------------------------------------------------

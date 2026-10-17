@@ -1,6 +1,8 @@
 # Transmission map reference
 
-_Generated 2026-10-17 09:55 UTC by `tools/generate_transmission_docs.py`. Do not edit by hand._
+_Generated 2026-10-17 12:03 UTC by `tools/generate_transmission_docs.py`. Do not edit by hand._
+
+**Note:** The JSON map contains **75 event types**. This table shows the **73** that participate in detection via `EVENT_SIGNALS`. The two excluded are `GENERAL_MACRO` (used only as a category fallback for unclassified headlines) and `GOLD_ETF_FLOW` (removed in Step 4c in favor of its `_IN`/`_OUT` variants, which carry their own sign).
 
 ## How to read this
 
@@ -18,7 +20,7 @@ An **absent** asset key is NOT the same as `[0, x]`: absent coerces to `NEUTRAL 
 | # | Event type | Detection rule | XAUUSD | XAGUSD | BTCUSD | EQUITY |
 |---|---|---|---|---|---|
 | 1 | `HAWKISH_POLICY` | any of: `hawkish`, `rate hike`, `raises rates`, `raise rates`, `higher for longer`, `tightening`<br>…+3 more | ▼ bearish `1` | ▼ bearish `0.92` | ▼ bearish `0.88` | ▼ bearish `0.85` |
-| 2 | `RECESSION_CUT` | any of: `rate cut`, `cut rates`, `cuts rates`, `dovish`, `easing`, `stimulus`<br>**and** one of: `recession`, `slump`, `slowdown`, `contraction`, `downturn` | ▲ bullish `1.1` | ○ no side `0.45` | ○ no side `0.55` | ▲ bullish `0.7` |
+| 2 | `RECESSION_CUT` | any of: `rate cut`, `cut rates`, `cuts rates`, `dovish`, `easing`, `stimulus`<br>**and** one of: `recession`, `slump`, `slowdown`, `contraction`, `downturn` | ▲ bullish `1.1` | ○ no side `0.45` | ▼ bearish `0.55` | ▲ bullish `0.7` |
 | 3 | `DOVISH_POLICY` | any of: `dovish`, `rate cut`, `cuts rates`, `cut rates`, `pivot`, `easing`<br>…+1 more | ▲ bullish `1` | ▲ bullish `0.9` | ▲ bullish `0.82` | ▲ bullish `0.85` |
 | 4 | `REAL_YIELDS_RISING` | any of: `real yields rise`, `real yields rising`, `real yields climbed`, `real yields higher`, `real yields spike`, `real yields spiked`<br>…+9 more<br>**and** one of: `real`, `yield`, `tips`, `inflation protected` | ▼ bearish `1.15` | ▼ bearish `1` | ▼ bearish `0.85` | ▼ bearish `0.8` |
 | 5 | `REAL_YIELDS_FALLING` | any of: `real yields fall`, `real yields falling`, `real yields dropped`, `real yields lower`, `real yields drop`, `real yields decline`<br>…+9 more<br>**and** one of: `real`, `yield`, `tips`, `inflation protected` | ▲ bullish `1.1` | ▲ bullish `0.95` | ▲ bullish `0.8` | ▲ bullish `0.75` |
@@ -63,7 +65,7 @@ An **absent** asset key is NOT the same as `[0, x]`: absent coerces to `NEUTRAL 
 | 44 | `CENTRAL_BANK_GOLD_BUYING` | any of: `central bank buying`, `central bank buys`, `central bank purchase`, `reserve accumulation`, `gold reserves rise`, `official sector buying`<br>…+2 more<br>**and** one of: `gold`, `xau`, `reserves`, `central bank` | ▲ bullish `1.2` | ▲ bullish `0.6` | ○ no side `0.05` | ○ no side `0.05` |
 | 45 | `CENTRAL_BANK_GOLD_SELLING` | any of: `central bank selling`, `central bank sells`, `central bank sale`, `reserve reduction`, `gold reserves fall`, `official sector selling`<br>…+2 more<br>**and** one of: `gold`, `xau`, `reserves`, `central bank` | ▼ bearish `1.2` | ▼ bearish `0.6` | ○ no side `0.05` | ○ no side `0.05` |
 | 46 | `RISK_ON` | any of: `risk-on`, `risk on`, `risk appetite improves`, `risk appetite returns`, `risk appetite rebuilds`, `investors embrace risk`<br>…+2 more | ▼ bearish `0.45` | ○ no side `0.55` | ▲ bullish `1` | ▲ bullish `0.9` |
-| 47 | `RISK_OFF` | any of: `risk-off`, `risk aversion`, `flight to quality`, `panic selling`, `safe haven demand`, `safe-haven demand` | ▲ bullish `0.65` | ○ no side `0.35` | ▼ bearish `1.05` | ▼ bearish `0.9` |
+| 47 | `RISK_OFF` | any of: `risk-off`, `risk aversion`, `flight to quality`, `panic selling`, `safe haven demand`, `safe-haven demand` | ▲ bullish `0.65` | ▼ bearish `0.35` | ▼ bearish `1.05` | ▼ bearish `0.9` |
 | 48 | `CHINA_DEMAND` | any of: `china`, `chinese`, `beijing`, `yuan`, `caixin`, `shanghai`<br>…+2 more<br>**and** one of: `pmi`, `factory`, `manufacturing`, `industrial`, `output`, `exports`…+12 more | ▲ bullish `0.45` | ▲ bullish `1` | ○ no side `0.25` | ○ no side `0.1` |
 | 49 | `SILVER_CHINA_DEMAND` | any of: `china pmi`, `china manufacturing pmi`, `pmi reading`, `factory output`, `factory gate`, `industrial output`<br>…+45 more | ○ no side `0.2` | ▲ bullish `1` | ○ no side `0.05` | ○ no side `0.05` |
 | 50 | `INDUSTRIAL_DEMAND` | any of: `pmi`, `manufacturing`, `factory output`, `industrial production`, `solar`, `electronics`<br>…+1 more | ○ no side `0.25` | ▲ bullish `1` | ○ no side `0.2` | ○ no side `0.05` |

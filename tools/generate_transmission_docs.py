@@ -66,6 +66,12 @@ def main() -> int:
     w(f"_Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} "
       f"by `tools/generate_transmission_docs.py`. Do not edit by hand._")
     w("")
+    w("**Note:** The JSON map contains **75 event types**. This table shows the "
+      "**73** that participate in detection via `EVENT_SIGNALS`. The two "
+      "excluded are `GENERAL_MACRO` (used only as a category fallback for "
+      "unclassified headlines) and `GOLD_ETF_FLOW` (removed in Step 4c in "
+      "favor of its `_IN`/`_OUT` variants, which carry their own sign).")
+    w("")
     w("## How to read this")
     w("")
     w("Each event type has a **detection rule** (keywords that fire it) and a "
