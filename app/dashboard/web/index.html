@@ -806,10 +806,6 @@ function equityCard(){
   var region=(DATA&&DATA.equity_region)||e.region||'';
   var d=disp(e);
   var weak=((+e.confidence||0)<0.5)||e.stale;
-  var bulls=(e.drivers||[]).filter(function(x){
-    return String((x&&x.direction)||'').toUpperCase()==='BULLISH';});
-  var bears=(e.drivers||[]).filter(function(x){
-    return String((x&&x.direction)||'').toUpperCase()==='BEARISH';});
   return '<div class="mcard equity region-'+esc(String(region||'').toLowerCase())
     +'" data-goto="asset-EQUITY" title="Session equity card - follows the active session">'
     +'<div class="mtop"><span class="mname">'+esc(String(title).toUpperCase())+'</span>'
@@ -828,8 +824,8 @@ function equityCard(){
        weak state stays on the verdict chip only. */
     +msplit(e,'EQUITY:'+(region||''))
     +'<div class="mdrv">'
-    +mnote('bull','BULLISH DRIVERS',bulls,3)
-    +mnote('bear','BEARISH DRIVERS',bears,3)+'</div>'
+    +mnote('bull','BULLISH DRIVERS',e.bull_drivers,3)
+    +mnote('bear','BEARISH DRIVERS',e.bear_drivers,3)+'</div>'
     +'<div class="mfoot"><span>n=<b>'+(+e.contributing_articles||0)+'</b></span>'
     +'<span>signals <b>'+(+e.signal_count||0)+'</b></span>'
     +'<span>mode <b>'+esc(e.mode||'heuristic')+'</b></span>'

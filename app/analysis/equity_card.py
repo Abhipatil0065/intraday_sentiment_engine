@@ -82,6 +82,9 @@ class EquityCardResult:
     bias: str = Bias.BULLISH.value
     mode: str = "heuristic"
     drivers: list = field(default_factory=list)
+    # Both sides, each capped at 3, for the dashboard's side-by-side boxes.
+    bull_drivers: list = field(default_factory=list)
+    bear_drivers: list = field(default_factory=list)
     contributing_articles: int = 0
     signal_count: int = 0       # signals that reached this region in the window
     no_data: bool = True
@@ -360,6 +363,8 @@ def neutral_card(session: SessionName, reason: str = "") -> EquityCardResult:
         bias=bias.value,
         mode="heuristic",
         drivers=[],
+        bull_drivers=[],
+        bear_drivers=[],
         contributing_articles=0,
         signal_count=0,
         no_data=True,
@@ -440,6 +445,20 @@ def build_equity_card(all_signals: Sequence[WeightedSignal],
                         "contribution": round(float(d.contribution), 4),
                         "direction": direc,
                         "weight": round(float(d.weight), 4)})
+    bull_drivers = []
+    for d in (result.bull_drivers or [])[:3]:
+        direc = d.direction.value if isinstance(d.direction, Direction) else str(d.direction)
+        bull_drivers.append({"title": d.title,
+                             "contribution": round(float(d.contribution), 4),
+                             "direction": direc,
+                             "weight": round(float(d.weight), 4)})
+    bear_drivers = []
+    for d in (result.bear_drivers or [])[:3]:
+        direc = d.direction.value if isinstance(d.direction, Direction) else str(d.direction)
+        bear_drivers.append({"title": d.title,
+                             "contribution": round(float(d.contribution), 4),
+                             "direction": direc,
+                             "weight": round(float(d.weight), 4)})
     bias = result.bias.value if isinstance(result.bias, Bias) else str(result.bias)
     # Same rule as the asset cards (label/percentage consistency): the payload
     # score must sit on the label's side, so a tie-break that named the other
@@ -459,6 +478,8 @@ def build_equity_card(all_signals: Sequence[WeightedSignal],
         bias=bias,
         mode=getattr(result, "mode", "heuristic"),
         drivers=drivers,
+        bull_drivers=bull_drivers,
+        bear_drivers=bear_drivers,
         contributing_articles=int(result.contributing_articles),
         signal_count=int(getattr(result, "signal_count", 0)),
         no_data=False,
@@ -487,6 +508,8 @@ def to_payload(card: EquityCardResult) -> dict:
         "bias": card.bias,
         "mode": card.mode,
         "drivers": list(card.drivers),
+        "bull_drivers": list(card.bull_drivers),
+        "bear_drivers": list(card.bear_drivers),
         "contributing_articles": int(card.contributing_articles),
         "signal_count": int(getattr(card, "signal_count", 0)),
         "no_data": bool(card.no_data),

@@ -278,3 +278,20 @@ def test_unrelated_headline_no_match():
         assert region_signals([sig], session) == [], (
             f"{session.value} should not match a single-stock headline")
 
+
+def test_equity_card_has_both_driver_sides():
+    """The equity payload must expose both bull_drivers and bear_drivers
+    (each a list, even when empty) so the frontend can render both sides."""
+    from app.database import init_db, session_scope
+    from app.main import build_payload
+
+    init_db()
+    with session_scope() as s:
+        payload = build_payload(s)
+
+    equity = payload.get("equity", {})
+    assert "bull_drivers" in equity, "equity card must have bull_drivers"
+    assert "bear_drivers" in equity, "equity card must have bear_drivers"
+    assert isinstance(equity["bull_drivers"], list)
+    assert isinstance(equity["bear_drivers"], list)
+
