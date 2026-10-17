@@ -21,6 +21,45 @@ from app.models.db_models import NewsArticle, NewsEvent, AssetImpact, ArticleEve
 from sqlalchemy import delete
 
 
+async def fake_fetch_all_news():
+    """Return a small batch of fake articles so run_once() never calls the network."""
+    from app.ingestion.base import RawArticle
+    from app.ingestion.news_fetcher import FetchReport
+
+    articles = [
+        RawArticle(
+            guid="fake-1",
+            source="TestWire",
+            source_quality="TIER_2_MAJOR",
+            url="https://example.test/1",
+            title="Fed signals rate pause, gold steady",
+            body="The Federal Reserve signaled a pause in rate hikes.",
+            published_raw="2026-10-12T10:00:00Z",
+        ),
+        RawArticle(
+            guid="fake-2",
+            source="TestWire",
+            source_quality="TIER_2_MAJOR",
+            url="https://example.test/2",
+            title="Gold prices rise on inflation data",
+            body="Gold rose as inflation data came in above expectations.",
+            published_raw="2026-10-12T11:00:00Z",
+        ),
+    ]
+    return FetchReport(
+        articles=articles,
+        sources_polled=2,
+        sources_ok=2,
+        errors=[],
+        source_stats={},
+    )
+
+
+async def fake_fetch_calendar(*args, **kwargs):
+    """Return an empty calendar so run_once() never calls the network."""
+    return ([], [])
+
+
 class StubLLMClient:
     """Stub LLM that returns deterministic analysis."""
     
@@ -130,7 +169,9 @@ async def test_pipeline_counter_invariant_with_stub_llm():
                 mock_settings.drop_low_impact_articles = True
                 mock_settings.only_llm_verdict_may_drop = True
 
-                stats = await run_once()
+                with patch('app.services.pipeline.fetch_all_news', new=fake_fetch_all_news):
+                    with patch('app.services.pipeline.fetch_calendar', new=fake_fetch_calendar):
+                        stats = await run_once()
 
     # Verify the invariant. Under the one-shot policy the stub's LOW-importance
     # articles are DELETED, so they land in llm_new_dropped_low - a fifth
@@ -186,7 +227,9 @@ async def test_pipeline_counter_invariant_multiple_ticks():
                 mock_settings.only_llm_verdict_may_drop = True
 
                 for tick in range(3):
-                    stats = await run_once()
+                    with patch('app.services.pipeline.fetch_all_news', new=fake_fetch_all_news):
+                        with patch('app.services.pipeline.fetch_calendar', new=fake_fetch_calendar):
+                            stats = await run_once()
 
                     # Verify invariant on each tick
                     total_llm_accounted = (

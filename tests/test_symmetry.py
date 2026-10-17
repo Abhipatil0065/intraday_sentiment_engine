@@ -365,12 +365,17 @@ def test_event_pairs_are_exact_mirrors(positive, negative):
             f"{pos.sign} vs {neg.sign}")
 
 
-def test_silver_has_no_direction_on_risk_regimes():
-    """Silver follows gold and the dollar; risk sentiment gives no direction."""
+def test_silver_is_bearish_on_risk_off():
+    """Silver is bearish on RISK_OFF (6 of 7 RISK_OFF headlines drove it
+    bearish in the 2026-10-17 investigation)."""
     on = tm.transmission(tm.EventType.RISK_ON, Asset.SILVER)
     off = tm.transmission(tm.EventType.RISK_OFF, Asset.SILVER)
-    assert on.sign == 0
-    assert off.sign == 0  # Silver follows gold and the dollar; risk sentiment gives no direction.
+    assert on.sign == 0  # RISK_ON stays directionless for silver ([0, 0.55])
+    assert off.sign == -1, (
+        "RISK_OFF should be bearish for silver — silver is a risk asset "
+        "and 6 of 7 RISK_OFF headlines drove it bearish in the 2026-10-17 "
+        "investigation."
+    )
 
 
 def test_btc_etf_inflow_and_outflow_are_opposite():
@@ -475,9 +480,9 @@ def test_risk_appetite_verbs_no_longer_collide(asset):
     down = classify(RISK_PAIR[1])["outcomes"][asset.value].contribution
 
     if asset is Asset.SILVER:
-        # XAGUSD has no transmission path for risk sentiment; both directions are 0
+        # RISK_ON is directionless for XAGUSD ([0, 0.55]); RISK_OFF is bearish ([-1, 0.35])
         assert up == 0, f"silver RISK_ON should be zero, got {up:+.3f}"
-        assert down == 0, f"silver RISK_OFF should be zero, got {down:+.3f}"
+        assert down < 0, f"silver RISK_OFF should be bearish, got {down:+.3f}"
         return
 
     assert up != 0.0 and down != 0.0, (

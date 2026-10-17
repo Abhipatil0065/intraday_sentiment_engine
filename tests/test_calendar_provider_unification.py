@@ -2,11 +2,14 @@
 import pathlib
 import re
 
+import pytest
+
 from app.config import settings
 from app.ingestion.economic_calendar import fetch_calendar
 from app.services import pipeline
 
 
+@pytest.mark.network
 def test_fetch_calendar_only_financialjuice(monkeypatch):
     # FinancialJuice ships OFF by default; enable it for the assertion and keep
     # the stale-cache path out of the way so we inspect freshly-fetched events.

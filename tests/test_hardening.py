@@ -132,9 +132,71 @@ class TestHealthEndpoint:
         assert "llm_enabled" in data
 
     @pytest.mark.asyncio
-    async def test_health_works_while_pipeline_runs(self):
+    async def test_health_works_while_pipeline_runs(self, monkeypatch):
         """Health endpoint responds while pipeline is running."""
         from fastapi.testclient import TestClient
+
+        from app.ingestion.base import RawArticle
+        from app.ingestion.news_fetcher import FetchReport
+        from app.analysis.news_classifier import ArticleAnalysis
+        from app.models.enums import (
+            NewsCategory,
+            EconomicImportance,
+            ReportKind,
+            Verification,
+        )
+
+        # Mock live network calls so the pipeline runs against fake data.
+        fake_articles = [
+            RawArticle(
+                guid="fake-1",
+                source="TestWire",
+                source_quality="TIER_2_MAJOR",
+                url="https://example.test/1",
+                title="Fed signals rate pause, gold steady",
+                body="The Federal Reserve signaled a pause in rate hikes.",
+                published_raw="2026-10-12T10:00:00Z",
+            ),
+            RawArticle(
+                guid="fake-2",
+                source="TestWire",
+                source_quality="TIER_2_MAJOR",
+                url="https://example.test/2",
+                title="Gold prices rise on inflation data",
+                body="Gold rose as inflation data came in above expectations.",
+                published_raw="2026-10-12T11:00:00Z",
+            ),
+        ]
+
+        async def fake_fetch_all_news():
+            return FetchReport(
+                articles=list(fake_articles),
+                sources_polled=2,
+                sources_ok=2,
+                errors=[],
+                source_stats={},
+            )
+
+        async def fake_fetch_calendar(*args, **kwargs):
+            return ([], [])
+
+        async def fake_analyze_article(title: str, body: str = ""):
+            analysis = ArticleAnalysis(
+                category=NewsCategory.OTHER,
+                importance=EconomicImportance.LOW,
+                report_kind=ReportKind.GENERAL,
+                verification=Verification.CONFIRMED,
+                relevance_score=0.5,
+                assets=[],
+                event_summary=title[:200],
+                mode="heuristic",
+                note="fake analysis for test",
+            )
+            return analysis, True, None
+
+        monkeypatch.setattr("app.services.pipeline.fetch_all_news", fake_fetch_all_news)
+        monkeypatch.setattr("app.services.pipeline.fetch_calendar", fake_fetch_calendar)
+        monkeypatch.setattr("app.services.pipeline.analyze_article", fake_analyze_article)
 
         client = TestClient(app)
 
@@ -147,6 +209,9 @@ class TestHealthEndpoint:
         # Health should still respond quickly
         response = client.get("/api/health")
         assert response.status_code in (200, 503)
+        data = response.json()
+        assert "status" in data
+        assert "llm_enabled" in data
 
         # Wait for pipeline to complete
         await pipeline_task
