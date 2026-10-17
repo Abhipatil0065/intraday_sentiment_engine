@@ -312,6 +312,10 @@
         border-radius:4px;padding:1px 5px;margin-left:auto}
   .cal .row{font-size:10.5px;color:var(--dim);margin-top:3px}
   .cal .row b{color:var(--txt)}
+  .cal.upcoming{border-left-color:var(--neu);opacity:0.85}
+  .cal-upcoming{font-size:8px;text-transform:uppercase;background:var(--panel2);
+                border:1px solid var(--line);color:var(--dim);padding:1px 6px;
+                border-radius:3px;margin-left:6px}
   .alert{background:rgba(248,81,73,.06);border:1px solid rgba(248,81,73,.3);
          border-left-width:4px;border-radius:8px;padding:9px 13px;margin-bottom:8px;
          font-size:11.5px;line-height:1.45}
@@ -855,6 +859,7 @@ function renderPrepStrip(assets){
    only and are labelled (expected) so they are never read as outcomes. */
 function calRow(e){
   var released=(e.mode==='RELEASED');
+  var upcoming=(e.mode==='UPCOMING');
   var vals='';
   if(e.actual!==null&&e.actual!==undefined){
     vals+=' actual <b>'+esc(String(e.actual))+'</b>';
@@ -872,12 +877,24 @@ function calRow(e){
   try{
     when=new Date(e.when_utc).toISOString().slice(5,16).replace('T',' ');
   }catch(_){ when=''; }
-  return '<div class="cal">'
+  var until='';
+  if(upcoming){
+    try{
+      var due=new Date(e.when_utc).getTime();
+      var nowD=new Date().getTime();
+      var mins=Math.max(0,Math.round((due-nowD)/60000));
+      until=mins?' in '+mins+' min':' now';
+    }catch(_){ until=' at '+when; }
+  }
+  var cls='cal'+(upcoming?' upcoming':'');
+  var badge=upcoming?'<span class="cal-upcoming">UPCOMING</span>':'';
+  return '<div class="'+cls+'">'
     +'<div class="calh">'
       +'<span class="verdict '+esc(e.direction)+'">'+esc(e.direction)+'</span>'
       +'<span class="calt">'+esc(e.title)+'</span>'
-      +'<span class="calm">'+(released?'':'(expected) ')+esc(e.country||'')
-        +(when?(' &middot; '+esc(when)+' UTC'):'')+'</span>'
+      +badge
+      +'<span class="calm">'+esc(e.country||'')
+        +(when?(' &middot; '+esc(when)+' UTC'+until):'')+'</span>'
       +'<span class="cali">'+esc(e.impact||'')+'</span>'
     +'</div>'
     +'<div class="row">'+vals+'</div>'

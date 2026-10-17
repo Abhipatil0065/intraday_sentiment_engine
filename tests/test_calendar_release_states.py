@@ -288,7 +288,7 @@ def test_scaling_one_asset_never_changes_another_assets_weight():
                               strength=ImpactStrength.HIGH, relevance=relevance,
                               importance=EconomicImportance.HIGH, persistence=0.5,
                               reason="fixture",
-                              transmission="fixture", mode="EXPECTED")
+                              transmission="fixture", mode="UPCOMING")
 
     raw = [sig(Asset.GOLD, cap * 0.6), sig(Asset.GOLD, cap * 0.6),
            sig(Asset.SILVER, cap * 0.3), sig(Asset.BITCOIN, cap * 0.3)]

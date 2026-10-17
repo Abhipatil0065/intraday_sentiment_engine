@@ -484,14 +484,6 @@ class Settings(BaseSettings):
     calendar_awaiting_release_penalty: float = 0.35
     calendar_awaiting_release_enabled: bool = True
 
-    # Count only RELEASED prints. A print with no actual is a consensus
-    # expectation, not a realised move, so it must not reach the verdict, the
-    # card list, or the prep-card drivers until the provider publishes the
-    # number; it then enters on the next poll as a RELEASED print with its
-    # actual-vs-forecast surprise. Set True to restore the old behaviour where
-    # EXPECTED prints counted (damped by the awaiting-release rules below).
-    calendar_include_upcoming: bool = False
-
     # Phase 6: several prints share one timestamp (NFP + unemployment + wages).
     # They are combined into one composite release so a single macro moment is
     # not counted three times.

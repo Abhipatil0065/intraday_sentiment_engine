@@ -13,12 +13,14 @@ Two honest modes - the engine NEVER invents a print:
              consensus (forecast versus previous). This is labelled an
              expectation, never an outcome.
 
-By default the PIPELINE uses RELEASED prints only
-(``calendar_include_upcoming = False``): an un-released print is a consensus
-expectation, not a realised move, so it does not reach the bullish/bearish
-verdict, the economic-calendar cards, or the market-prep drivers until the
-provider publishes the actual. The moment the same release reappears with an
-``actual`` it is resolved through the RELEASED branch and counted then.
+By default the PIPELINE shows today's prints only, released and upcoming:
+an un-released print is a consensus expectation, not a realised move, so it
+is labelled UPCOMING and shown as a risk, never an outcome. The moment the
+same release reappears with an ``actual`` it is resolved through the RELEASED
+branch and counted then.
+
+Nothing from yesterday, tomorrow, or further out is included - the same-day
+boundary uses the engine's market timezone (``settings.market_timezone``).
 
 Every event carries a transmission chain explaining HOW it reaches the
 asset (e.g. "hot CPI -> higher real yields -> bearish gold").
@@ -29,6 +31,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from app.config import settings
 from app.logging_conf import get_logger
@@ -621,7 +624,7 @@ def evaluate(event: CalendarEvent, asset: Asset,
             strength=_strength_for(event.impact, importance, None),
             importance=importance,
             relevance=min(1.0, weighted_relevance * (1.0 + core_bonus)),
-            persistence=0.35, mode="EXPECTED", reason=reason,
+            persistence=0.35, mode="UPCOMING", reason=reason,
             transmission=profile.transmission, surprise=None,
         )
 
@@ -651,10 +654,10 @@ def signals_for_events(events: Sequence[CalendarEvent],
     Calendar signals for everything inside the forward-looking horizon.
 
     Events older than two hours are excluded: that print is history, and the
-    news feed already covers it. Un-released events are excluded by default
-    (``calendar_include_upcoming``): only a print whose ``actual`` has been
-    published can carry the verdict, so an expectation never moves the score
-    before the release exists.
+    news feed already covers it. Events outside today's market-timezone
+    boundary are excluded too: nothing from yesterday, tomorrow, or further
+    out reaches the summary. Released prints (actual populated) and upcoming
+    prints (no actual, scheduled for today) both produce signals.
 
     Delegates to :func:`resolve_calendar_signals`, which applies the Phase 3
     and Phase 6 stages after resolution.
@@ -750,7 +753,7 @@ def apply_awaiting_release(signals: Sequence[CalendarSignal],
 
     out: list[CalendarSignal] = []
     for sig in signals:
-        if sig.mode != "EXPECTED" or sig.event.when_utc is None:
+        if sig.mode not in ("EXPECTED", "UPCOMING") or sig.event.when_utc is None:
             out.append(sig)
             continue
 
@@ -895,6 +898,20 @@ def cap_composite_release(
     return out
 
 
+def _is_today(event: CalendarEvent, now_utc: datetime,
+              market_timezone: str) -> bool:
+    """True if the event's when_utc falls on today in market timezone.
+
+    The "today" boundary uses the engine's market timezone
+    (``settings.market_timezone``), not UTC - an event at 02:00 UTC can be
+    yesterday in America/New_York and must not appear on today's dashboard.
+    """
+    tz = ZoneInfo(market_timezone)
+    event_local = event.when_utc.astimezone(tz)
+    now_local = now_utc.astimezone(tz)
+    return event_local.date() == now_local.date()
+
+
 def resolve_calendar_signals(events: Sequence[CalendarEvent],
                              horizon_hours: int = 48,
                              now: datetime | None = None,
@@ -902,10 +919,11 @@ def resolve_calendar_signals(events: Sequence[CalendarEvent],
     """
     The full calendar pipeline, in the order the phases depend on each other:
 
-      1. resolve each event into per-asset signals
-      2. collapse the m/m and y/y rows of one release    (Phase 3)
-      3. damp or drop overdue expectations               (Phase 6)
-      4. cap the weight of one shared-timestamp cluster  (Phase 6)
+      1. filter to today's events in market timezone
+      2. resolve each event into per-asset signals
+      3. collapse the m/m and y/y rows of one release    (Phase 3)
+      4. damp or drop overdue expectations               (Phase 6)
+      5. cap the weight of one shared-timestamp cluster  (Phase 6)
 
     Order matters: the m/m+y/y collapse MUST run before the cluster cap. If it
     ran after, one print would arrive twice, pass the cap on its own merits,
@@ -914,11 +932,12 @@ def resolve_calendar_signals(events: Sequence[CalendarEvent],
     ``signals_for_events`` is kept as the pre-Phase-3 entry point and delegates
     here, so existing callers pick the new behaviour up automatically.
 
-    UN-RELEASED EVENTS ARE SKIPPED unless ``calendar_include_upcoming`` is set.
-    The pipeline therefore counts a print only once its ``actual`` exists, which
-    is also what makes the release appear in the cards: the provider's next
-    poll re-reports the same release (same ``event_key``) with the number
-    filled in, and it is resolved then through the RELEASED branch.
+    The same-day filter replaces ``calendar_include_upcoming`` entirely:
+    every event scheduled for today in market timezone reaches the summary,
+    released or upcoming. Nothing from yesterday, tomorrow, or further out is
+    included. A released print (``actual`` populated) is resolved through the
+    RELEASED branch; an upcoming print (no ``actual``) is resolved through the
+    UPCOMING branch and shown as an expectation, never an outcome.
     """
     reference = now or datetime.now(timezone.utc)
     # horizon_hours may arrive as a non-int (a test double, a string, a
@@ -933,6 +952,7 @@ def resolve_calendar_signals(events: Sequence[CalendarEvent],
     if horizon < 0:
         horizon = 0
     cutoff = reference + timedelta(hours=horizon)
+    tz = settings.market_timezone
     signals: list[CalendarSignal] = []
     for event in events:
         if event.when_utc is None:
@@ -941,12 +961,9 @@ def resolve_calendar_signals(events: Sequence[CalendarEvent],
             continue
         if event.when_utc > cutoff:
             continue
-        # An un-released print has no actual, so it is a consensus expectation
-        # rather than a realised move: it must not enter the aggregation, the
-        # cards, or the prep drivers before the number exists. With the flag
-        # off it is skipped here and resolves as a RELEASED signal on the poll
-        # that carries the actual.
-        if event.actual is None and not settings.calendar_include_upcoming:
+        # Same-day filter: only events scheduled for today in market timezone
+        # reach the summary, released or upcoming. Everything else is excluded.
+        if not _is_today(event, reference, tz):
             continue
         signals.extend(signals_for_event(event))
 
@@ -958,7 +975,7 @@ def resolve_calendar_signals(events: Sequence[CalendarEvent],
 def headline(event: CalendarEvent, signal: CalendarSignal) -> str:
     """One-line label used as the signal title in the dashboard."""
     stamp = event.when_utc.strftime("%H:%M UTC")
-    tag = "" if signal.mode == "RELEASED" else " (expected)"
+    tag = "" if signal.mode == "RELEASED" else " (upcoming)"
     return f"[{event.country}] {event.title}{tag} - {stamp}"
 
 
@@ -993,7 +1010,7 @@ def to_calendar_summary(signals: Sequence[CalendarSignal], asset: Asset,
             "transmission": sig.transmission,
         })
     rows.sort(key=lambda r: (
-        {"RELEASED": 0, "EXPECTED": 1}.get(r["mode"], 2),
+        {"RELEASED": 0, "UPCOMING": 1}.get(r["mode"], 2),
         -r["when_utc"].timestamp(),
     ))
     return rows[:limit]
