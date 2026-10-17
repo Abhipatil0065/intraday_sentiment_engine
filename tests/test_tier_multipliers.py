@@ -251,9 +251,9 @@ def test_ecb_hawkish_europe_bearish_not_in_asia():
     clear_bias_history()
     
     now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
-    # ECB hawkish headline with EUROPE keywords
+    # ECB hawkish headline with EUROPE keywords only (no global keyword match)
     ecb_hawkish = _s(
-        "ECB signals rate hike as inflation stays high",
+        "ECB Governing Council holds emergency meeting",
         source_quality="TIER_1_OFFICIAL",
         direction=Direction.BEARISH,  # hawkish = bearish for equities
         category=NewsCategory.CENTRAL_BANK,

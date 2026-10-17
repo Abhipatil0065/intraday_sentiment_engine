@@ -6,7 +6,9 @@ import pytest
 
 from app.analysis.equity_card import (
     _collapse_cross_asset,
+    _matches_region,
     build_equity_card,
+    GLOBAL_MACRO_WEIGHT,
     neutral_card,
     region_signals,
 )
@@ -54,10 +56,12 @@ def test_each_region_has_keywords():
 
 def test_asia_headline_does_not_count_in_us():
     asia = _eq_signal("Nikkei rallies as Bank of Japan holds rates")
-    us = _eq_signal("S&P 500 hits record as Fed signals cuts")
-    assert [s.title for s in region_signals([asia, us], SessionName.ASIA)] == [asia.title]
-    assert [s.title for s in region_signals([asia, us], SessionName.US)] == [us.title]
-    eu = _eq_signal("DAX climbs as ECB holds rates steady")
+    us = _eq_signal("Apple beats earnings estimates as revenue surges")
+    eu = _eq_signal("DAX climbs as ECB holds steady")
+    # Session-specific headlines match only their own session (no global-keyword
+    # overlap), so they do not leak into other regions.
+    assert [s.title for s in region_signals([asia, us, eu], SessionName.ASIA)] == [asia.title]
+    assert [s.title for s in region_signals([asia, us, eu], SessionName.US)] == [us.title]
     assert [s.title for s in region_signals([asia, us, eu], SessionName.EUROPE)] == [eu.title]
 
 
@@ -70,7 +74,9 @@ def test_non_equities_category_never_counts():
 
 
 def test_empty_region_returns_neutral_card():
-    us_only = [_eq_signal("Nasdaq climbs as Fed cuts rates")]
+    # A headline that matches neither ASIA keywords nor global keywords ->
+    # no signals for ASIA -> neutral carry-forward card.
+    us_only = [_eq_signal("Apple beats earnings estimates as revenue surges")]
     card = build_equity_card(us_only, now=NOW, session=SessionName.ASIA)
     assert card.no_data is True
     assert card.region == "ASIA"
@@ -114,9 +120,9 @@ def test_off_hours_falls_back_to_previous_session():
 # the previous session's window has not expired (newest session wins).
 def _all_regions_pool():
     return [
-        _eq_signal("Nikkei rallies as China stimulus lifts Asian shares"),
-        _eq_signal("DAX hits record as ECB signals rate cuts"),
-        _eq_signal("S&P 500 futures jump as Fed turns dovish"),
+        _eq_signal("Nikkei rallies as Bank of Japan holds rates"),
+        _eq_signal("DAX climbs as ECB holds steady"),
+        _eq_signal("Apple beats earnings estimates as revenue surges"),
     ]
 
 
@@ -238,4 +244,37 @@ def test_collapse_does_not_mutate_inputs():
     _collapse_cross_asset([src, other], now=NOW)
     assert src.relevance == before
     assert other.relevance == 0.9
+
+
+# ---------------- global macro keyword weighting (M4 fix) ----------------
+
+
+def test_asia_keyword_full_weight():
+    """An ASIA-specific headline gets match weight 1.0 for the ASIA session."""
+    sig = _eq_signal("Nikkei rallies as Bank of Japan holds rates")
+    matched = region_signals([sig], SessionName.ASIA)
+    assert len(matched) == 1
+    # EQUITIES category has equity relevance 1.00, times match weight 1.0.
+    assert matched[0].relevance == pytest.approx(1.0)
+
+
+def test_global_macro_partial_weight():
+    """A US CPI headline matches only global keywords, so it reaches every
+    session at GLOBAL_MACRO_WEIGHT (0.65)."""
+    sig = _eq_signal("US CPI accelerates as inflation prints above forecast")
+    for session in (SessionName.ASIA, SessionName.EUROPE, SessionName.US):
+        matched = region_signals([sig], session)
+        assert len(matched) == 1, f"{session.value} should include the CPI headline"
+        # EQUITIES category has equity relevance 1.00, times GLOBAL_MACRO_WEIGHT.
+        assert matched[0].relevance == pytest.approx(GLOBAL_MACRO_WEIGHT), (
+            f"{session.value} should weight global macro at {GLOBAL_MACRO_WEIGHT}")
+
+
+def test_unrelated_headline_no_match():
+    """A headline about a specific single stock matches no session keywords
+    (session-specific or global) and is excluded from every card."""
+    sig = _eq_signal("Walmart appoints new chief supply chain officer")
+    for session in (SessionName.ASIA, SessionName.EUROPE, SessionName.US):
+        assert region_signals([sig], session) == [], (
+            f"{session.value} should not match a single-stock headline")
 

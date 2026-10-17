@@ -110,10 +110,43 @@ def _state_key(region: str) -> str:
     """Carry-forward namespace for one region (mirrors the frontend flip key)."""
     return f"EQUITY:{region}"
 
+# Global macro keywords that apply to ALL equity sessions. A headline matching
+# only these (and no session-specific keyword) reaches every session card at
+# partial weight, so global evidence (Fed, CPI, NFP, yields, risk appetite)
+# is not dropped just because it names no regional index.
+GLOBAL_MACRO_KEYWORDS = {
+    "fed", "fomc", "federal reserve", "powell",
+    "cpi", "ppi", "inflation", "deflation",
+    "nfp", "payrolls", "unemployment", "jobless",
+    "gdp", "recession", "growth",
+    "pmi", "manufacturing", "services",
+    "rate cut", "rate hike", "hawkish", "dovish",
+    "treasury yield", "bond yield", "yields",
+    "tariff", "trade war", "sanctions",
+    "risk-on", "risk-off", "risk appetite",
+    "s&p 500", "s&p", "nasdaq", "dow", "equities",
+    "stocks rally", "stocks fall", "market selloff", "market rally",
+}
 
-def _matches_region(text: str, keywords: Sequence[str]) -> bool:
+# Weight applied to a signal whose headline matches only a global-macro
+# keyword (no session-specific keyword). Session-specific matches keep 1.0.
+GLOBAL_MACRO_WEIGHT = 0.65
+
+
+def _matches_region(text: str, keywords: Sequence[str]) -> float:
+    """Match weight for one headline against a session.
+
+    Returns 1.0 when the headline matches a session-specific keyword,
+    GLOBAL_MACRO_WEIGHT (0.65) when it matches a global-macro keyword only,
+    and 0.0 otherwise. Session-specific keywords always win over global ones,
+    so a Nikkei headline scores full weight in ASIA and is absent elsewhere.
+    """
     lowered = (text or "").lower()
-    return any(k and k in lowered for k in keywords)
+    if any(k and k in lowered for k in keywords):
+        return 1.0
+    if any(k and k in lowered for k in GLOBAL_MACRO_KEYWORDS):
+        return GLOBAL_MACRO_WEIGHT
+    return 0.0
 
 
 def _aware_utc(dt: datetime | None) -> datetime | None:
@@ -251,45 +284,54 @@ def _equity_relevance(category: NewsCategory) -> float:
 
 def region_signals(signals: Sequence[WeightedSignal],
                    session: SessionName) -> list[WeightedSignal]:
-    """Equity-relevant signals whose headline matches this region's keywords."""
+    """Equity-relevant signals whose headline matches this region's keywords.
+
+    Session-specific keywords give full weight (1.0); global-macro keywords
+    give partial weight (GLOBAL_MACRO_WEIGHT = 0.65) so global evidence
+    reaches every session without drowning out session-specific news.
+    """
     keywords = equity_keywords(session)
-    if not keywords:
+    if not keywords and not GLOBAL_MACRO_KEYWORDS:
         return []
     out = []
     for s in signals:
         if s.category not in EQUITY_CATEGORIES:
             continue
-        if _matches_region(s.title, keywords):
-            # Apply equity card's own relevance, but preserve 0.0 for suppressed signals
-            equity_rel = _equity_relevance(s.category)
-            if s.relevance == 0.0:
-                equity_rel = 0.0
-            out.append(WeightedSignal(
-                asset=Asset.EQUITY,  # proxy asset for scoring engine
-                title=s.title,
-                direction=s.direction,
-                strength=s.strength,
-                importance=s.importance,
-                published_at=s.published_at,
-                relevance=equity_rel,
-                persistence=s.persistence,
-                source_quality=s.source_quality,
-                session_multiplier=s.session_multiplier,
-                is_primary=s.is_primary,
-                event_key=s.event_key,
-                cluster_id=s.cluster_id,
-                corroboration=s.corroboration,
-                category=s.category,
-                reason=s.reason,
-                transmission=s.transmission,
-                report_kind=s.report_kind,
-                mode=s.mode,
-                surprise_weight=s.surprise_weight,
-                # Overnight admission: keep the proxy's freshness aligned with
-                # the signal it copies, so an off-window headline admitted this
-                # morning is not aged out of the equity card.
-                age_reference_utc=getattr(s, "age_reference_utc", None),
-            ))
+        match_weight = _matches_region(s.title, keywords)
+        if match_weight <= 0.0:
+            continue
+        # Apply equity card's own relevance, scaled by session match weight.
+        # Preserve 0.0 for suppressed signals (relevance 0.0 stays 0.0).
+        equity_rel = _equity_relevance(s.category)
+        if s.relevance == 0.0:
+            equity_rel = 0.0
+        equity_rel *= match_weight
+        out.append(WeightedSignal(
+            asset=Asset.EQUITY,  # proxy asset for scoring engine
+            title=s.title,
+            direction=s.direction,
+            strength=s.strength,
+            importance=s.importance,
+            published_at=s.published_at,
+            relevance=equity_rel,
+            persistence=s.persistence,
+            source_quality=s.source_quality,
+            session_multiplier=s.session_multiplier,
+            is_primary=s.is_primary,
+            event_key=s.event_key,
+            cluster_id=s.cluster_id,
+            corroboration=s.corroboration,
+            category=s.category,
+            reason=s.reason,
+            transmission=s.transmission,
+            report_kind=s.report_kind,
+            mode=s.mode,
+            surprise_weight=s.surprise_weight,
+            # Overnight admission: keep the proxy's freshness aligned with
+            # the signal it copies, so an off-window headline admitted this
+            # morning is not aged out of the equity card.
+            age_reference_utc=getattr(s, "age_reference_utc", None),
+        ))
     return out
 
 
