@@ -29,6 +29,7 @@ differently.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -299,6 +300,18 @@ def _collapse_members(members: list) -> list[WeightedSignal]:
     return _collapse_members_unkeyed(unkeyed)
 
 
+def _unkeyed_cluster_id(survivor) -> str:
+    """Stable generated ID for an unkeyed cluster.
+
+    Deterministic from the survivor's headline and published time, so
+    replaying the same tick produces the same ID. The "unkeyed-" prefix
+    guarantees it never collides with the ``event_key`` format used by keyed
+    clusters.
+    """
+    seed = f"{survivor.title or ''}|{survivor.published_at or ''}"
+    return "unkeyed-" + hashlib.sha1(seed.encode()).hexdigest()[:16]
+
+
 def _collapse_members_unkeyed(members: list) -> list:
     """Original path: one vote per direction inside a cluster with no event_key."""
     # Split by direction so opposing readings never share a cluster.
@@ -320,6 +333,11 @@ def _collapse_members_unkeyed(members: list) -> list:
         _now = _scoring_now()
         best = max(direction_members,
                    key=lambda s: max(0.0, _signal_weight(s, _now)))
+        # Stamp an unkeyed survivor with a stable generated ID so _aggregate
+        # counts this cluster as one vote instead of zero.
+        from dataclasses import replace
+        if not best.cluster_id:
+            best = replace(best, cluster_id=_unkeyed_cluster_id(best))
         # Count unique sources in this sub-cluster
         sources = {s.source_quality for s in direction_members}
         source_names = {getattr(s, 'source_name', '') for s in direction_members

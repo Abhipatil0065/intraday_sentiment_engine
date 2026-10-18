@@ -40,7 +40,6 @@ from app.ingestion.base import RawArticle
 from app.ingestion.economic_calendar import fetch_calendar
 from app.ingestion.news_fetcher import fetch_all_news
 from app.logging_conf import get_logger
-from app.market import market_prep, market_wrap
 from app.market import regime as regime_mod
 from app.market.session_detector import (
     detect_session,
@@ -237,7 +236,6 @@ def _final_weight_key(signal) -> tuple:
         signal.direction,
         signal.published_at,
         signal.event_key,
-        signal.cluster_id,
     )
 
 
@@ -1315,9 +1313,6 @@ def _recompute_sentiment(session, stats: IngestStats):
             asset_signals, asset, event_risk=at_risk,
             event_risk_note=risk_note,
             now=recompute_now)
-        prep = market_prep.build(asset_signals, category_weights, asset,
-                                 now=recompute_now)
-        wrap = market_wrap.build(asset_signals, asset, now=recompute_now)
 
         # Item 11: persist every published bias so it can be scored later.
         try:
@@ -1326,9 +1321,8 @@ def _recompute_sentiment(session, stats: IngestStats):
             log.debug("decision log write failed: %s", exc)
 
         # Binary bias: carry-forward history must equal the PUBLISHED (CURRENT)
-        # verdict. market_prep/market_wrap computed their own views above via
-        # compute() and would otherwise be the last write to the shared
-        # per-asset state.
+        # verdict. Only CURRENT is written below, so there is no stale prep/wrap
+        # write to the shared per-asset state.
         if (not current_result.stale
                 and current_result.confidence > 0.0
                 and current_result.confidence_label != "LOW"):
@@ -1336,8 +1330,6 @@ def _recompute_sentiment(session, stats: IngestStats):
 
         for scope, result in (
             ("CURRENT", current_result),
-            ("MARKET_PREP", prep.sentiment),
-            ("MARKET_WRAP", wrap.sentiment),
         ):
             if asset is Asset.EQUITY:
                 # Equity is served by the session-aware card
