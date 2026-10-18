@@ -214,6 +214,7 @@ class SentimentSnapshot(Base):
     # (carried-forward) verdict - the point of stale is that nothing new was
     # seen. Mirrors contributing_articles on a fresh verdict.
     signal_count: Mapped[int] = mapped_column(Integer, default=0)
+    contributing_clusters: Mapped[int] = mapped_column(Integer, default=0)
     # CONTRADICTION SPLIT: the old single contradiction_detected column is
     # retained as a deprecated alias populated from ``cluster_conflict`` for
     # backward compatibility. New consumers must use the two fields below.
@@ -406,3 +407,4 @@ class DroppedArticle(Base):
     llm_used: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, index=True)
+

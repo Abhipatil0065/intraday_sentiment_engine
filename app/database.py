@@ -209,6 +209,7 @@ def _add_missing_sentiment_columns() -> None:
         "bull": "FLOAT",
         "bear": "FLOAT",
         "baseline_score": "FLOAT",
+        "contributing_clusters": "INTEGER DEFAULT 0",
         "stale": "BOOLEAN DEFAULT 0",
         "confidence_label": "VARCHAR(8) DEFAULT 'LOW'",
         # CONTRADICTION SPLIT: the old flag is now an alias. Preserve historical
@@ -448,3 +449,21 @@ def get_db() -> Iterator[Session]:
         yield s
     finally:
         s.close()
+
+
+# Alias for session_scope so that tests and other callers can use get_session().
+get_session = session_scope
+
+
+
+
+
+
+
+
+
+
+
+
+
+

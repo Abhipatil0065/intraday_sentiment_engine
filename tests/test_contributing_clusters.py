@@ -94,21 +94,32 @@ def test_keyed_clusters_keep_event_key_as_cluster_id():
 
 def test_two_distinct_unkeyed_clusters_count_as_two():
     """Two distinct unkeyed clusters should count as 2."""
-    # Cluster A: 4 near-duplicates about Fed
+    # Cluster A: 4 near-duplicates about Fed (bullish)
     headlines_a = [
         "Fed holds rates steady as inflation cools",
         "Fed holds rates steady as inflation eases",
         "Fed holds rates steady as inflation cools further",
         "Fed holds rates steady amid cooling inflation",
     ]
-    # Cluster B: 4 near-duplicates about ECB (different entities)
+    # Cluster B: 4 near-duplicates about ECB (different entities, bearish)
     headlines_b = [
         "ECB holds rates steady as inflation cools",
         "ECB holds rates steady as inflation eases",
         "ECB holds rates steady as inflation cools further",
         "ECB holds rates steady amid cooling inflation",
     ]
-    signals = [_unkeyed(t, mins=i) for i, t in enumerate(headlines_a + headlines_b)]
+    signals_a = [_unkeyed(t, mins=i) for i, t in enumerate(headlines_a)]
+    signals_b = [build_signal(
+        asset=Asset.GOLD, title=t, direction=Direction.BEARISH,
+        strength=ImpactStrength.HIGH, importance=EconomicImportance.HIGH,
+        published_at=NOW - timedelta(minutes=i),
+        relevance=0.9, persistence=0.9,
+        source_quality="TIER_2_MAJOR", source_name="Reuters",
+        category=NewsCategory.GEOPOLITICS,
+        event_key="", cluster_id="",
+        report_kind=ReportKind.GENERAL, session_multiplier=1.0,
+    ) for i, t in enumerate(headlines_b)]
+    signals = signals_a + signals_b
 
     clustered = cluster_signals(signals, window_hours=0.5)
     agg = _aggregate(clustered, now=NOW)
@@ -191,3 +202,17 @@ def test_calendar_signals_carry_event_key_as_cluster_id():
     assert clustered[0].cluster_id == event.event_key, (
         f"calendar survivor.cluster_id must equal event_key "
         f"({clustered[0].cluster_id} != {event.event_key})")
+def test_contributing_clusters_in_payload():
+    """After a tick, the payload should expose contributing_clusters."""
+    from app.database import get_session
+    from app.main import build_payload
+
+    with get_session() as s:
+        payload = build_payload(s)
+
+    assets = payload.get("assets", [])
+    assert len(assets) > 0
+    for asset in assets:
+        cur = asset.get("current", {})
+        assert "contributing_clusters" in cur, f"missing on {asset['asset']}"
+        assert cur["contributing_clusters"] >= 0

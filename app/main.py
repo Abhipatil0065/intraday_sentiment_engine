@@ -376,7 +376,7 @@ def _block(session, asset: str, scope: str) -> dict:
         "confidence_label": getattr(snap, "confidence_label", "LOW"),
         "note": snap.note or "",
         "contributing_articles": snap.contributing_articles,
-        "contributing_clusters": 0,
+        "contributing_clusters": snap.contributing_clusters or 0,
         "signal_count": getattr(snap, "signal_count", 0),
         "contradiction_detected": bool(getattr(snap, "contradiction_detected", False)),
         "cluster_conflict": bool(getattr(snap, "cluster_conflict", False)),
@@ -502,8 +502,6 @@ def build_payload(session) -> dict:
             "asset": asset.value,
             "label": asset.label,
             "symbol": asset.value,
-            "market_prep": _block(session, asset.value, "MARKET_PREP"),
-            "market_wrap": _block(session, asset.value, "MARKET_WRAP"),
             "current": _block(session, asset.value, "CURRENT"),
             "economic_calendar": pipeline.calendar_summary(asset),
         })
@@ -925,9 +923,7 @@ async def console():
         out.append("-" * 74)
         out.append(f"{asset['label'].upper()} - {asset['symbol']}")
         out.append("-" * 74)
-        for key, title in (("market_prep", "MARKET PREP"),
-                           ("market_wrap", "MARKET WRAP"),
-                           ("current", "CURRENT DAY-TRADING SENTIMENT")):
+        for key, title in (("current", "CURRENT DAY-TRADING SENTIMENT")):
             b = asset[key]
             out.append(f"  {title}")
             out.append(f"    Bias:          {b['bias']}")
@@ -1002,3 +998,4 @@ async def index():
             "Expires": "0",
         },
     )
+
