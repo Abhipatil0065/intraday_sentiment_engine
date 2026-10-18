@@ -163,13 +163,11 @@ class EquityCard(BaseModel):
 
 
 class AssetView(BaseModel):
-    """Full dashboard payload for one asset: PREP + WRAP + CURRENT."""
+    """Full dashboard payload for one asset: CURRENT only."""
 
     asset: Asset
     label: str
     symbol: str
-    market_prep: SentimentBlock
-    market_wrap: SentimentBlock
     current: SentimentBlock
     economic_calendar: list[CalendarEventOut] = Field(default_factory=list)
 

@@ -243,6 +243,9 @@
          color:var(--dim);border-top:1px solid var(--line);padding-top:9px;
          margin-top:auto}
   .mfoot b{font-weight:700;color:var(--txt);font-size:12px}
+  .mscore{font-size:10px;color:var(--dim);margin-top:4px;font-family:monospace}
+  .risk-note{color:#e8a33d;font-size:10px;margin-top:4px;font-style:italic}
+  .burst{background:#ff6b35;color:#fff;font-size:9px;padding:2px 5px;border-radius:3px;font-weight:bold;margin-left:4px}
   .hr{height:1px;background:var(--line);margin:15px 0 0}
 
   .asset{background:var(--panel);border:1px solid var(--line);border-radius:10px;
@@ -337,6 +340,8 @@
   .ihead .time{font-size:10px;color:var(--dim);flex:0 0 auto;white-space:nowrap}
   .ihead .ttl{font-size:12px;flex:1 1 auto;min-width:0;overflow:hidden;
               text-overflow:ellipsis;white-space:nowrap}
+  .ttl a{color:inherit;text-decoration:none}
+  .ttl a:hover{color:var(--accent)}
   .item.open .ihead .ttl{white-space:normal}
   .tag{font-size:9px;letter-spacing:.6px;padding:2px 6px;border-radius:4px;
        border:1px solid var(--line);color:var(--dim);flex:0 0 auto;white-space:nowrap}
@@ -466,7 +471,7 @@
 <main>
   <div id="prepStrip"></div>
   <div id="regime"></div>
-  <h2>FINANCIALJUICE SESSION ANALYSIS</h2>
+  <h2 id="fjHeader">FINANCIALJUICE SESSION ANALYSIS</h2>
   <div id="fjWrap"></div>
   <h2>SECTION A &mdash; ECONOMIC CALENDAR</h2>
   <div id="assets"></div>
@@ -746,6 +751,17 @@ function scopeCard(b, label){
     ?'<span class="risk conflict">'
       +(b.evidence_split&&b.cluster_conflict?'SPLIT + CONFLICT'
         :(b.evidence_split?'SPLIT':'CONFLICT'))+'</span>':'');
+  var scoreLine = (b.raw_score !== null && b.raw_score !== undefined)
+    ? '<div class="mscore">score <b>' + n1(b.raw_score) + '</b>'
+      + ' · bull <b>' + n1(b.bull || 0) + '</b>'
+      + ' · bear <b>' + n1(b.bear || 0) + '</b></div>'
+    : '';
+  var riskNote = (b.event_risk && b.event_risk_note)
+    ? '<div class="msub risk-note">' + esc(b.event_risk_note) + '</div>'
+    : '';
+  var burstChip = ((b.burst_bull || 0) >= 3 || (b.burst_bear || 0) >= 3)
+    ? '<span class="burst">BURST ' + Math.max(b.burst_bull || 0, b.burst_bear || 0) + '</span>'
+    : '';
   return '<div class="mcard '+String(label||'').toLowerCase()
     +'" data-goto="asset-'+esc(b.asset||'')+'" title="Jump to the '
     +esc(String(label||'').toUpperCase())+' economic calendar">'
@@ -759,6 +775,7 @@ function scopeCard(b, label){
     +'<span class="conf-badge '+String(b.confidence_label||'LOW').toLowerCase()+'">'
     +(b.stale?'STALE \u00b7 ':'')+(b.confidence_label||'LOW')+'</span>'
     +conflictChip
+    +burstChip
     +'</div>'
     +'<div class="msub">news-weighted intraday sentiment \u00b7 n=<b>'+(+b.signal_count||0)+'</b></div>'
     +mbar(b)
@@ -784,6 +801,8 @@ function scopeCard(b, label){
     +'<span>n=<b>'+(+b.contributing_articles||0)+'</b></span>'
     +risk
     +'</div>'
+    +scoreLine
+    +riskNote
     +'</div>';
 }
 
@@ -806,6 +825,11 @@ function equityCard(){
   var region=(DATA&&DATA.equity_region)||e.region||'';
   var d=disp(e);
   var weak=((+e.confidence||0)<0.5)||e.stale;
+  var scoreLine = (e.raw_score !== null && e.raw_score !== undefined)
+    ? '<div class="mscore">score <b>' + n1(e.raw_score) + '</b>'
+      + ' · bull <b>' + n1(e.bull || 0) + '</b>'
+      + ' · bear <b>' + n1(e.bear || 0) + '</b></div>'
+    : '';
   return '<div class="mcard equity region-'+esc(String(region||'').toLowerCase())
     +'" data-goto="asset-EQUITY" title="Session equity card - follows the active session">'
     +'<div class="mtop"><span class="mname">'+esc(String(title).toUpperCase())+'</span>'
@@ -831,6 +855,7 @@ function equityCard(){
     +'<span>mode <b>'+esc(e.mode||'heuristic')+'</b></span>'
     +(e.note?('<span>'+esc(e.note)+'</span>'):'')
     +'</div>'
+    +scoreLine
     +'</div>';
 }
 
@@ -976,9 +1001,12 @@ function renderFeed(items){
   }
   box.innerHTML=list.map(function(it){
     var hits=(it.impacts||[]).map(function(i){return i.asset+' '+i.direction;});
+    var ttl = it.url
+      ? '<a href="' + esc(it.url) + '" target="_blank" rel="noopener">' + esc(it.title) + '</a>'
+      : esc(it.title);
     return '<div class="item"><div class="ihead">'
       +'<span class="time">'+esc(it.display_time)+'</span>'
-      +'<span class="ttl">'+esc(it.title)+'</span>'
+      +'<span class="ttl">' + ttl + '</span>'
       +'<span class="tag '+esc(String(it.importance).toUpperCase())+'">'
       +esc(it.importance)+'</span>'
       +'<span class="tag">'+esc(it.source)+'</span>'
@@ -1079,6 +1107,14 @@ function renderFinancialJuice(d){
       +'unavailable.</div>';
     return;
   }
+  var anyFound = d.boxes.some(function(b){ return b.found; });
+  var header = document.getElementById('fjHeader');
+  if (!anyFound) {
+    box.innerHTML = '';
+    if (header) header.style.display = 'none';
+    return;
+  }
+  if (header) header.style.display = '';
   var html='<div class="fjhead">'
     +'<span class="ft">FINANCIALJUICE SESSION ANALYSIS</span>'
     +'<span class="fd">Indian Date: '+esc(d.india_date_display||d.india_date)

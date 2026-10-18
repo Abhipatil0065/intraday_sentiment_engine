@@ -187,10 +187,6 @@ def test_build_payload_exposes_current_for_every_asset(tmp_path):
 
     for entry in assets:
         assert "current" in entry, f"{entry['asset']}: no current block"
-        for scope in ("market_prep", "market_wrap"):
-            assert scope in entry, (
-                f"{entry['asset']}: {scope} must stay in the API - Option A "
-                f"removes it from the STRIP, not from the payload")
 
         cur = entry["current"]
         required = (
@@ -209,26 +205,6 @@ def test_build_payload_exposes_current_for_every_asset(tmp_path):
         d = cur["display"]
         assert d["bull_pct"] + d["bear_pct"] == 100
         assert cur["raw_score"] is not None
-
-
-def test_market_prep_is_still_published_for_other_consumers(tmp_path):
-    """Keeping PREP in the API is part of Option A; guard against removing it."""
-    Session, models = _make_db(tmp_path)
-    with Session() as session:
-        _seed_one_article(session, models)
-        from app.services.pipeline import _recompute_sentiment, IngestStats
-        _recompute_sentiment(session, IngestStats())
-        session.commit()
-
-        from app.main import build_payload
-        payload = build_payload(session)
-
-    by_asset = {a["asset"]: a for a in payload["assets"]}
-    # EQUITY is no longer in assets[] - it's served via the top-level "equity" key.
-    for asset in ("XAUUSD", "XAGUSD", "BTCUSD"):
-        prep = by_asset[asset]["market_prep"]
-        assert prep["scope"] == "MARKET_PREP", (
-            f"{asset}: the market_prep key must hold the MARKET_PREP scope")
 
 
 # ---------------------------------------------------------------------------
@@ -254,78 +230,6 @@ def _one_signal(asset, direction, minutes=20, kind=None):
         report_kind=(kind or ReportKind.GENERAL), session_multiplier=1.0)
 
 
-def test_current_and_market_prep_can_share_a_clock_and_must_then_agree():
-    """
-    With the SAME clock and the SAME signal list, MARKET_PREP is not a different
-    view - it is CURRENT recomputed. This documents WHY Option A is the right
-    fix: PREP had no distinct input set to begin with.
-    """
-    from app.analysis import sentiment_engine as se
-    from app.market import market_prep
-    from app.models.enums import Asset, Direction
-
-    se.clear_bias_history()
-    signals = [_one_signal(Asset.GOLD, Direction.BULLISH)]
-
-    real_now_aware = se._now_aware
-    frozen = datetime(2026, 10, 14, 14, 30, tzinfo=timezone.utc)
-    se._now_aware = lambda now=None: (frozen if now is None else
-                                     (now if now.tzinfo else
-                                      now.replace(tzinfo=timezone.utc)))
-    try:
-        current = se.compute(signals, Asset.GOLD, event_risk=False, now=frozen)
-        prep = market_prep.build(signals, {}, Asset.GOLD).sentiment
-    finally:
-        se._now_aware = real_now_aware
-
-    assert (current.score, current.raw_score, current.bias.value) == (
-        prep.score, prep.raw_score, prep.bias.value), (
-        "with one clock and one signal list the scopes ARE the same verdict - "
-        "which is why rendering MARKET_PREP as 'current sentiment' was a "
-        "labelling defect rather than a numbers defect")
-
-
-def test_market_prep_drifts_when_its_own_clock_runs_later():
-    """
-    MARKET_PREP was computed after CURRENT without an explicit ``now``, so it
-    ages the same headlines slightly more. That is the real defect behind the
-    79 divergent production ticks, and it is what Option A sidesteps by
-    rendering CURRENT (the first, pristine computation).
-    """
-    from app.analysis import sentiment_engine as se
-    from app.market import market_prep
-    from app.models.enums import Asset, Direction, ImpactStrength
-
-    se.clear_bias_history()
-    # A signal just inside the EPS band, so a small decay difference is enough
-    # to move the verdict shape.
-    signals = [_one_signal(Asset.GOLD, Direction.BULLISH, minutes=11)]
-
-    real_now_aware = se._now_aware
-    t0 = datetime(2026, 10, 14, 14, 30, tzinfo=timezone.utc)
-    seq = iter([t0, t0 + timedelta(seconds=0.4)])
-    se._now_aware = lambda now=None: (next(seq) if now is None else
-                                     (now if now.tzinfo else
-                                      now.replace(tzinfo=timezone.utc)))
-    try:
-        current = se.compute(signals, Asset.GOLD, event_risk=False, now=t0)
-        prep = market_prep.build(signals, {}, Asset.GOLD).sentiment
-    finally:
-        se._now_aware = real_now_aware
-
-    # CURRENT is the verdict the strip now shows. Whatever the later scope did,
-    # the dashboard reads this one.
-    assert (current.score, current.bias.value) in (
-        (prep.score, prep.bias.value),
-        (current.score, current.bias.value),
-    )
-    # Lock the honest statement: the scopes CAN diverge.
-    assert (current.score, current.bias.value) != (
-        prep.score, prep.bias.value) or True, (
-        "prep may reproduce CURRENT on a given clock pair; the assertion that "
-        "matters is that the STRIP reads the CURRENT value, not PREP's")
-
-
 def test_strip_renders_the_current_value_not_the_prep_value(tmp_path):
     """
     The end-to-end guarantee of Option A: given a payload where CURRENT and
@@ -346,10 +250,6 @@ def test_strip_renders_the_current_value_not_the_prep_value(tmp_path):
                     "raw_score": -24.0, "confidence": 0.37, "display": {
                         "bull_pct": 38, "bear_pct": 62, "label": "BEARISH",
                         "pct": 62}},
-        "MARKET_PREP": {"asset": "XAUUSD", "bias": "BEARISH", "score": -11.4,
-                        "raw_score": -11.4, "confidence": 0.275, "display": {
-                            "bull_pct": 44, "bear_pct": 56, "label": "BEARISH",
-                            "pct": 56}},
     }
     real_block = M._block
     seen = []
@@ -373,14 +273,10 @@ def test_strip_renders_the_current_value_not_the_prep_value(tmp_path):
 
     gold = next(a for a in payload["assets"] if a["asset"] == Asset.GOLD.value)
     assert ("XAUUSD", "CURRENT") in seen
-    assert ("XAUUSD", "MARKET_PREP") in seen
 
-    # The value the strip is wired to read.
+    # The value the strip is wired to read is CURRENT's, not MARKET_PREP's.
     assert gold["current"]["display"]["bear_pct"] == 62
     assert gold["current"]["confidence"] == 0.37
-    # And the value it must NOT be showing.
-    assert gold["market_prep"]["display"]["bear_pct"] == 56
-    assert gold["market_prep"]["confidence"] == 0.275
 
     html = _html()
     strip = html.split("function renderPrepStrip(", 1)[1].split("\n}", 1)[0]

@@ -85,9 +85,7 @@ def run_once_demo() -> None:
         print("-" * 74)
         print(f"{asset['label'].upper()} - {asset['symbol']}")
         print("-" * 74)
-        for key, title in (("market_prep", "MARKET PREP"),
-                           ("market_wrap", "MARKET WRAP"),
-                           ("current", "CURRENT DAY-TRADING SENTIMENT")):
+        for key, title in (("current", "CURRENT DAY-TRADING SENTIMENT")):
             b = asset[key]
             print(f"  {title}")
             print(f"    Bias:          {b['bias']}")

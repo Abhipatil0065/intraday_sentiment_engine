@@ -249,8 +249,8 @@ def _seed_no_news(session, models):
                          ids=["no-news", "one-live-article"])
 def test_pipeline_persists_raw_score_for_every_scope(tmp_path, seeder):
     """
-    ``_recompute_sentiment`` must write ``raw_score`` on CURRENT, MARKET_PREP
-    and MARKET_WRAP - for all four assets - and it must never be NULL.
+    ``_recompute_sentiment`` must write ``raw_score`` on CURRENT - for all
+    three market assets - and it must never be NULL.
 
     Real articles are seeded so the engine produces a genuine verdict rather
     than the carry-forward default, and ``baseline_score`` is exercised in both
@@ -268,10 +268,10 @@ def test_pipeline_persists_raw_score_for_every_scope(tmp_path, seeder):
         assert rows, "the pipeline must append snapshots"
 
         by_key = {(r.asset, r.scope): r for r in rows}
-        # Step 6 (Option A): EQUITY is no longer in the asset loop.
-        # Only XAUUSD, XAGUSD, BTCUSD have CURRENT/MARKET_PREP/MARKET_WRAP.
+        # Only XAUUSD, XAGUSD, BTCUSD have snapshots; only CURRENT scope is
+        # written (MARKET_PREP/MARKET_WRAP are no longer persisted).
         assert {"XAUUSD", "XAGUSD", "BTCUSD"} <= {k[0] for k in by_key}
-        assert {"CURRENT", "MARKET_PREP", "MARKET_WRAP"} <= {k[1] for k in by_key}
+        assert {k[1] for k in by_key} == {"CURRENT"}
 
         for (asset, scope), row in sorted(by_key.items()):
             assert row.raw_score is not None, (
@@ -485,9 +485,10 @@ def test_migration_adds_raw_and_baseline_to_a_legacy_database(tmp_path, monkeypa
             signal_count INTEGER,
             contradiction_detected BOOLEAN,
             cluster_conflict BOOLEAN DEFAULT 0,
-            evidence_split BOOLEAN DEFAULT 0,
-            burst_bull INTEGER,
-            burst_bear INTEGER,
+              evidence_split BOOLEAN DEFAULT 0,
+              contributing_clusters INTEGER,
+              burst_bull INTEGER,
+              burst_bear INTEGER,
             price_note TEXT,
             stale BOOLEAN,
             confidence_label VARCHAR(8),
@@ -544,23 +545,24 @@ def _write_rows(path):
              signal_count INTEGER,
              contradiction_detected BOOLEAN,
              cluster_conflict BOOLEAN DEFAULT 0,
-             evidence_split BOOLEAN DEFAULT 0,
-             burst_bull INTEGER,
+              evidence_split BOOLEAN DEFAULT 0,
+              contributing_clusters INTEGER,
+              burst_bull INTEGER,
              burst_bear INTEGER,
              price_note TEXT,
              stale BOOLEAN,
              confidence_label VARCHAR(8),
              computed_at DATETIME NOT NULL
          );
-        INSERT INTO sentiment_snapshot
-            (asset,scope,score,raw_score,baseline_score,confidence,bias,mode,
-             delta_60m,event_risk,event_risk_note,damped_score,drivers,
-             bull_drivers,bear_drivers,conflict,note,contributing_articles,
-             signal_count,contradiction_detected,burst_bull,burst_bear,
-             price_note,stale,confidence_label,computed_at)
-        VALUES ('XAUUSD','CURRENT',17.8,100.0,NULL,0.3,'BULLISH','heuristic',
-                0.0,0,'',100.0,'[]','[]','[]',NULL,'n',3,3,0,0,0,'',1,'HIGH',
-                '2026-10-14 14:30:00');
+         INSERT INTO sentiment_snapshot
+             (asset,scope,score,raw_score,baseline_score,confidence,bias,mode,
+              delta_60m,event_risk,event_risk_note,damped_score,drivers,
+              bull_drivers,bear_drivers,conflict,note,contributing_articles,
+              signal_count,contradiction_detected,burst_bull,burst_bear,
+              price_note,stale,confidence_label,computed_at,contributing_clusters)
+         VALUES ('XAUUSD','CURRENT',17.8,100.0,NULL,0.3,'BULLISH','heuristic',
+                 0.0,0,'',100.0,'[]','[]','[]',NULL,'n',3,3,0,0,0,'',1,'HIGH',
+                 '2026-10-14 14:30:00',0);
     """)
     conn.commit()
     conn.close()
@@ -624,10 +626,10 @@ def test_block_falls_back_and_warns_for_a_legacy_row(tmp_path, monkeypatch, capl
         "delta_60m,event_risk,event_risk_note,damped_score,drivers,bull_drivers,"
         "bear_drivers,conflict,note,contributing_articles,signal_count,"
         "contradiction_detected,burst_bull,burst_bear,price_note,stale,"
-        "confidence_label,computed_at) VALUES "
+        "confidence_label,computed_at,contributing_clusters) VALUES "
         "('XAUUSD','CURRENT',17.8,NULL,NULL,0.3,'BULLISH','heuristic',0.0,0,"
         "'',100.0,'[]','[]','[]',NULL,'n',3,3,0,0,0,'',1,'HIGH',"
-        "'2026-10-14 14:30:00')")
+        "'2026-10-14 14:30:00',0)")
     conn.commit()
     conn.close()
 

@@ -141,8 +141,8 @@ def test_bull_bear_populated_for_every_asset_and_scope(tmp_path):
         assert "EQUITY" not in assets_written, "EQUITY snapshot must not be written"
         assert {"XAUUSD", "XAGUSD", "BTCUSD"} <= assets_written, (
             f"expected market assets written, got {sorted(assets_written)}")
-        assert {"CURRENT", "MARKET_PREP", "MARKET_WRAP"} <= scopes_written, (
-            f"expected all scopes written, got {sorted(scopes_written)}")
+        assert scopes_written == {"CURRENT"}, (
+            f"expected only CURRENT scope written, got {sorted(scopes_written)}")
 
         current = []
         for r in rows:
