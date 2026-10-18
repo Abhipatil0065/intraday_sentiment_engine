@@ -322,7 +322,11 @@ def _collapse_members_unkeyed(members: list) -> list:
     collapsed: list[WeightedSignal] = []
     for direction_members in by_dir.values():
         if len(direction_members) == 1:
-            collapsed.append(direction_members[0])
+            best = direction_members[0]
+            from dataclasses import replace
+            if not best.cluster_id:
+                best = replace(best, cluster_id=_unkeyed_cluster_id(best))
+            collapsed.append(best)
             continue
         # Representative = highest ACTUAL weight, recomputed here with the
         # same formula _signal_weight uses downstream. This is the weight

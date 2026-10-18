@@ -311,9 +311,15 @@
   .calh{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .calt{font-size:11.5px;font-weight:700;color:var(--txt)}
   .calm{font-size:10px;color:var(--dim);letter-spacing:.3px}
-  .cali{font-size:9px;color:var(--dim);border:1px solid var(--line);
-        border-radius:4px;padding:1px 5px;margin-left:auto}
-  .cal .row{font-size:10.5px;color:var(--dim);margin-top:3px}
+   .cali.high{background:#d9534f;color:#fff;border-color:#d9534f;font-weight:bold}
+   .cali.medium{background:#f0ad4e;color:#000;border-color:#f0ad4e;font-weight:bold}
+   .cali.low{background:var(--panel2);color:var(--dim)}
+   .calimp{font-size:8px;color:var(--dim);padding:1px 4px;border:1px dotted var(--line);border-radius:3px;text-transform:uppercase;letter-spacing:.5px}
+   .cal-affects{font-size:8px;color:var(--dim);padding:1px 4px;border:1px solid var(--line);border-radius:3px;letter-spacing:.5px;text-transform:uppercase}
+   .calfilters{display:flex;gap:6px;margin-bottom:8px}
+   .calfilters button{font-size:10px;padding:3px 10px;border:1px solid var(--line);background:var(--panel2);color:var(--dim);border-radius:3px;cursor:pointer;font-weight:600;letter-spacing:.5px}
+   .calfilters button.active{background:var(--accent);color:#000;border-color:var(--accent)}
+   .calfilters button:hover{border-color:var(--accent)}
   .cal .row b{color:var(--txt)}
   .cal.upcoming{border-left-color:var(--neu);opacity:0.85}
   .cal-upcoming{font-size:8px;text-transform:uppercase;background:var(--panel2);
@@ -907,16 +913,39 @@ function calRow(e){
       until=mins?' in '+mins+' min':' now';
     }catch(_){ until=' at '+when; }
   }
+  var impactClass = String(e.impact || '').toLowerCase();
+  var impactBadge = '<span class="cali ' + impactClass + '">' + esc(e.impact || '') + '</span>';
+  var importanceBadge = (e.importance && String(e.importance).toLowerCase() !== String(e.impact || '').toLowerCase())
+    ? '<span class="calimp">' + esc(e.importance) + ' imp.</span>'
+    : '';
+  var affectsTag = (e.affects && e.affects.length)
+    ? '<span class="cal-affects">' + e.affects.map(esc).join(' · ') + '</span>'
+    : '';
+  var elapsed = '';
+  if (released && e.when_utc) {
+    var ms = Date.now() - new Date(e.when_utc).getTime();
+    if (ms > 0) {
+      var mins = Math.round(ms / 60000);
+      elapsed = mins < 60
+        ? ' (' + mins + ' min ago)'
+        : ' (' + Math.floor(mins / 60) + 'h ' + (mins % 60) + 'm ago)';
+    }
+  }
   var cls='cal'+(upcoming?' upcoming':'');
   var badge=upcoming?'<span class="cal-upcoming">UPCOMING</span>':'';
-  return '<div class="'+cls+'">'
+  return '<div class="' + cls + '"'
+    + ' data-impact="' + esc(String(e.impact || '')) + '"'
+    + ' data-importance="' + esc(String(e.importance || '')) + '"'
+    + ' data-when="' + (e.when_utc ? new Date(e.when_utc).getTime() : 0) + '">'
     +'<div class="calh">'
       +'<span class="verdict '+esc(e.direction)+'">'+esc(e.direction)+'</span>'
       +'<span class="calt">'+esc(e.title)+'</span>'
+      +affectsTag
       +badge
       +'<span class="calm">'+esc(e.country||'')
-        +(when?(' &middot; '+esc(when)+' UTC'+until):'')+'</span>'
-      +'<span class="cali">'+esc(e.impact||'')+'</span>'
+        +(when?(' · '+esc(when)+' UTC'+until + elapsed):'')+'</span>'
+      +impactBadge
+      +importanceBadge
     +'</div>'
     +'<div class="row">'+vals+'</div>'
     +'<div class="row"><b>Read:</b> '+esc(e.reason||'')+'</div>'
@@ -924,19 +953,25 @@ function calRow(e){
     +'</div>';
 }
 function calendarBlock(rows){
+  var filters = '<div class="calfilters">'
+    + '<button data-cal-filter="all">ALL</button>'
+    + '<button data-cal-filter="high" class="active">HIGH</button>'
+    + '<button data-cal-filter="next2h">NEXT 2H</button>'
+    + '</div>';
   if(!rows||!rows.length){
     return '<div class="scope"><div class="shead"><span class="stitle">'
       +'ECONOMIC CALENDAR</span><span class="ssub">weighed into sentiment'
-      +'</span></div><div class="none">No qualifying macro releases inside '
+      +'</span></div>' + filters + '<div class="none">No qualifying macro releases inside '
       +'the forward-looking window.</div></div>';
   }
   return '<div class="scope"><div class="shead"><span class="stitle">'
     +'ECONOMIC CALENDAR</span><span class="ssub">weighed into sentiment'
     +'</span><span class="n">'+rows.length+'</span></div>'
-    +rows.map(calRow).join('')+'</div>';
+    + filters
+    + '<div id="calRows">' + rows.map(calRow).join('') + '</div></div>';
 }
 function renderAssets(assets){
-  document.getElementById('assets').innerHTML=(assets||[]).map(function(a){
+  var cards = (assets||[]).map(function(a){
     var rows=(a.economic_calendar||[]).length;
     return '<div class="asset '+String(a.label||'').toLowerCase()
       +'" id="asset-'+esc(a.symbol)+'">'
@@ -948,9 +983,26 @@ function renderAssets(assets){
       +esc(DATA.current_session)+'</span>'
       +'<span class="ssub">'+rows+' MACRO RELEASES</span>'
       +'</div></div>'
-      +calendarBlock(a.economic_calendar)
       +'</div>';
   }).join('');
+
+  var eventMap = {};
+  (assets||[]).forEach(function(a){
+    (a.economic_calendar||[]).forEach(function(ev){
+      var key = ev.title + '|' + ev.when_utc;
+      if (!eventMap[key]) {
+        eventMap[key] = Object.assign({}, ev, {affects: []});
+      }
+      eventMap[key].affects.push(a.symbol);
+    });
+  });
+  var sharedEvents = Object.values(eventMap);
+
+  document.getElementById('assets').innerHTML =
+    cards
+    + '<div class="asset shared-calendar" id="sharedCalendar">'
+    + calendarBlock(sharedEvents)
+    + '</div>';
 }
 function renderAlerts(alerts){
   var box=document.getElementById('alertsWrap');
@@ -1487,6 +1539,35 @@ async function labelBias(asset,outcome){
   }
 }
 
+
+document.addEventListener('click', function(ev){
+  var btn = ev.target.closest('[data-cal-filter]');
+  if (!btn) return;
+  var filter = btn.dataset.calFilter;
+  document.querySelectorAll('[data-cal-filter]').forEach(function(b){
+    b.classList.toggle('active', b === btn);
+  });
+  applyCalendarFilter(filter);
+});
+
+function applyCalendarFilter(filter){
+  var rowsContainer = document.getElementById('calRows');
+  if (!rowsContainer) return;
+  var rows = rowsContainer.querySelectorAll('.cal');
+  var now = Date.now();
+  rows.forEach(function(row){
+    var show = true;
+    if (filter === 'high') {
+      var impact = (row.dataset.impact || '').toLowerCase();
+      var importance = (row.dataset.importance || '').toLowerCase();
+      show = impact === 'high' || importance === 'high';
+    } else if (filter === 'next2h') {
+      var when = parseInt(row.dataset.when || '0', 10);
+      show = when > now && (when - now) < 2 * 60 * 60 * 1000;
+    }
+    row.style.display = show ? '' : 'none';
+  });
+}
 renderFilters();
 load(); connect(); setInterval(load,30000);
 </script>
