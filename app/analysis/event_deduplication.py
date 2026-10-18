@@ -136,7 +136,34 @@ class EventDeduplicator:
         return DedupeResult(event_key=key, canonical_title=title, is_new_event=True)
 
     def seed_from_titles(self, titles: Iterable[str],
-                         published_at: datetime) -> None:
-        """Rebuild the index from already-stored articles after a restart."""
-        for t in titles:
-            self.match(t, published_at, now=published_at)
+                         published_at: datetime | Iterable[datetime] | None = None,
+                         now: datetime | None = None) -> None:
+        """Rebuild the index from already-stored articles after a restart.
+
+        ``published_at`` may be a single clock applied to every title (the
+        historic behaviour, kept for backward compatibility), or an iterable of
+        per-row timestamps parallel to ``titles`` (``None`` entries fall back to
+        ``now``). Rows whose timestamp predates the prune window are still
+        seeded so a later identical-title article matches them and shares one
+        ``event_key`` instead of being counted again as a fresh event.
+        """
+        if now is None:
+            from app.utils import timeutils as T
+            now = T.now_utc()
+
+        title_list = list(titles)
+        n = len(title_list)
+        if published_at is None:
+            ts_list = [now] * n
+        elif isinstance(published_at, datetime):
+            ts_list = [published_at] * n
+        else:
+            ts_list = list(published_at)
+            if len(ts_list) < n:
+                ts_list = ts_list + [now] * (n - len(ts_list))
+            else:
+                ts_list = ts_list[:n]
+
+        for t, ts in zip(title_list, ts_list):
+            use_now = ts if ts is not None else now
+            self.match(t, use_now, now=use_now)

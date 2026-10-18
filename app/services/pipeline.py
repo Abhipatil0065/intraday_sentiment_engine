@@ -249,8 +249,10 @@ def seed_dedup_index_from_db(session) -> int:
     today's headlines as brand-new events and double-count them. This reseed is
     latched by ``_dedup_seeded`` so it runs exactly once per process.
 
-    Rows without a ``published_at_utc`` cannot be placed in the 12h prune
-    window, so they are skipped rather than seeded with a bogus timestamp.
+    Every stored headline from today is seeded - including rows whose
+    ``published_at_utc`` is NULL (they fall back to the tick clock) - so that a
+    later identical-title article matches an existing event and shares one
+    ``event_key`` instead of being counted again as a fresh event.
     Returns the number of titles seeded.
     """
     global _dedup_seeded
@@ -258,23 +260,28 @@ def seed_dedup_index_from_db(session) -> int:
         return 0
 
     rows = session.execute(
-        select(NewsArticle.title)
+        select(NewsArticle.title, NewsArticle.published_at_utc)
         .where(
             NewsArticle.published_at_utc.is_not(None),
             NewsArticle.is_today.is_(True),
         )
         .order_by(NewsArticle.id)
-    ).scalars().all()
+    ).all()
 
-    titles = [t for t in rows if t]
-    if titles:
-        # Use one clock for the whole rebuild: the tick clock. Individual seed
-        # rows keep their own stored timestamps only for overlap scoring;
-        # the window is absolute from here.
-        _dedup.seed_from_titles(titles, T.now_utc())
+    if rows:
+        titles = [t for t, _ in rows if t]
+        # Per-row timestamps; naive DB values are treated as UTC. A row whose
+        # timestamp predates the prune window is still seeded so a later
+        # identical-title article matches it and shares one ``event_key``.
+        timestamps = [
+            p if (p is not None and p.tzinfo is not None)
+            else (p.replace(tzinfo=timezone.utc) if p is not None else None)
+            for t, p in rows if t
+        ]
+        _dedup.seed_from_titles(titles, timestamps, now=T.now_utc())
 
     _dedup_seeded = True
-    return len(titles)
+    return len(titles) if rows else 0
 
 
 def _guid_suppressed(session, guid: str) -> bool:
@@ -1677,6 +1684,11 @@ async def run_once() -> IngestStats:
         log.debug("Pipeline already running; skipping this tick")
         return IngestStats(errors=["pipeline already running"])
 
+    # Auto-release a hung tick from a previous/crashed run so we don't
+    # block forever on max_instances=1.
+    if check_and_release_hung_tick():
+        log.warning("Released hung tick from previous run; proceeding with new tick")
+
     # Reset LLM circuit breaker at the start of each tick so a degraded
     # endpoint gets a fresh chance on the next poll.
     await llm_client.reset_circuit_breaker()
@@ -1702,6 +1714,12 @@ async def run_once() -> IngestStats:
         )
         stats.calendar_events = len(events)
         stats.calendar_signals = len(_calendar_signals)
+
+        # Stamp the tick as soon as ingestion+calendar succeed so a later
+        # failure in ingestion/classification/sentiment doesn't leave us at
+        # NO TICK forever.
+        _last_update = T.now_utc()
+        _last_successful_tick = _last_update.isoformat()
 
         with session_scope() as session:
             # STEP 9.2: reseed the dedup index from stored headlines once per
@@ -1862,8 +1880,6 @@ async def run_once() -> IngestStats:
             except Exception as exc:  # noqa: BLE001 - health cache must never break the tick
                 log.debug("health metrics cache update skipped: %s", exc)
 
-        _last_update = T.now_utc()
-        _last_successful_tick = _last_update.isoformat()
         log.info(
             "Pipeline complete: fetched=%d new=%d rejected=%d dup=%d "
             "llm_new_ok=%d llm_new_fail=%d llm_new_skip_batch=%d llm_new_skip_breaker=%d "
@@ -1879,6 +1895,8 @@ async def run_once() -> IngestStats:
     except Exception as exc:
         log.exception("Pipeline run failed")
         stats.errors.append(f"pipeline: {type(exc).__name__}: {exc}")
+        # Release any hung state so the next scheduler tick isn't blocked.
+        check_and_release_hung_tick()
         try:
             with session_scope() as session:
                 row = session.get(PipelineRun, run_id) if "run_id" in dir() else None

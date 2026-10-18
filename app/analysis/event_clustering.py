@@ -34,7 +34,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from app.analysis.sentiment_engine import STRENGTH_MULT, WeightedSignal
+from app.analysis.sentiment_engine import STRENGTH_MULT, WeightedSignal, _signal_weight, _ensure_aware
 from app.config import settings
 from app.logging_conf import get_logger
 from app.models.enums import Direction
@@ -355,6 +355,91 @@ def _collapse_members_unkeyed(members: list) -> list:
     return collapsed
 
 
+def _titles_near_duplicate(a: str, b: str) -> bool:
+    """True when two titles describe the same release by token overlap."""
+    ta = normalise_tokens(a)
+    tb = normalise_tokens(b)
+    if not ta or not tb:
+        return False
+    union = len(ta | tb)
+    inter = len(ta & tb)
+    jaccard = inter / union if union else 0.0
+    containment = inter / min(len(ta), len(tb))
+    return (0.5 * jaccard + 0.5 * containment) >= float(
+        settings.dedup_similarity_threshold)
+
+
+def _anchors_compatible(a, b) -> bool:
+    """True when two signals are not known to be distinct releases."""
+    from app.analysis.calendar_merge import _has_freq_conflict
+
+    ka = event_anchor(a.title)
+    kb = event_anchor(b.title)
+    # Same specific release anchor -> compatible, subject to frequency guard.
+    if ka is not None and ka == kb:
+        return not _has_freq_conflict(a.title, b.title)
+    # One or both unanchored: compatible unless a clear frequency conflict.
+    return not _has_freq_conflict(a.title, b.title)
+
+
+def _collapse_same_source_repeats(signals: list) -> list:
+    """
+    Collapse repeat headlines from the SAME source about the SAME release
+    on the SAME asset.
+
+    A single outlet re-serving (or re-wording) one story must not cast two
+    votes for one asset. Different assets each get their own signal, so a
+    headline impacting gold, silver, bitcoin and equity produces four
+    signals - one per card.
+
+    Keeps the highest-weight member per distinct release; different releases
+    (e.g. CPI m/m vs CPI y/y) are never merged.
+
+    Only signals from the same source, same asset, same direction, near-duplicate
+    titles and within a short re-serve window are collapsed - this never
+    splits legitimate separate prints (different assets, times, directions,
+    anchors or frequencies are preserved by the clustering that ran first).
+    """
+    RE_SERVE_WINDOW_MINUTES = 30
+
+    by_source_asset: dict = {}
+    for s in signals:
+        key = (getattr(s, "source_name", "") or "", getattr(s, "asset", None))
+        by_source_asset.setdefault(key, []).append(s)
+
+    out: list = []
+    now = _scoring_now()
+    for members in by_source_asset.values():
+        members.sort(
+            key=lambda s: max(0.0, _signal_weight(s, now)), reverse=True)
+        kept: list = []
+        for s in members:
+            is_dup = False
+            for k in kept:
+                # Opposite readings of one story are two readings, not one.
+                if s.direction is not k.direction:
+                    continue
+                # Only collapse genuine same-source re-serves, not separate
+                # prints hours apart.
+                s_ts = s.published_at
+                k_ts = k.published_at
+                if s_ts is None or k_ts is None:
+                    continue
+                s_ts = _ensure_aware(s_ts)
+                k_ts = _ensure_aware(k_ts)
+                if abs((s_ts - k_ts).total_seconds()) > RE_SERVE_WINDOW_MINUTES * 60:
+                    continue
+                if (_titles_near_duplicate(s.title, k.title)
+                        and _anchors_compatible(s, k)):
+                    is_dup = True
+                    break
+            if is_dup:
+                continue
+            kept.append(s)
+        out.extend(kept)
+    return out
+
+
 def cluster_signals(signals: list, window_hours: float = 0.5) -> list:
     """
     Cluster signals by normalized title within a time window.
@@ -510,6 +595,11 @@ def cluster_signals(signals: list, window_hours: float = 0.5) -> list:
         # capped corroboration boost for its independent sources.
         for cluster in clusters:
             clustered.extend(_collapse_members(cluster))
+
+    # Same-source repeat collapse: one outlet, one vote per release. Catches
+    # identical/same-release BLS (or any single-source) re-serves that ingestion
+    # dedup filed under different event_keys so they are counted once.
+    clustered = _collapse_same_source_repeats(clustered)
 
     return clustered
 
