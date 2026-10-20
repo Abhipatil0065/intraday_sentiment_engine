@@ -53,6 +53,7 @@ log = get_logger(__name__)
 
 WEB_DIR = Path(__file__).parent / "dashboard" / "web"
 _scheduler: AsyncIOScheduler | None = None
+_engine_paused: bool = False
 
 # Connected WebSocket clients for live push updates.
 _clients: set[WebSocket] = set()
@@ -575,6 +576,7 @@ def build_payload(session) -> dict:
         "alerts": alerts,
         "status": {
             "running": state["running"],
+            "paused": _engine_paused,
             "last_updated": state["last_updated"] or "",
             "last_poll_ok": state.get("last_successful_tick") or "",
             "stale": stale,
@@ -894,6 +896,32 @@ async def trigger_run():
         "llm_ok": stats.llm_ok, "llm_failed": stats.llm_failed,
         "errors": stats.errors[:10],
     }
+
+
+@app.post("/api/engine/pause")
+async def engine_pause():
+    """Pause the background pipeline scheduler so news stops fetching."""
+    global _engine_paused
+    _engine_paused = True
+    if _scheduler is not None:
+        try:
+            _scheduler.pause_job("intraday_pipeline")
+        except Exception:  # job may not exist yet (e.g. before first tick)
+            pass
+    return {"status": "paused"}
+
+
+@app.post("/api/engine/resume")
+async def engine_resume():
+    """Resume the background pipeline scheduler so news starts fetching again."""
+    global _engine_paused
+    _engine_paused = False
+    if _scheduler is not None:
+        try:
+            _scheduler.resume_job("intraday_pipeline")
+        except Exception:  # job may not exist yet
+            pass
+    return {"status": "running"}
 
 
 @app.get("/api/console")

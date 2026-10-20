@@ -63,6 +63,21 @@
            font-weight:600;letter-spacing:.5px;cursor:pointer;white-space:nowrap}
    .runbtn:hover:not(:disabled){border-color:var(--gold);color:var(--gold)}
    .runbtn:disabled{opacity:.55;cursor:default}
+   /* Engine ON/OFF toggle - styled like the status pills (LLM: LIVE etc.). */
+   .engine-toggle{background:var(--panel2);border:1px solid var(--line);color:var(--dim);
+           border-radius:14px;padding:4px 12px;font:inherit;font-size:10.5px;
+           font-weight:700;letter-spacing:.5px;cursor:pointer;white-space:nowrap;
+           margin-right:10px}
+   .engine-toggle:hover:not(:disabled){border-color:var(--dim);color:var(--txt)}
+   .engine-toggle:disabled{opacity:.55;cursor:default}
+   /* ON = green like "LLM: LIVE" pill */
+   .engine-toggle.on{background:rgba(34,197,94,.10);border-color:rgba(34,197,94,.40);
+           color:#86efac}
+   .engine-toggle.on:hover:not(:disabled){border-color:#22c55e;color:#86efac}
+   /* OFF = red like "Pipeline: STOPPED" pill */
+   .engine-toggle.off{background:rgba(239,68,68,.10);border-color:rgba(239,68,68,.40);
+           color:#fca5a5}
+   .engine-toggle.off:hover:not(:disabled){border-color:#ef4444;color:#fca5a5}
    .quota{color:var(--dim);font-variant-numeric:tabular-nums;white-space:nowrap}
 
    /* ---- Bias calibration (manual outcome labels) ----
@@ -470,6 +485,7 @@
     <span class="pill live" id="pDb"><span class="dot"></span><span id="lDb">Pipeline: OK</span></span>
     <span class="pill alert-pill" id="pAlert"><span class="dot"></span><span id="lAlert">⚠️ ALERT: LLM Engine Down - Fallback Active</span></span>
     <button class="runbtn" id="runBtn" title="Run one pipeline pass now">RUN NOW</button>
+    <button class="engine-toggle off" id="engineToggle" title="Pause/Resume the engine">ENGINE: OFF</button>
     <span class="quota" id="tsLlmQuota"></span>
     <span class="ts" id="tsLastUpdated">Last Updated: n/a</span>
   </div>
@@ -1256,6 +1272,7 @@ function renderHeader(d){
   HEALTH.pipelineStatus = st.running ? 'RUNNING' : 'STOPPED';
   HEALTH.dbStatus = s.last_poll_ok ? 'OK' : 'STALE';
   HEALTH.lastUpdated = st.last_updated || '';
+  HEALTH.paused = s.paused || false;
 
   /* LLM rate-limit budget used in the last minute - the number that predicts
      the next degraded pill before the breaker trips. */
@@ -1303,6 +1320,16 @@ function renderHeader(d){
   var _lPipe=document.getElementById('lPipe'); if(_lPipe) _lPipe.textContent='Pipeline: '+HEALTH.pipelineStatus;
    var _lDb=document.getElementById('lDb'); if(_lDb) _lDb.textContent='Pipeline: '+(HEALTH.dbStatus==='OK'?'OK':'NO TICK');
   var _ts=document.getElementById('tsLastUpdated'); if(_ts) _ts.textContent='Last Updated: '+(HEALTH.lastUpdated||'n/a');
+  var _eng=document.getElementById('engineToggle');
+  if(_eng){
+    if(HEALTH.paused){
+      _eng.className='engine-toggle off';
+      _eng.textContent='ENGINE: OFF';
+    }else{
+      _eng.className='engine-toggle on';
+      _eng.textContent='ENGINE: ON';
+    }
+  }
 
   var alertPill=document.getElementById('pAlert');
   if(HEALTH.systemError){
@@ -1396,6 +1423,8 @@ document.addEventListener('click',function(e){
            renderFeed(FEED.items); }
   var run=e.target.closest('#runBtn');
   if(run){ runPipelineNow(); return; }
+  var eng=e.target.closest('#engineToggle');
+  if(eng){ toggleEngine(); return; }
   var lab=e.target.closest('[data-label]');
   if(lab){ labelBias(lab.getAttribute('data-asset'),lab.getAttribute('data-label'));
            return; }
@@ -1448,6 +1477,30 @@ async function runPipelineNow(){
     btn.textContent='RUN FAILED';
   }finally{
     setTimeout(function(){ btn.textContent='RUN NOW'; btn.disabled=false; },4000);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Engine ON/OFF toggle                                               */
+/* ------------------------------------------------------------------ */
+/* POST /api/engine/pause stops the background scheduler so no new news
+   is fetched. POST /api/engine/resume restarts it. The dashboard reloads
+   automatically on the next 30s poll, so the pills reflect the new state. */
+async function toggleEngine(){
+  var btn=document.getElementById('engineToggle');
+  var wantPause = !HEALTH.paused;   /* currently running -> pause */
+  var url = wantPause ? '/api/engine/pause' : '/api/engine/resume';
+  var label = wantPause ? 'PAUSING…' : 'RESUMING…';
+  if(btn){ btn.disabled=true; btn.textContent=label; }
+  try{
+    const r=await fetch(url,{method:'POST'});
+    await r.json().catch(function(){return {};});
+    load();   /* refresh so the pill / button reflect the new state */
+  }catch(e){
+    if(btn){ btn.textContent='TOGGLE FAILED'; }
+    setTimeout(function(){
+      if(btn){ btn.disabled=false; btn.textContent=HEALTH.paused?'ENGINE: OFF':'ENGINE: ON'; }
+    },2000);
   }
 }
 
