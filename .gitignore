@@ -27,3 +27,12 @@ Thumbs.db
 
 # Test artifacts
 pytest_session.log
+
+# Debug / probe artifacts (generated during development)
+debug_*.png
+scripts/debug_*.py
+scripts/probe_*.py
+scripts/*playwright*.json
+scripts/tv_*.json
+scripts/*_probe*.json
+scripts/tradingview_*.json
