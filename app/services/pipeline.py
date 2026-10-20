@@ -13,6 +13,7 @@ from __future__ import annotations
 import atexit
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from sqlalchemy import and_, delete, exists, func, or_, select
 
@@ -81,6 +82,38 @@ _dedup = EventDeduplicator()
 _dedup_seeded = False
 _last_update: datetime | None = None
 _last_successful_tick: str | None = None
+
+# Persistence file for last_successful_tick - survives process restarts so the
+# dashboard doesn't flash STALE on every API server restart (watchdog, deploy, etc.).
+_LAST_TICK_FILE = Path(__file__).resolve().parents[2] / "data" / "last_successful_tick.txt"
+
+
+def _load_last_successful_tick() -> str | None:
+    """Load persisted last_successful_tick from disk."""
+    try:
+        if _LAST_TICK_FILE.exists():
+            content = _LAST_TICK_FILE.read_text(encoding="utf-8").strip()
+            if content:
+                # Validate it's a valid ISO timestamp
+                datetime.fromisoformat(content)
+                return content
+    except Exception:
+        pass
+    return None
+
+
+def _save_last_successful_tick(value: str) -> None:
+    """Persist last_successful_tick to disk (best-effort)."""
+    try:
+        _LAST_TICK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _LAST_TICK_FILE.write_text(value, encoding="utf-8")
+    except Exception:
+        # Never fail a tick because of persistence issues
+        pass
+
+
+# Load persisted tick on module import (process startup)
+_last_successful_tick = _load_last_successful_tick()
 _news_since_update = 0
 _running = False
 _last_regime = None  # RegimeAssessment from the most recent recompute
@@ -1713,6 +1746,7 @@ async def run_once() -> IngestStats:
         # NO TICK forever.
         _last_update = T.now_utc()
         _last_successful_tick = _last_update.isoformat()
+        _save_last_successful_tick(_last_successful_tick)
 
         with session_scope() as session:
             # STEP 9.2: reseed the dedup index from stored headlines once per
