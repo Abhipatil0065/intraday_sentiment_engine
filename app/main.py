@@ -41,6 +41,7 @@ from app.models.db_models import (
     NewsEvent,
     PipelineRun,
     SentimentSnapshot,
+    Settings,
 )
 from app.models.enums import (
     Asset,
@@ -150,6 +151,19 @@ async def lifespan(app: FastAPI):
                     log.info("Bias warm-up loaded: %s", {k: v for k, v in rows.items()})
         except Exception as exc:  # noqa: BLE001 - never block startup
             log.warning("Bias warm-up skipped: %s", exc)
+
+    # Load engine paused state from database
+    if not _testing:
+        try:
+            from app.database import session_scope
+            with session_scope() as session:
+                setting = session.get(Settings, "engine_paused")
+                if setting and setting.value.lower() == "true":
+                    global _engine_paused
+                    _engine_paused = True
+                    log.info("Engine paused state restored from DB: PAUSED")
+        except Exception as exc:  # noqa: BLE001 - never block startup
+            log.warning("Engine paused state load skipped: %s", exc)
 
     if not _testing and settings.morning_brief_on_boot:
         # Overnight catch-up first: it rewrites the rows the morning's first
@@ -671,6 +685,7 @@ def health():
         status_code=status_code,
         content={
             "status": status_label,
+            "paused": _engine_paused,
             "llm_enabled": settings.has_llm,
             "llm_status": llm_client.llm_status(),
             "analysis_mode": "llm" if settings.has_llm else "heuristic",
@@ -908,7 +923,20 @@ async def engine_pause():
             _scheduler.pause_job("intraday_pipeline")
         except Exception:  # job may not exist yet (e.g. before first tick)
             pass
-    return {"status": "paused"}
+    # Persist to database
+    try:
+        from app.database import session_scope
+        with session_scope() as session:
+            setting = session.get(Settings, "engine_paused")
+            if setting is None:
+                setting = Settings(key="engine_paused", value="true")
+                session.add(setting)
+            else:
+                setting.value = "true"
+            session.commit()
+    except Exception as exc:  # noqa: BLE001 - never block the response
+        log.warning("Failed to persist engine paused state: %s", exc)
+    return {"status": "paused", "paused": True}
 
 
 @app.post("/api/engine/resume")
@@ -921,7 +949,20 @@ async def engine_resume():
             _scheduler.resume_job("intraday_pipeline")
         except Exception:  # job may not exist yet
             pass
-    return {"status": "running"}
+    # Persist to database
+    try:
+        from app.database import session_scope
+        with session_scope() as session:
+            setting = session.get(Settings, "engine_paused")
+            if setting is None:
+                setting = Settings(key="engine_paused", value="false")
+                session.add(setting)
+            else:
+                setting.value = "false"
+            session.commit()
+    except Exception as exc:  # noqa: BLE001 - never block the response
+        log.warning("Failed to persist engine paused state: %s", exc)
+    return {"status": "running", "paused": False}
 
 
 @app.get("/api/console")

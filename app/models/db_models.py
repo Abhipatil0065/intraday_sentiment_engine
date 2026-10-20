@@ -376,6 +376,17 @@ class BiasOutcome(Base):
     snapshot: Mapped["BiasSnapshot"] = relationship(back_populates="outcomes")
 
 
+class Settings(Base):
+    """Key-value settings persisted across restarts."""
+
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class DroppedArticle(Base):
     """A low-impact article deleted at ingest, suppressed for its trading day.
 

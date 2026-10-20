@@ -482,6 +482,7 @@
 </head>
 <body>
   <div class="stale-banner hidden" id="staleBanner"></div>
+  <div class="stale-banner hidden" id="pausedBanner" style="background:rgba(239,68,68,.95);">⏸️ ENGINE PAUSED — News fetching & sentiment computation stopped. Click <button class="engine-toggle on" id="resumeFromBanner" style="margin-left:10px;padding:2px 10px;font-size:11px;"><span class="dot"></span><span class="label">RESUME</span></button> to restart.</div>
 <header>
   <h1>INTRADAY NEWS SENTIMENT &amp; MARKET IMPACT ENGINE</h1>
   <div class="status-strip" id="statusStrip">
@@ -533,6 +534,7 @@ let FEED={items:[],total:0,loaded:0,page:60,busy:false};
     llmStatus:'LIVE',          // LIVE | STOPPED | IDLE
     pipelineStatus:'RUNNING',  // RUNNING | STOPPED
     dbStatus:'OK',             // OK | STALE
+    paused:false,              // engine paused by user
     systemError:null,          // string | null
     lastUpdated:''
   };
@@ -1279,6 +1281,8 @@ function renderHeader(d){
   HEALTH.lastUpdated = st.last_updated || '';
   HEALTH.paused = s.paused || false;
 
+  updateEngineUI();
+
   /* LLM rate-limit budget used in the last minute - the number that predicts
      the next degraded pill before the breaker trips. */
   var _quota=document.getElementById('tsLlmQuota');
@@ -1489,8 +1493,9 @@ async function runPipelineNow(){
 /* Engine ON/OFF toggle                                               */
 /* ------------------------------------------------------------------ */
 /* POST /api/engine/pause stops the background scheduler so no new news
-   is fetched. POST /api/engine/resume restarts it. The dashboard reloads
-   automatically on the next 30s poll, so the pills reflect the new state. */
+   is fetched. POST /api/engine/resume restarts it. The response includes
+   the new paused state so the UI updates instantly without waiting for
+   the next 30s poll. */
 async function toggleEngine(){
   var btn=document.getElementById('engineToggle');
   var wantPause = !HEALTH.paused;   /* currently running -> pause */
@@ -1499,13 +1504,39 @@ async function toggleEngine(){
   if(btn){ btn.disabled=true; btn.querySelector('.label').textContent=label; }
   try{
     const r=await fetch(url,{method:'POST'});
-    await r.json().catch(function(){return {};});
-    load();   /* refresh so the pill / button reflect the new state */
+    const data=await r.json().catch(function(){return {};});
+    if(typeof data.paused==='boolean'){
+      HEALTH.paused=data.paused;
+      updateEngineUI();
+    }else{
+      load();   /* fallback: refresh so the pill / button reflect the new state */
+    }
   }catch(e){
     if(btn){ btn.querySelector('.label').textContent='TOGGLE FAILED'; }
     setTimeout(function(){
       if(btn){ btn.disabled=false; btn.querySelector('.label').textContent=HEALTH.paused?'ENGINE: OFF':'ENGINE: ON'; }
     },2000);
+  }
+}
+
+function updateEngineUI(){
+  var btn=document.getElementById('engineToggle');
+  var banner=document.getElementById('pausedBanner');
+  var resumeBtn=document.getElementById('resumeFromBanner');
+  if(btn){
+    btn.disabled=false;
+    btn.className='engine-toggle '+(HEALTH.paused?'off':'on');
+    btn.querySelector('.label').textContent=HEALTH.paused?'ENGINE: OFF':'ENGINE: ON';
+  }
+  if(banner){
+    if(HEALTH.paused){
+      banner.classList.remove('hidden');
+    }else{
+      banner.classList.add('hidden');
+    }
+  }
+  if(resumeBtn){
+    resumeBtn.onclick=toggleEngine;
   }
 }
 

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
 from app.logging_conf import get_logger
-from app.models.db_models import Base
+from app.models.db_models import Base, Settings
 
 log = get_logger(__name__)
 
@@ -402,6 +402,33 @@ def _add_missing_dropped_article_table() -> None:
         log.warning("dropped_article table migration skipped: %s", exc)
 
 
+def _add_missing_settings_table() -> None:
+    """
+    Create the ``settings`` table for persisting key-value settings across restarts.
+
+    Same idempotent pattern as the other migrations - the table is created
+    only when it genuinely does not exist.
+    """
+    from sqlalchemy import text
+
+    try:
+        with engine.begin() as conn:
+            tables = {row[0] for row in conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table'"))}
+            if "settings" in tables:
+                return
+            conn.execute(text(
+                "CREATE TABLE settings ("
+                "key VARCHAR(64) NOT NULL PRIMARY KEY, "
+                "value TEXT DEFAULT '', "
+                "updated_at DATETIME NOT NULL"
+                ")"
+            ))
+            log.info("Created settings table")
+    except Exception as exc:  # noqa: BLE001 - never block startup
+        log.warning("settings table migration skipped: %s", exc)
+
+
 def init_db() -> None:
     """Create tables if they do not exist.
 
@@ -416,6 +443,7 @@ def init_db() -> None:
     _add_missing_sentiment_columns()
     _add_missing_bias_outcome_table()
     _add_missing_dropped_article_table()
+    _add_missing_settings_table()
     log.info("Database ready: %s", _redact(settings.resolved_database_url()))
 
 
