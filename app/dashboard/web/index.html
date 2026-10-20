@@ -78,6 +78,11 @@
    .engine-toggle.off{background:rgba(239,68,68,.10);border-color:rgba(239,68,68,.40);
            color:#fca5a5}
    .engine-toggle.off:hover:not(:disabled){border-color:#ef4444;color:#fca5a5}
+   /* Dot inside the engine toggle, matching the status pills. */
+   .engine-toggle .dot{width:7px;height:7px;border-radius:50%;display:inline-block;
+           margin-right:6px;box-shadow:0 0 6px currentColor}
+   .engine-toggle.on .dot{background:#22c55e}
+   .engine-toggle.off .dot{background:#ef4444}
    .quota{color:var(--dim);font-variant-numeric:tabular-nums;white-space:nowrap}
 
    /* ---- Bias calibration (manual outcome labels) ----
@@ -485,7 +490,7 @@
     <span class="pill live" id="pDb"><span class="dot"></span><span id="lDb">Pipeline: OK</span></span>
     <span class="pill alert-pill" id="pAlert"><span class="dot"></span><span id="lAlert">⚠️ ALERT: LLM Engine Down - Fallback Active</span></span>
     <button class="runbtn" id="runBtn" title="Run one pipeline pass now">RUN NOW</button>
-    <button class="engine-toggle off" id="engineToggle" title="Pause/Resume the engine">ENGINE: OFF</button>
+    <button class="engine-toggle off" id="engineToggle" title="Pause/Resume the engine"><span class="dot"></span><span class="label">ENGINE: OFF</span></button>
     <span class="quota" id="tsLlmQuota"></span>
     <span class="ts" id="tsLastUpdated">Last Updated: n/a</span>
   </div>
@@ -1324,10 +1329,10 @@ function renderHeader(d){
   if(_eng){
     if(HEALTH.paused){
       _eng.className='engine-toggle off';
-      _eng.textContent='ENGINE: OFF';
+      _eng.querySelector('.label').textContent='ENGINE: OFF';
     }else{
       _eng.className='engine-toggle on';
-      _eng.textContent='ENGINE: ON';
+      _eng.querySelector('.label').textContent='ENGINE: ON';
     }
   }
 
@@ -1491,15 +1496,15 @@ async function toggleEngine(){
   var wantPause = !HEALTH.paused;   /* currently running -> pause */
   var url = wantPause ? '/api/engine/pause' : '/api/engine/resume';
   var label = wantPause ? 'PAUSING…' : 'RESUMING…';
-  if(btn){ btn.disabled=true; btn.textContent=label; }
+  if(btn){ btn.disabled=true; btn.querySelector('.label').textContent=label; }
   try{
     const r=await fetch(url,{method:'POST'});
     await r.json().catch(function(){return {};});
     load();   /* refresh so the pill / button reflect the new state */
   }catch(e){
-    if(btn){ btn.textContent='TOGGLE FAILED'; }
+    if(btn){ btn.querySelector('.label').textContent='TOGGLE FAILED'; }
     setTimeout(function(){
-      if(btn){ btn.disabled=false; btn.textContent=HEALTH.paused?'ENGINE: OFF':'ENGINE: ON'; }
+      if(btn){ btn.disabled=false; btn.querySelector('.label').textContent=HEALTH.paused?'ENGINE: OFF':'ENGINE: ON'; }
     },2000);
   }
 }
