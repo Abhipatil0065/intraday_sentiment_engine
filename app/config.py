@@ -365,6 +365,9 @@ class Settings(BaseSettings):
     # "Name|type|url|weight|quality_tier" entries separated by commas/newlines.
     news_sources: str = ""
 
+    # TradingView symbol mapping override: "XAUUSD=FX_IDC:XAUUSD,BTCUSD=BITSTAMP:BTCUSD"
+    tradingview_symbol_map: str = ""
+
     # ---------------- assets ----------------
     # Item 2: S&P 500 as a first-class asset. EQUITY is iterated by the pipeline
     # like the other three, persisted to sentiment_snapshot/bias_snapshots, and

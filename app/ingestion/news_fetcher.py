@@ -21,6 +21,7 @@ from app.ingestion.base import (
 from app.ingestion.kitco import KitcoSource
 from app.ingestion.mock_source import MockSource
 from app.ingestion.rss_reader import RssSource
+from app.ingestion.tradingview_api import TradingViewAPISource
 from app.ingestion.website_monitor import WebsiteSource
 from app.logging_conf import get_logger
 
@@ -58,6 +59,8 @@ def build_sources() -> list:
             elif spec.kind == "fj":
                 from app.ingestion.financialjuice import FinancialJuiceSource
                 sources.append(FinancialJuiceSource(spec))
+            elif spec.kind == "tradingview_api":
+                sources.append(TradingViewAPISource(spec))
             else:
                 log.warning("Unknown source kind %r for %s - skipped", spec.kind, spec.name)
         except Exception as exc:  # noqa: BLE001
