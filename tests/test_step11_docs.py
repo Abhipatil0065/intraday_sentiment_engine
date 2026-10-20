@@ -139,7 +139,7 @@ def test_retired_constants_live_equivalents_are_the_module_ones():
     """The real thresholds are the engine's, which is why the settings died."""
     from app.analysis.sentiment_engine import EPS, TIEBREAK_MAX_CONFIDENCE
 
-    assert EPS == 12.0, "EPS is the old bias_min_abs_score"
+    assert EPS == 25.0, "EPS is the old bias_min_abs_score"
     assert TIEBREAK_MAX_CONFIDENCE == 0.30, (
         "TIEBREAK_MAX_CONFIDENCE is the old bias_min_confidence")
 

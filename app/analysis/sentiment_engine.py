@@ -197,7 +197,7 @@ _EARNINGS_MEGA_CAP_PATTERNS = [
 # of withholding a verdict. Mirrors the old settings.bias_min_abs_score floor
 # (12.0), so borderline calls flip exactly where the NO_BIAS gate used to
 # withhold them - the value is owned here, not re-read per call.
-EPS = 12.0
+EPS = 25.0
 
 # Used only when there are no signals, no history AND no newest article:
 # a documented constant, never a silent coin flip. Strictly directional.
@@ -1011,13 +1011,13 @@ def _aggregate(signals: Sequence[WeightedSignal],
 
     if not conflicting_burst:
         if burst_bull >= 5 and burst_bull > burst_bear:
-            bull *= 1.30
+            bull *= 1.05
         elif burst_bull >= 3 and burst_bull > burst_bear:
-            bull *= 1.20
+            bull *= 1.02
         elif burst_bear >= 5 and burst_bear > burst_bull:
-            bear *= 1.30
+            bear *= 1.05
         elif burst_bear >= 3 and burst_bear > burst_bull:
-            bear *= 1.20
+            bear *= 1.02
 
     return {"bull": bull, "bear": bear, "directionless": directionless,
             "bull_items": bull_items, "bear_items": bear_items,

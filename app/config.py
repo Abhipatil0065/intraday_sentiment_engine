@@ -206,11 +206,11 @@ class Settings(BaseSettings):
     # proposed default; raise it to make flips harder, lower to make them
     # easier.
     # DAY TRADING: lower threshold for faster flips (was 0.35)
-    flip_min_confidence: float = 0.30
+    flip_min_confidence: float = 0.50
     # Dampening factor for display/cue strength. damped = raw * total_weight / (total_weight + k).
     # k=0 disables dampening (damped = raw). Default 0.5.
     # DAY TRADING: less dampening for more responsive scores (was 0.5)
-    score_damping_k: float = Field(default=0.3, validation_alias="SCORE_DAMPING_K")
+    score_damping_k: float = Field(default=1.0, validation_alias="SCORE_DAMPING_K")
 
     # ---------------- per-asset baseline normalization (item 1) ----------------
     # Financial news is structurally negative-heavy, so raw cue scores carry a
@@ -349,13 +349,13 @@ class Settings(BaseSettings):
     # ---------------- stability / flip tuning ----------------
     # Minimum margin by which the opposite side must exceed the current side
     # to trigger a flip (unless a fresh Tier 1 item forces it).
-    flip_margin: float = Field(default=8.0, validation_alias="FLIP_MARGIN")
+    flip_margin: float = Field(default=20.0, validation_alias="FLIP_MARGIN")
     # Minimum minutes between bias flips for non-Tier-1 events.
-    flip_hold_minutes: int = Field(default=5, validation_alias="FLIP_HOLD_MINUTES")
+    flip_hold_minutes: int = Field(default=15, validation_alias="FLIP_HOLD_MINUTES")
     # Anti-whipsaw cooling period after a flip (minutes).
-    cooling_minutes: int = Field(default=10, validation_alias="COOLING_MINUTES")
+    cooling_minutes: int = Field(default=20, validation_alias="COOLING_MINUTES")
     # Wider margin required during cooling period.
-    cooling_margin: float = Field(default=12.0, validation_alias="COOLING_MARGIN")
+    cooling_margin: float = Field(default=18.0, validation_alias="COOLING_MARGIN")
 
     # ---------------- alerts ----------------
     alert_on_importance: str = "VERY_HIGH"
@@ -789,7 +789,7 @@ TIER_MULTIPLIERS = {
 TIER_HALF_LIVES = {
     "TIER_1": 1.5,
     "TIER_2": 1.25,
-    "TIER_3": 0.25,
+    "TIER_3": 1.0,
 }
 
 # STEP 7: Explicit half-life override per EventType (optional).

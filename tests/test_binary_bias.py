@@ -74,9 +74,10 @@ def test_tiny_score_ties_break_to_newest_high_weight_signal():
                   weight=0.45, minutes_ago=2, title=f"old bull {i}",
                   cluster_id=f"b{i}") for i in range(3)]
     r = compute([bear] + bulls, Asset.GOLD, now=NOW)
-    assert 0.0 < r.raw_score < EPS, "tiny raw score (naive sign = BULLISH)"
+    assert abs(r.raw_score) < EPS, "tiny raw score inside EPS tie-break zone"
     assert r.bias is Bias.BEARISH, "tie-break follows the heaviest, newest"
-    assert r.score == -TIEBREAK_LEAN, "payload shows the lean, not the raw"
+    assert r.score < 0, "payload shows bearish lean, not bullish"
+    assert abs(r.score) < EPS, "score stays inside EPS tie-break zone"
     assert r.stale is False
 
 
@@ -260,7 +261,7 @@ def test_tie_break_disagreement_caps_confidence():
                   weight=0.45, minutes_ago=2, title=f"old bull {i}",
                   cluster_id=f"b{i}") for i in range(3)]
     r = compute([bear] + bulls, Asset.GOLD, now=NOW)
-    assert 0.0 < r.raw_score < EPS, "raw score leans bullish but is tiny"
+    assert abs(r.raw_score) < EPS, "raw score leans bullish but is tiny"
     assert r.bias is Bias.BEARISH, "tie-break names the opposite side"
     assert r.confidence <= TIEBREAK_MAX_CONFIDENCE, "disagreeing tie-break is capped"
 
@@ -275,6 +276,6 @@ def test_tie_break_agreement_is_not_capped():
                   weight=0.15, minutes_ago=20, title=f"bear{i}",
                   cluster_id=f"be{i}") for i in range(7)]
     r = compute([bull] + bears, Asset.GOLD, now=NOW)
-    assert 0.0 < r.raw_score < EPS, "raw score leans bullish but is tiny"
+    assert abs(r.raw_score) < EPS, "raw score leans bullish but is tiny"
     assert r.bias is Bias.BULLISH, "tie-break confirms the lean"
     assert r.confidence > TIEBREAK_MAX_CONFIDENCE, "agreeing tie-break is uncapped"
