@@ -128,11 +128,17 @@ def build_signal(
 # direction. The primary signal is built for the article's own asset; this
 # helper builds a secondary, lower-weight copy for the PAIR so the bleed
 # reaches the aggregator without the article having to be classified twice.
-# The copy is deliberately down-weighted (0.40 on relevance AND persistence)
-# so it never outranks a direct XAGUSD story about silver itself, and it is
-# flagged is_primary=False so the dashboard can tell a bleed from a real
-# silver headline. Bitcoin and the equity proxy are excluded: they are not
-# in BLEED_PAIR, so build_bleed_signal() returns None for them automatically.
+# The copy is deliberately down-weighted (settings.gold_silver_bleed on BOTH
+# relevance AND persistence) so it never outranks a direct XAGUSD story about
+# silver itself, and it is flagged is_primary=False so the dashboard can tell
+# a bleed from a real silver headline. Bitcoin and the equity proxy are
+# excluded: they are not in BLEED_PAIR, so build_bleed_signal() returns None
+# for them automatically.
+#
+# THE BLEED FACTOR IS A CONFIG KNOB NOW. It used to be the literal 0.40
+# written into the two multiplications below, while settings.gold_silver_bleed
+# sat in config.py read by nothing - so "tune the bleed" changed nothing. The
+# value is read here, once, at call time.
 
 BLEED_CATEGORIES = {
     NewsCategory.CENTRAL_BANK,
@@ -147,6 +153,11 @@ BLEED_PAIR = {
     Asset.GOLD: Asset.SILVER,
     Asset.SILVER: Asset.GOLD,
 }
+
+
+def bleed_factor() -> float:
+    """The configured cross-asset bleed weight (settings.gold_silver_bleed)."""
+    return float(settings.gold_silver_bleed)
 
 
 def build_bleed_signal(primary: WeightedSignal) -> WeightedSignal | None:
@@ -168,6 +179,7 @@ def build_bleed_signal(primary: WeightedSignal) -> WeightedSignal | None:
         return None
 
     target_asset = BLEED_PAIR[primary.asset]
+    bleed = bleed_factor()
     # Build the bleed through build_signal(), never by constructing
     # WeightedSignal directly: that class is imported lazily inside
     # build_signal and is not in this module's namespace. Instantiating it
@@ -180,8 +192,8 @@ def build_bleed_signal(primary: WeightedSignal) -> WeightedSignal | None:
         strength=primary.strength,
         importance=primary.importance,
         published_at=primary.published_at,
-        relevance=primary.relevance * 0.40,
-        persistence=primary.persistence * 0.40,
+        relevance=primary.relevance * bleed,
+        persistence=primary.persistence * bleed,
         source_quality=primary.source_quality,
         category=primary.category,
         session_multiplier=primary.session_multiplier,

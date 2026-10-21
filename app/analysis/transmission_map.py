@@ -1011,7 +1011,24 @@ def detect_event_types(text: str, category: NewsCategory) -> list:
     Negation is applied HERE as well as in cue scoring: "the Fed rules out a
     rate cut" contains the words "rate cut", and without this guard it would be
     classified as DOVISH_POLICY - reading a hawkish statement as bullish.
+
+    MEMOISED. This function is the engine's hot path: profiling a live
+    recompute showed it at 97% of the total scoring time (7.8ms per call,
+    9.1 million regex searches across 400 signals), because the weight of
+    every signal is recomputed several times a tick - once in the aggregate,
+    again in the conflict check, twice more inside the 60-minute delta, and
+    once more in the tie-break.
+
+    The cache is keyed on (text, category) and returns a TUPLE internally, so
+    a caller can never mutate a shared result; the public function hands
+    back a fresh list every time.
     """
+    return list(_detect_event_types_cached(text or "", category))
+
+
+@lru_cache(maxsize=8192)
+def _detect_event_types_cached(text: str, category: NewsCategory) -> tuple:
+    """The memoised body of ``detect_event_types``. See its docstring."""
     from app.analysis.event_polarity import resolve_all
     from app.analysis.text_quality import neutralise_on_negation
 
@@ -1043,7 +1060,7 @@ def detect_event_types(text: str, category: NewsCategory) -> list:
         fallback = CATEGORY_FALLBACK.get(category)
         if fallback is not None:
             found.append(fallback)
-    return found
+    return tuple(found)
 
 
 # Event types that describe a single risk-regime theme. When two or more of

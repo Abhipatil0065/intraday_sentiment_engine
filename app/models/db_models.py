@@ -376,6 +376,32 @@ class BiasOutcome(Base):
     snapshot: Mapped["BiasSnapshot"] = relationship(back_populates="outcomes")
 
 
+class PricePoint(Base):
+    """
+    One observed spot price for one asset.
+
+    The outcome loop's ground truth. Every tick the engine records what the
+    price actually was, and a published bias is later scored against the price
+    it had when it was published and the price it had a horizon later.
+
+    Without this table there is nothing to measure the engine against, which
+    is why ``bias_outcome`` stayed empty for the whole life of the project:
+    the labels could only ever be entered by hand, one click per call, and
+    nobody ever clicked.
+
+    Rows are append-only and trimmed by age, like the news tables.
+    """
+
+    __tablename__ = "price_point"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    asset: Mapped[str] = mapped_column(String(12), index=True)
+    ts_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    price: Mapped[float] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String(32), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Settings(Base):
     """Key-value settings persisted across restarts."""
 

@@ -55,6 +55,9 @@ log = get_logger(__name__)
 WEB_DIR = Path(__file__).parent / "dashboard" / "web"
 _scheduler: AsyncIOScheduler | None = None
 _engine_paused: bool = False
+# True while the boot sequence (prime tick -> morning brief) owns the
+# pipeline. The periodic scheduler job stays paused for that whole window.
+_boot_in_progress: bool = False
 
 # Connected WebSocket clients for live push updates.
 _clients: set[WebSocket] = set()
@@ -72,6 +75,12 @@ async def _scheduled_tick() -> None:
     from blocking the main event loop, so /api/health and /api/dashboard
     remain responsive during a tick.
     """
+    if _engine_paused:
+        # A paused engine must not fetch news. The scheduler job is paused
+        # too, but the boot prime tick is not driven by the scheduler - this
+        # check is what keeps a restored pause from silently running anyway.
+        log.debug("Engine paused - skipping tick")
+        return
     started = T.stamp()
     try:
         stats = await asyncio.to_thread(_run_pipeline_sync)
@@ -111,6 +120,69 @@ async def _boot_morning_brief() -> None:
                      report.get("reason", ""))
     except Exception as exc:  # noqa: BLE001 - never block startup
         log.warning("Morning brief failed: %s", exc)
+
+
+def _apply_pause_to_scheduler() -> None:
+    """Pause or resume the periodic job to match the engine's state.
+
+    The job is paused in two situations:
+
+    * the operator paused the engine, and
+    * the boot sequence is running (prime tick, then morning brief).
+
+    The second case is the important one: the brief is a writer on the same
+    SQLite file as the tick, and a scheduled tick interleaving with it is
+    what produced "database is locked" on the tick's inserts and the
+    watchdog restarts that reset the freshness clock every morning.
+    """
+    if _scheduler is None:
+        return
+    try:
+        if _engine_paused or _boot_in_progress:
+            _scheduler.pause_job("intraday_pipeline")
+        else:
+            _scheduler.resume_job("intraday_pipeline")
+    except Exception as exc:  # noqa: BLE001 - never block startup
+        log.debug("Scheduler pause/resume skipped: %s", exc)
+
+
+async def _boot_sequence() -> None:
+    """
+    Boot order: prime the pipeline FIRST, then run the overnight catch-up.
+
+    The two used to start at the same instant, and that was the root cause of
+    the "STALE: no successful pipeline tick in the last 15 minutes" banner
+    that appeared every morning:
+
+    1. The brief can only judge headlines that are ALREADY in the database.
+       The overnight headlines are not there until something ingests them,
+       so the brief has to run after the first tick's ingest - not 15
+       seconds into it, when the tick is still fetching.
+    2. They are both writers on one SQLite file. Run together, the brief's
+       write transaction made the tick's inserts fail with "database is
+       locked" (articles silently lost) and made the brief's own commits
+       wait out the 30s busy timeout - blocking the API event loop long
+       enough for the watchdog to declare the server dead and kill it
+       mid-brief, which reset the freshness clock and restarted the whole
+       cycle.
+
+    The sequence is therefore strictly serial: tick -> brief -> normal
+    polling. Never raises.
+    """
+    global _boot_in_progress
+    _boot_in_progress = True
+    try:
+        await _scheduled_tick()
+        if settings.morning_brief_on_boot and not _engine_paused:
+            await _boot_morning_brief()
+        elif _engine_paused:
+            log.info("Boot sequence: engine is paused - skipping the "
+                     "overnight catch-up until it is resumed.")
+    except Exception as exc:  # noqa: BLE001 - never block startup
+        log.warning("Boot sequence failed: %s", exc)
+    finally:
+        _boot_in_progress = False
+        _apply_pause_to_scheduler()
 
 
 @asynccontextmanager
@@ -161,15 +233,14 @@ async def lifespan(app: FastAPI):
                 if setting and setting.value.lower() == "true":
                     global _engine_paused
                     _engine_paused = True
+                    # Mirror it into the pipeline so the freshness check can
+                    # tell "the operator stopped the engine" apart from
+                    # "the engine died" - a stopped engine is PAUSED, not
+                    # STALE, and must not raise the red freshness banner.
+                    pipeline.set_paused(True)
                     log.info("Engine paused state restored from DB: PAUSED")
         except Exception as exc:  # noqa: BLE001 - never block startup
             log.warning("Engine paused state load skipped: %s", exc)
-
-    if not _testing and settings.morning_brief_on_boot:
-        # Overnight catch-up first: it rewrites the rows the morning's first
-        # sentiment recompute must read, so the gap is judged before the
-        # session starts, not three minutes into it.
-        asyncio.create_task(_boot_morning_brief())
 
     if not _testing and settings.poll_interval_seconds > 0:
         _scheduler = AsyncIOScheduler(timezone=settings.market_timezone)
@@ -181,12 +252,24 @@ async def lifespan(app: FastAPI):
             coalesce=True,
             misfire_grace_time=120,
         )
+        # The boot sequence owns the first pass of the day (prime tick, then
+        # the morning brief). The periodic job stays paused until that
+        # sequence is done, so a scheduled tick can never interleave with
+        # the brief - they share one SQLite writer, and interleaving them is
+        # what produced "database is locked" and the watchdog restarts that
+        # reset the freshness clock every morning.
+        global _boot_in_progress
+        _boot_in_progress = True
         _scheduler.start()
+        _apply_pause_to_scheduler()
         log.info("Scheduler started (every %ds)", settings.poll_interval_seconds)
 
     if not _testing:
-        # Prime the pipeline immediately so the dashboard is never empty.
-        asyncio.create_task(_scheduled_tick())
+        # Prime the pipeline immediately so the dashboard is never empty, and
+        # run the overnight catch-up on top of the rows that prime tick
+        # ingested (the brief can only judge headlines that are already in
+        # the database).
+        asyncio.create_task(_boot_sequence())
 
     yield
 
@@ -343,15 +426,28 @@ def _block(session, asset: str, scope: str) -> dict:
     # Step 8: the same raw value tells the display whether the engine took this
     # label from its tie-break rule (|raw| < EPS). When it did and the split is
     # even, the card reads NEUTRAL 50/50 rather than a forced 51/49 lean.
-    _display_raw = snap.raw_score
-    if _display_raw is None:
+    #
+    # BASELINE CONTEXT. The baseline is NOT subtracted from the value the card
+    # shows. It was implemented as a transform and then MEASURED against the
+    # live history: the label changes on only 0.7-3.4% of ticks (so it does
+    # not fix the structural skew it was built for) while the sign rule drops
+    # from ~66% of ticks to 9.7-25.4% (so 75-90% of every card would become
+    # a LOW-confidence tie-break with a 50/50 bar). A trailing baseline is a
+    # CHANGE detector: it removes the change and leaves the level, so it
+    # cannot remove a structural skew.
+    #
+    # It is therefore published as CONTEXT - the asset's own recent norm -
+    # alongside the level the label and the bar are built from.
+    _level_raw = snap.raw_score
+    if _level_raw is None:
         # Rows written before the migration. Fall back to the published score
         # so a legacy database still renders, but say so loudly: the split on
         # those rows is NOT the raw lean the docstring promises.
         log.warning(
             "sentiment_snapshot %s/%s has no raw_score (legacy row); "
             "displaying the published score instead", asset, scope)
-        _display_raw = snap.score
+        _level_raw = snap.score
+    _display_raw = _level_raw
     _tie_break = abs(float(_display_raw)) < EPS
     return {
         "asset": asset, "scope": scope,
@@ -361,6 +457,10 @@ def _block(session, asset: str, scope: str) -> dict:
         # dashboard's own use and is never written back.
         "score": snap.score,
         "raw_score": _display_raw,
+        # The asset's own recent norm for this reading, so a reader can tell
+        # an unusual reading from a routine one. None when no baseline was
+        # available yet.
+        "baseline_score": getattr(snap, "baseline_score", None),
         # TASK 2: the aggregate totals behind this verdict, so a consumer can
         # compute r = min(bull,bear)/max(bull,bear) and see how split the
         # evidence actually was. NULL on legacy rows - the reader must treat
@@ -543,6 +643,16 @@ def build_payload(session) -> dict:
     specs = parse_source_config(settings.news_sources)
     detail = (last_run.detail or {}) if last_run else {}
 
+    # Which sources failed on the last tick. The per-source cache is
+    # refreshed by every tick, so it is the freshest view of the feed -
+    # "all 15 sources are down" is a real failure mode and used to be
+    # invisible on the dashboard.
+    per_source = health_metrics.get("per_source", {}) or {}
+    sources_failed = sorted(
+        name for name, info in per_source.items()
+        if isinstance(info, dict) and info.get("error")
+    )
+
     # Regime comes from the most recent sentiment recompute, not a constant.
     regime = state.get("regime")
     # Session-aware global equity card: NOW-only, computed in the recompute.
@@ -600,7 +710,16 @@ def build_payload(session) -> dict:
             "articles_today": articles_today,
             "events_today": events_today,
             "sources_polled": len(specs) + (1 if settings.use_mock_source else 0),
-            "sources_ok": detail.get("sources_ok", 0),
+            # None (not 0) when no tick has ever recorded a run: "no source
+            # answered" and "we have never asked" are different states, and
+            # the dashboard must not raise a dead-feed alert before the
+            # first tick has run.
+            "sources_ok": detail.get("sources_ok"),
+            # Names of the sources that failed on the last tick, so the
+            # dashboard can say WHICH feed is broken instead of only
+            # showing a count. Taken from the in-memory per-source cache
+            # the tick just filled in.
+            "sources_failed": sources_failed,
             "analysis_mode": "llm" if settings.has_llm else "heuristic",
             "llm_enabled": settings.has_llm,
             # Real LLM state for the header pill: "ok" / "degraded" (circuit
@@ -618,7 +737,7 @@ def build_payload(session) -> dict:
             "status": "degraded" if stale else "ok",
             "last_article_utc": health_metrics.get("last_article_utc"),
             "last_snapshot_utc": health_metrics.get("last_snapshot_utc"),
-            "per_source": health_metrics.get("per_source", {}),
+            "per_source": per_source,
         },
         "disclaimer": (
             "NEWS-BASED INTRADAY SENTIMENT. Not a price prediction, not a "
@@ -918,11 +1037,10 @@ async def engine_pause():
     """Pause the background pipeline scheduler so news stops fetching."""
     global _engine_paused
     _engine_paused = True
-    if _scheduler is not None:
-        try:
-            _scheduler.pause_job("intraday_pipeline")
-        except Exception:  # job may not exist yet (e.g. before first tick)
-            pass
+    # Mirror into the pipeline: a deliberately stopped engine is PAUSED, not
+    # STALE, so the freshness check must not raise the red banner over it.
+    pipeline.set_paused(True)
+    _apply_pause_to_scheduler()
     # Persist to database
     try:
         from app.database import session_scope
@@ -944,11 +1062,10 @@ async def engine_resume():
     """Resume the background pipeline scheduler so news starts fetching again."""
     global _engine_paused
     _engine_paused = False
-    if _scheduler is not None:
-        try:
-            _scheduler.resume_job("intraday_pipeline")
-        except Exception:  # job may not exist yet
-            pass
+    pipeline.set_paused(False)
+    # Stays paused if the boot sequence is still running - the brief must
+    # not be interleaved with a scheduled tick.
+    _apply_pause_to_scheduler()
     # Persist to database
     try:
         from app.database import session_scope

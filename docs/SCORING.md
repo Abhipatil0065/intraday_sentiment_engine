@@ -59,9 +59,32 @@ assetSensitivity — clamp(max transmission magnitude, 0.3, 1.0)
 speakerTier   — s.speaker_tier
 ```
 
-Half-lives: **TIER_1 1.5h, TIER_2 1.25h, TIER 0.25h.**
+Half-lives: **TIER_1 1.5h, TIER_2 1.25h, TIER_3 1.0h.**
 Overrides: FOMC 4h, NFP/CPI/PPI 3h, FOMC minutes 2h, GEOPOLITICAL_RISK 6h.
 Asset multipliers: GOLD 1.0, SILVER 1.0, BITCOIN 1.25. No EQUITY entry.
+
+### The stale mass cap
+
+Past `trading_day_cutoff_hours` the per-signal weight floors at
+`DECAY_FLOOR` (0.05) rather than zero — old news fades, it never vanishes.
+That floor is **per signal**, so with 130+ signals a tick the accumulated
+shelf of hours-old headlines becomes the majority of the evidence. Measured on
+the live database, the share of the day's surviving weight mass that was
+already older than the 8h cutoff:
+
+```
+hour  09  10  11  12  13  14  15  16  17  18  19  20  23
+stale 20% 29% 29% 31% 31% 56% 54% 68% 66% 69% 67% 65% 57%
+```
+
+So through the US session the card was majority-driven by news that had
+already been priced in hours ago, and a headline that just landed could not
+move it. `_aggregate` therefore caps each side's stale mass at
+`stale_mass_cap_ratio` (default **0.5**) times the card's **total fresh
+mass** — measured against the total, not against the same side's fresh mass,
+so a side with no fresh news of its own cannot be drowned by the other side's
+stale news either. With the default, at least half of every card is news
+from the last 8 hours. Set `STALE_MASS_CAP_RATIO=0` to disable the cap.
 
 ## From signals to a score
 
@@ -115,21 +138,48 @@ Confidence **never** scales the score. It only gates flips
 ```
 no signals            → carry the last bias forward, stale = True
 total < MIN_TOTAL_WEIGHT (0.15)
-                      → bias = heavier side; score = raw × total/0.15
-|raw| ≥ EPS (12.0)    → bias = sign(raw)
+                       → bias = heavier side; score = raw × total/0.15
+|raw| ≥ EPS (25.0)    → bias = sign(raw)
 otherwise             → bias = _tie_break_bias(...)   # heaviest, newest signal
 
 then _should_flip():
   1. no current bias                     → take the computed bias
   2. bull + bear ≤ 0                     → hold
   3. fresh TIER_1 opposite (< 1h)        → flip immediately, bypasses all gates
-  4. inside COOLING_MINUTES (10)         → margin widens to COOLING_MARGIN (12)
-  5. hold_elapsed < FLIP_HOLD_MINUTES (5)→ hold
-  6. score has not crossed by FLIP_MARGIN (8) → hold
-     (margin +10 when contradiction_detected)
+  4. inside COOLING_MINUTES              → margin widens to COOLING_MARGIN
+  5. hold_elapsed < FLIP_HOLD_MINUTES    → hold
+  6. confidence < FLIP_MIN_CONFIDENCE    → hold (a thin reading cannot move a badge)
+  7. score has not crossed by FLIP_MARGIN → hold
+      (margin +10 when contradiction_detected)
 
-score = payload_score(raw, final_bias)   # |raw| < EPS → ±TIEBREAK_LEAN (2.0)
+score = payload_score(raw, final_bias)   # label-consistent; a disagreement
+                                         # becomes ±TIEBREAK_LEAN (2.0)
 ```
+
+The gate constants are **read from `settings`**, so the `.env` values are the
+values that run: `FLIP_MARGIN` (default 5.0), `COOLING_MINUTES` (5),
+`COOLING_MARGIN` (8.0), `FLIP_HOLD_MINUTES` (2) and `FLIP_MIN_CONFIDENCE`
+(0.30). They used to be read through `hasattr(settings, 'FLIP_MARGIN')`,
+which is always False on a pydantic-settings object because the fields are
+lowercase — so every one of those knobs was inert and the engine ran on
+hardcoded fallbacks.
+
+### The published score never contradicts the badge
+
+`payload_score(raw, bias)` returns the raw score when its sign already
+agrees with the label, and a small lean of the **label's** sign when it does
+not. The disagreement is real: the stability gates can hold the previous bias
+while the aggregate has already turned, and a fresh TIER_1 release can flip
+the badge while the day's aggregate has not caught up. Before this rule the
+card published a badge and its opposite number side by side ("BEARISH
++40.0") — 24% of live ticks carried that contradiction, and 86% of those were
+TIER_1 override flips. The aggregate stays on `raw_score` for the audit
+trail, and the card note records why the two differ.
+
+The **drivers follow the published label**, not the computed one, for the
+same reason: 39.7% of live ticks used to publish a badge whose #1 driver
+pointed the opposite way. `bull_drivers` and `bear_drivers` still carry both
+sides, and `conflict` still names the strongest opposing headline.
 
 The engine is **binary**: it always names BULLISH or BEARISH, never withholds.
 A contradiction caps confidence at `TIEBREAK_MAX_CONFIDENCE` (0.30) and forces
@@ -231,16 +281,69 @@ Three layers, in order:
 
 ## Confidence calibration
 
-`tools/calibration_report.py` reads the human WORKED / FAILED / Mixed labels,
-buckets them by the engine's own confidence, and reports the observed hit rate.
-It prints a `CONFIDENCE_CALIBRATION` block to paste into `app/config.py`.
+`tools/calibration_report.py` reads the labels, buckets them by the engine's
+own confidence, and reports the observed hit rate. It prints a
+`CONFIDENCE_CALIBRATION` block to paste into `app/config.py`.
 
-**Currently unfitted by design**: `bias_outcome` has 0 rows, so there is nothing
-to fit and any mapping would be an invented formula.
-`calibrate_confidence()` is therefore an identity and the flag is off.
+The labels are now produced **automatically**. `app/services/outcomes.py`
+records a PENDING `bias_outcome` row every time the published bias **changes**
+for an asset, stores the price at the call in `price_point`, and resolves the
+call to WORKED / FAILED / Mixed once the horizon has elapsed. A move inside
+`outcome_min_move_pct` is Mixed, which the fitter counts as half a hit.
 
-The fitter joins `bias_snapshots` for the confidence —
-`bias_outcome.confidence` is written as a literal `0.0` by the POST endpoint.
+```
+python tools/calibration_report.py      # the calibration table
+python tools/hitrate_report.py --from-db   # the hit rate, by confidence and asset
+```
+
+Before this, `bias_outcome` could only be filled by hand — one click per
+call, ~1,400 clicks a day — so it had 0 rows for the whole life of the
+project, `calibrate_confidence()` was an identity *by design*, and the
+0.40 / 0.28 / 0.22 confidence coefficients had never been checked against
+anything.
+
+**Still unfitted by design.** The labels are now produced automatically, but
+the table has to accumulate first, and until it does `calibrate_confidence()`
+remains an identity and the flag stays off. An empty table cannot support a
+mapping, and inventing one is exactly the unfounded formula this step exists
+to avoid.
+
+Only BITCOIN has a reachable price feed, so the other assets stay PENDING
+until an operator supplies a price series.
+
+The fitter joins `bias_snapshots` for the confidence — `bias_outcome.confidence`
+is written as a literal `0.0` by the manual POST endpoint.
+
+## The baseline is CONTEXT, not a transform
+
+`bias_baseline` computes the asset's trailing median of its own recent raw
+scores. The obvious use — subtract it and publish the centred value — was
+implemented and then **measured against the live history**, and it does not do
+what it was built to do:
+
+* It barely changes the bias mix. The live database ran BTCUSD at 86.6%
+  BEARISH and EQUITY at 90.8% BEARISH with zero bull-dominant ticks; with the
+  baseline applied the label changes on only 0.7–3.4% of ticks, because the
+  baseline IS the trailing level and the day's level IS the trailing level.
+* It costs the card its information. The sign rule fires on only 9.7–25.4% of
+  ticks instead of ~66%, so 75–90% of every card would become a tie-break
+  verdict: LOW confidence, a 50/50 bar, and a label chosen by the single
+  heaviest headline. "Always bearish" would become "always uninformative".
+
+The reason is structural: a trailing baseline is a CHANGE detector, so it
+removes the change and leaves the level. A **structural** skew — a corpus
+whose vocabulary is negative — lives in the level, and no amount of centring
+will remove it. The measured cause of the skew is upstream of the score: the
+article-level mix for BTCUSD is 2.4:1 bearish, but among VERY_HIGH strength
+articles it is 7:1, and for XAGUSD the article mix is balanced (61 bearish / 60
+bullish) while the bearish articles still carry 4.2× the final weight. The
+amplification happens in the strength and event-tier classification, and that
+is where a fix belongs — validated by the outcome loop above.
+
+So the baseline is published as **context**: the card carries the level (what
+the label and the bar are built from) and the asset's own recent norm, and
+the note says whether the reading is in line with that norm or unusually far
+from it.
 
 ## Things this document deliberately does not claim
 
@@ -267,8 +370,14 @@ The fitter joins `bias_snapshots` for the confidence —
 |---|---|
 | change a weight factor | `sentiment_engine.py::_signal_weight` |
 | change how long news lives | `config.py::TIER_HALF_LIVES`, `EVENT_HALF_LIFE_OVERRIDE` |
+| change how much old news may count | `config.py::STALE_MASS_CAP_RATIO` |
+| change how hard it is to flip | `.env` `FLIP_MARGIN`, `COOLING_MINUTES`, `COOLING_MARGIN`, `FLIP_HOLD_MINUTES`, `FLIP_MIN_CONFIDENCE` |
+| change how much the gold/silver bleed counts | `.env` `GOLD_SILVER_BLEED` |
+| change the LLM budget | `.env` `LLM_BATCH_LIMIT`, `LLM_TICK_BUDGET_SECONDS` |
+| change the outcome horizon | `.env` `OUTCOME_HORIZON_MINUTES`, `OUTCOME_MIN_MOVE_PCT` |
 | add an event type | `transmission_map.py::EVENT_SIGNALS` + `transmission_map.json` + `DRIVER_RANKINGS` |
 | change a mapping's strength | `app/config/transmission_map.json` |
 | change what the card shows | `display.py::to_display` |
 | regenerate the map reference | `python tools/generate_transmission_docs.py` |
 | see whether confidence is honest | `python tools/calibration_report.py` |
+| see the hit rate | `python tools/hitrate_report.py --from-db` |

@@ -377,8 +377,17 @@ def neutral_card(session: SessionName, reason: str = "") -> EquityCardResult:
 
 def build_equity_card(all_signals: Sequence[WeightedSignal],
                       now: datetime | None = None,
-                      session: SessionName | None = None) -> EquityCardResult:
-    """Score the active region's equity-relevant signals into one card verdict."""
+                      session: SessionName | None = None,
+                      baseline: float | None = None) -> EquityCardResult:
+    """
+    Score the active region's equity-relevant signals into one card verdict.
+
+    ``baseline`` is the equity asset's trailing baseline, applied exactly as
+    it is for the three market assets: the verdict is made on the centred
+    lean, so the card cannot publish an uncentred LEVEL under a badge that
+    was decided on a centred value. None means no baseline is available, and
+    the card behaves exactly as it always did.
+    """
     active = session or equity_session()
     if active is SessionName.OFF_HOURS:
         active = equity_session()
@@ -435,7 +444,8 @@ def build_equity_card(all_signals: Sequence[WeightedSignal],
     # (compute). No duplicate tier logic here, so importance and tier never
     # double-count.
     result = compute_sentiment(proxy, Asset.EQUITY, now=now,
-                               history_key=_state_key(_region_of(active)))
+                               history_key=_state_key(_region_of(active)),
+                               baseline=baseline)
     info = EQUITY_SESSION_MAP.get(active, {})
     region = _region_of(active)
     drivers = []
@@ -465,6 +475,9 @@ def build_equity_card(all_signals: Sequence[WeightedSignal],
     # side publishes the small lean instead of the raw (contradicting) score.
     # The raw value is kept alongside it for logging only. Idempotent - compute
     # applies the same rule - so this is the card's own copy of the guarantee.
+    #
+    # The baseline is CONTEXT, not a transform - see the long note in
+    # sentiment_engine.compute for the measurement that settled it.
     score = payload_score(result.raw_score, result.bias)
     return EquityCardResult(
         region=region,

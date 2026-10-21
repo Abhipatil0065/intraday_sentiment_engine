@@ -40,6 +40,16 @@ param(
     # 1-2 minutes when the LLM endpoint is degraded.
     [int]$StartupTimeoutSeconds = 300,
 
+    # How long a RUNNING engine is given to answer /api/health before the
+    # watchdog replaces it. A boot tick with a slow LLM provider (and the
+    # morning brief behind it) can legitimately occupy the process for
+    # 15+ minutes. Killing it mid-tick resets the engine's in-memory tick
+    # state, so the dashboard falls back to "NO TICK" and the freshness
+    # clock restarts from zero - the reason the STALE banner showed up
+    # every morning. A slow engine is alive; only an unresponsive one is
+    # replaced.
+    [int]$EngineGraceSeconds = 900,
+
     # Seconds between health checks while supervising.
     [int]$WatchIntervalSeconds = 30,
 
@@ -124,6 +134,16 @@ function Test-DashboardHealthy {
           only restarts when the server CANNOT answer at all (connection
           refused), never when the pipeline is merely slow.
 
+          IMPORTANT: PowerShell's Invoke-WebRequest THROWS on any 4xx/5xx
+          response, so a plain try/catch cannot tell "the server answered
+          503" from "the server is dead" - both land in the catch block.
+          That distinction matters: /api/health returns 503 whenever the
+          pipeline is stale, and treating that as "dead" made the watchdog
+          kill a perfectly healthy engine every time the freshness window
+          lapsed - restarting the tick, resetting the freshness clock and
+          looping. The status code is now read out of the exception, and any
+          HTTP status means the process is alive.
+
           Pass -Strict to also require status:ok (used by Status reporting). #>
     param(
         [int]$TimeoutSec = 3,
@@ -139,6 +159,21 @@ function Test-DashboardHealthy {
         # Any HTTP response means the server is alive.
         return $true
     } catch {
+        # The server answered, but with an error status (503 degraded, 404,
+        # ...). That is a LIVE process - the watchdog must not kill it.
+        $status = $null
+        if ($_.Exception.Response) {
+            try { $status = [int]$_.Exception.Response.StatusCode } catch { $status = $null }
+        }
+        if ($status -and $status -ge 400) {
+            if ($Strict) {
+                # Strict mode wants 200 + status:ok - an error status is not ok.
+                return $false
+            }
+            return $true
+        }
+        # No response at all: connection refused, DNS failure, or a timeout.
+        # The process is genuinely gone or wedged.
         return $false
     }
 }
@@ -329,7 +364,7 @@ function _Start-Dashboard {
         # engine mid-tick resets its in-memory tick state, so the dashboard
         # then reads "NO TICK" on every restart forever. Only a genuinely
         # hung process (no response at all for this long) gets replaced.
-        if (Wait-DashboardHealthy -TimeoutSeconds 300) {
+        if (Wait-DashboardHealthy -TimeoutSeconds $EngineGraceSeconds) {
             Write-Log "Existing instance became healthy (PID $owner)." 'OK'
             return $true
         }
@@ -457,7 +492,12 @@ function Show-Status {
 
     if ($alive) {
         try {
-            $health = Invoke-RestMethod -Uri $HealthUrl -TimeoutSec 5 -ErrorAction Stop
+            # Invoke-WebRequest (not Invoke-RestMethod) so a 503 "degraded"
+            # body is still readable - the status report is most useful
+            # exactly when the pipeline is stale.
+            $raw = (Invoke-WebRequest -Uri $HealthUrl -UseBasicParsing `
+                                      -TimeoutSec 5 -ErrorAction Stop).Content
+            $health = $raw | ConvertFrom-Json
             $mode = $health.analysis_mode
             $llm = $health.llm_enabled
             $last = $health.last_poll_ok

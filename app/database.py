@@ -429,6 +429,46 @@ def _add_missing_settings_table() -> None:
         log.warning("settings table migration skipped: %s", exc)
 
 
+def _add_missing_price_point_table() -> None:
+    """
+    Create the ``price_point`` table for persisting observed spot prices.
+
+    Same idempotent pattern as the other migrations - the table is created
+    only when it genuinely does not exist, never dropped or rewritten. New
+    databases get it for free from ``Base.metadata.create_all`` in
+    ``init_db()``.
+
+    This table is the outcome loop's ground truth: without a price series
+    there is nothing to score a published bias against, which is why
+    ``bias_outcome`` had no rows for the whole life of the project.
+    """
+    from sqlalchemy import text
+
+    try:
+        with engine.begin() as conn:
+            tables = {row[0] for row in conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table'"))}
+            if "price_point" in tables:
+                return
+            conn.execute(text(
+                "CREATE TABLE price_point ("
+                "id INTEGER NOT NULL PRIMARY KEY, "
+                "asset VARCHAR(12) NOT NULL, "
+                "ts_utc DATETIME NOT NULL, "
+                "price FLOAT NOT NULL, "
+                "source VARCHAR(32) DEFAULT '', "
+                "created_at DATETIME NOT NULL"
+                ")"
+            ))
+            conn.execute(text(
+                "CREATE INDEX ix_price_point_asset ON price_point(asset)"))
+            conn.execute(text(
+                "CREATE INDEX ix_price_point_ts ON price_point(ts_utc)"))
+            log.info("Created price_point table")
+    except Exception as exc:  # noqa: BLE001 - never block startup
+        log.warning("price_point table migration skipped: %s", exc)
+
+
 def init_db() -> None:
     """Create tables if they do not exist.
 
@@ -444,6 +484,7 @@ def init_db() -> None:
     _add_missing_bias_outcome_table()
     _add_missing_dropped_article_table()
     _add_missing_settings_table()
+    _add_missing_price_point_table()
     log.info("Database ready: %s", _redact(settings.resolved_database_url()))
 
 

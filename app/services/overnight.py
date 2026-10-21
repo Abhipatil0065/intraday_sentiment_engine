@@ -56,6 +56,7 @@ import asyncio
 import atexit
 import json
 import os
+import subprocess
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -98,6 +99,12 @@ REPORT_DIR = BASE_DIR / "data" / "reports"
 
 # A lock older than this is treated as abandoned (stale process) and stolen.
 _LOCK_STALE_SECONDS = 30 * 60
+
+# How long the catch-up waits for an in-flight pipeline tick before it gives
+# up and runs anyway. The boot sequence runs the prime tick FIRST, so this
+# wait normally returns immediately; it exists for the case where a periodic
+# tick happens to be running when the brief starts.
+_IDLE_WAIT_SECONDS = 900
 # Commit cadence while rewriting classified rows. One commit per judged
 # article: every LLM call can take seconds to tens of seconds (retries,
 # timeouts, 429 backoff), so a larger batch keeps a SQLite write transaction
@@ -925,9 +932,38 @@ def _already_covered(window: OvernightWindow) -> bool:
     return state.get("last_window_end_utc") == window.end.isoformat()
 
 
+def _pid_alive(pid: int) -> bool:
+    """True when a process with this PID exists.
+
+    Used to tell an ORPHANED lock (the engine was killed and left the
+    lock file behind) from a genuinely held one. When the answer cannot be
+    determined the safe answer is returned - "alive" - so a live holder is
+    never taken over.
+    """
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            out = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                capture_output=True, text=True, timeout=15,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return True
+        return str(pid) in out.stdout
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return True
+    return True
+
+
 class _Lock:
     """Exclusive file lock so two processes never run the same pass."""
-
     def __init__(self, path: Path | None = None) -> None:
         # Resolved at call time, not at import: tests retarget the module
         # constant and the lock must follow it, never the repo's data dir.
@@ -957,11 +993,50 @@ class _Lock:
         return False
 
     def _stale(self) -> bool:
+        """True when the lock can be taken over from its current holder.
+
+        Two independent conditions:
+
+        * The holder is GONE. The lock file records the PID that created
+          it, and a PID that no longer exists cannot be holding anything.
+          Without this check a killed engine (the watchdog replaces a slow
+          process every time it misreads a 503 as a crash) left the lock
+          behind, and the next process had to skip the morning brief for
+          the whole 30-minute staleness window - so the overnight gap was
+          never judged at all.
+        * The lock is simply OLD. A holder that died without cleaning up
+          (hard power-off) is taken over after ``_LOCK_STALE_SECONDS``.
+
+        A live holder is never taken over.
+        """
         try:
             age = time.time() - self.path.stat().st_mtime
         except OSError:
             return True
-        return age > _LOCK_STALE_SECONDS
+        if age > _LOCK_STALE_SECONDS:
+            return True
+        return not self._holder_alive()
+
+    def _holder_alive(self) -> bool:
+        """True when the PID recorded in the lock file is still running.
+
+        Unreadable or unparseable content is treated as "held" - the safe
+        answer, because taking over a live lock would mean two processes
+        judging the same window and paying for it twice.
+        """
+        try:
+            raw = self.path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return True
+        if not raw:
+            return True
+        try:
+            pid = int(raw)
+        except ValueError:
+            return True
+        if pid == os.getpid():
+            return True
+        return _pid_alive(pid)
 
     def release(self) -> None:
         if self._fd is not None:
@@ -1045,6 +1120,26 @@ async def _run_pass(session, stamp: datetime, resolver, *, force: bool,
     return report
 
 
+async def _run_pipeline_off_loop():
+    """Run a full pipeline pass in a worker thread.
+
+    ``pipeline.run_once`` is a coroutine that does synchronous SQLite work.
+    Awaiting it directly runs that work ON the event loop, and a full tick
+    (fetch + LLM classification + sentiment recompute) is minutes of blocked
+    event loop - long enough for /api/health to stop answering and for the
+    watchdog to declare the server dead and kill it mid-brief.
+
+    The scheduler already runs its ticks exactly this way (app/main.py
+    ``_run_pipeline_sync``); the brief's final pass now does the same.
+    """
+    from app.services import pipeline
+
+    def _sync():
+        return asyncio.run(pipeline.run_once())
+
+    return await asyncio.to_thread(_sync)
+
+
 async def _await_pipeline_idle(timeout_seconds: int | None = None) -> bool:
     """Wait for any in-flight tick so the final rebuild pass is not skipped."""
     from app.services import pipeline
@@ -1084,6 +1179,15 @@ async def run_boot_catchup(*, force: bool = False, dry_run: bool = False,
             # ingest tick right now. Give that tick a head start so the
             # catch-up does not interleave with the boot ingest.
             await asyncio.sleep(grace)
+        # The brief is a writer on the same SQLite file as the pipeline tick.
+        # If a tick is still in flight, WAIT for it: interleaving the two is
+        # what produced "database is locked" on the tick's inserts (articles
+        # silently lost) and stalled the brief's own commits on the 30s busy
+        # timeout - blocking the API event loop long enough for the watchdog
+        # to kill the server and reset the freshness clock.
+        if not await _await_pipeline_idle(timeout_seconds=_IDLE_WAIT_SECONDS):
+            log.warning("Morning brief: a pipeline tick is still running after "
+                        "%ss - the catch-up may contend with it.", _IDLE_WAIT_SECONDS)
         report = await run_morning_brief(force=force, dry_run=dry_run,
                                          rejudge_all=rejudge_all, now=now)
         if report.get("status") != "completed":
@@ -1091,10 +1195,8 @@ async def run_boot_catchup(*, force: bool = False, dry_run: bool = False,
 
         # One more full pass: ingest anything published since the window was
         # resolved, then rebuild every snapshot from the refreshed verdicts.
-        from app.services import pipeline
-
         idle = await _await_pipeline_idle()
-        stats = await pipeline.run_once()
+        stats = await _run_pipeline_off_loop()
         report["final_pass"] = {
             "waited_for_idle": idle,
             "fetched": stats.fetched,

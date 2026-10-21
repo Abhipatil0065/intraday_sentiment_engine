@@ -90,10 +90,16 @@ def test_dashboard_stale_when_no_tick_running_and_none_completed(client):
 
 
 def test_dashboard_stale_when_tick_hung(client):
-    """Tick running past MAX_TICK_DURATION_SECONDS => stale even with a
-    recently completed tick on record (max_instances=1 blocks the next tick)."""
+    """A tick that is running AND has stopped making progress => stale.
+
+    "Hung" means wedged, not merely slow: the freshness stamp is
+    heartbeated while a tick works, so a tick that is past
+    MAX_TICK_DURATION_SECONDS but still heartbeating is alive and healthy
+    (see test_morning_stale_fix.py). A tick that stopped heartbeating
+    blocks every future tick (max_instances=1) and is genuinely stale.
+    """
     restore = _set_state(
-        last_tick=_ago(60).isoformat(),
+        last_tick=_ago(pipeline.HEARTBEAT_STALE_SECONDS + 60).isoformat(),
         running=True,
         started_at=_ago(pipeline.MAX_TICK_DURATION_SECONDS + 10),
     )
@@ -102,6 +108,27 @@ def test_dashboard_stale_when_tick_hung(client):
         status = payload["status"]
         assert status["stale"] is True
         assert status["stale_reason"] == "tick_hung"
+    finally:
+        restore()
+
+
+def test_dashboard_not_stale_for_a_slow_but_working_tick(client):
+    """A tick past the hard cap that is still heartbeating is NOT stale.
+
+    This is the morning regression: with a degraded LLM provider a boot
+    tick legitimately runs for 15+ minutes, and the old elapsed-time-only
+    rule called that "hung" and raised the red banner over live data.
+    """
+    restore = _set_state(
+        last_tick=_ago(30).isoformat(),
+        running=True,
+        started_at=_ago(pipeline.MAX_TICK_DURATION_SECONDS + 600),
+    )
+    try:
+        payload = client.get("/api/dashboard").json()
+        status = payload["status"]
+        assert status["stale"] is False
+        assert status["stale_reason"] is None
     finally:
         restore()
 
@@ -154,7 +181,12 @@ def test_dashboard_tick_running_with_recent_completed_tick(client):
     [
         (None, True, _ago(60)),                     # startup tick in flight
         (None, False, None),                        # never ticked, nothing running
-        (_ago(60).isoformat(), True, _ago(pipeline.MAX_TICK_DURATION_SECONDS + 10)),  # hung
+        # wedged: past the hard cap AND no heartbeat
+        (_ago(pipeline.HEARTBEAT_STALE_SECONDS + 60).isoformat(), True,
+         _ago(pipeline.MAX_TICK_DURATION_SECONDS + 10)),
+        # slow but working: past the hard cap, still heartbeating
+        (_ago(30).isoformat(), True,
+         _ago(pipeline.MAX_TICK_DURATION_SECONDS + 600)),
         (_ago(20 * 60).isoformat(), False, None),   # last tick too old
         (_ago(30).isoformat(), False, None),        # fresh
         (_ago(120).isoformat(), True, _ago(30)),    # mid-tick, recent history

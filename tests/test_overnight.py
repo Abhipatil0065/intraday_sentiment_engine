@@ -504,9 +504,15 @@ def test_boot_catchup_skips_without_a_gap(paths):
 
 
 def test_boot_catchup_refuses_to_double_spend(paths):
-    # A stale-looking lock is not stale (fresh mtime), so the second runner
-    # must decline rather than pay for the same window twice.
-    (paths["state"] / "morning_brief.lock").write_text("12345")
+    # A lock that is not stale (fresh mtime) AND is held by a live process
+    # must be respected: the second runner declines rather than pay for the
+    # same window twice. The lock file records the holder's PID - a PID that
+    # is no longer running means the lock was orphaned by a killed engine
+    # and can be taken over at once (see test_orphaned_lock_is_taken_over
+    # _immediately).
+    import os as _os
+
+    (paths["state"] / "morning_brief.lock").write_text(str(_os.getpid()))
     report = asyncio.run(overnight.run_boot_catchup(now=NOW))
     assert report["status"] == "locked"
 

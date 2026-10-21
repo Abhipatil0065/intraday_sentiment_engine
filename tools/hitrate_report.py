@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 """
 HIT-RATE REPORT (improvement item 11).
 
@@ -184,6 +184,117 @@ def _count_no_bias(records) -> int:
                if r.kind == "bias" and r.bias == "NO_BIAS")
 
 
+# --------------------------------------------------------------------------
+# Database mode: the engine's own automatic outcomes.
+# --------------------------------------------------------------------------
+def _db_path() -> str:
+    """The live database, resolved the same way the app resolves it."""
+    try:
+        from app.config import settings
+        url = settings.resolved_database_url()
+        if ":///" in url:
+            return url.split(":///", 1)[1]
+        return str(BASE_DIR / "data" / "intraday_sentiment.db")
+    except Exception:
+        return str(BASE_DIR / "data" / "intraday_sentiment.db")
+
+
+def load_db_outcomes(asset: str | None = None) -> list[dict]:
+    """
+    The engine's OWN resolved outcomes, read from ``bias_outcome``.
+
+    This is the automatic path: the outcome loop records a call when the
+    published bias changes, stores the price at the call, and resolves the
+    call to WORKED / FAILED / Mixed once the horizon has elapsed. A
+    "Mixed" call counts as half a hit, the same reading the calibration
+    fitter uses.
+
+    PENDING rows are excluded - an undecided call is not evidence either
+    way.
+    """
+    import sqlite3
+
+    path = _db_path()
+    if not Path(path).exists():
+        return []
+    con = sqlite3.connect(path)
+    con.row_factory = sqlite3.Row
+    try:
+        q = """
+            SELECT o.asset AS asset,
+                   o.bias  AS bias,
+                   o.outcome AS outcome,
+                   s.confidence AS confidence
+            FROM bias_outcome o
+            JOIN bias_snapshots s ON s.id = o.bias_snapshot_id
+            WHERE LOWER(o.outcome) IN ('worked', 'failed', 'mixed')
+        """
+        params: tuple = ()
+        if asset:
+            q += " AND o.asset = ?"
+            params = (asset.upper(),)
+        q += " ORDER BY o.date_utc ASC"
+        return [dict(r) for r in con.execute(q, params)]
+    finally:
+        con.close()
+
+
+def db_rows_to_scored(rows: list[dict]) -> list[dict]:
+    """Turn resolved outcome rows into the shape ``report`` expects."""
+    scored = []
+    for r in rows:
+        outcome = (r.get("outcome") or "").strip().lower()
+        if outcome == "worked":
+            hit = True
+        elif outcome == "failed":
+            hit = False
+        else:
+            hit = True          # mixed counts as half; tracked separately
+        conf = r.get("confidence")
+        try:
+            conf = float(conf)
+        except (TypeError, ValueError):
+            continue
+        scored.append({
+            "hit": hit,
+            "confidence": conf,
+            "bucket": bucket_for(conf),
+            "asset": r.get("asset") or "",
+            "mixed": outcome == "mixed",
+        })
+    return scored
+
+
+def report_db(rows: list[dict], by: str) -> None:
+    """Print the hit rate straight from the engine's own outcomes."""
+    print()
+    print("=" * 66)
+    print("HIT-RATE REPORT (engine's own automatic outcomes)")
+    print("=" * 66)
+    scored = db_rows_to_scored(rows)
+    print(f"Resolved calls   : {len(scored)}")
+    mixed = sum(1 for r in scored if r.get("mixed"))
+    pure = len(scored) - mixed
+    if pure:
+        rate = sum(1 for r in scored if r["hit"]) / pure
+        print(f"Hit rate (pure)  : {rate:.1%}  (Mixed excluded)")
+    if mixed:
+        half = (sum(1 for r in scored if r["hit"]) + 0.5 * mixed) / len(scored)
+        print(f"Hit rate (mixed=0.5): {half:.1%}")
+    print()
+    if not scored:
+        print("No resolved outcomes yet.")
+        print("The outcome loop resolves a call once the horizon has elapsed and")
+        print("the price history covers both ends of the window. Only BITCOIN has")
+        print("a reachable price feed, so the other assets stay PENDING.")
+        return
+    if by in ("confidence", "both"):
+        _print_grouped("BY CONFIDENCE BUCKET", scored, "bucket",
+                       order=[label for _, _, label in BUCKETS])
+    if by in ("asset", "both"):
+        _print_grouped("BY ASSET", scored, "asset")
+
+
 def _print_grouped(title: str, rows, key: str, order=None) -> None:
     print("-" * 66)
     print(title)
@@ -326,7 +437,17 @@ def main(argv=None) -> int:
     parser.add_argument("--stats-only", action="store_true",
                         help="report decision-log sample sizes without needing "
                              "a price CSV")
+    parser.add_argument("--from-db", action="store_true",
+                        help="use the engine's own automatically resolved "
+                             "outcomes instead of a price CSV")
+    parser.add_argument("--asset", default=None,
+                        help="restrict the DB mode to one asset (e.g. XAUUSD)")
     args = parser.parse_args(argv)
+
+    if args.from_db:
+        rows = load_db_outcomes(args.asset)
+        report_db(rows, args.by)
+        return 0
 
     log_reader = DecisionLog(args.log) if args.log else DecisionLog()
     records = log_reader.read()

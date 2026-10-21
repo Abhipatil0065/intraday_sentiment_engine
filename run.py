@@ -182,9 +182,15 @@ def run_morning_brief(*, force: bool = False, dry_run: bool = False,
     headline in it through the LLM for a HIGH / MEDIUM / LOW impact verdict,
     rebuild sentiment, and print the morning brief.
 
-    This is what the Windows logon task runs, so the pass also happens when
-    the engine server is started by hand later in the morning (the brief is
-    idempotent and cross-process locked, so it only ever pays once).
+    This is the manual entry point. The engine server runs the same catch-up
+    itself on boot (``app.main`` -> ``overnight.run_boot_catchup``), right
+    after the prime tick has ingested the overnight headlines - the brief can
+    only judge headlines that are already in the database. The Windows logon
+    task starts the watchdog, not this command.
+
+    Running it by hand is safe while the server is up: the brief is
+    idempotent per window and cross-process locked, so it only ever pays
+    once for a given window.
 
     For window overrides (--since / --until) use the module CLI directly:
     python -m app.services.overnight --help

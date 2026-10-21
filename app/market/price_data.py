@@ -33,6 +33,82 @@ UNAVAILABLE_NOTE = "Price-action confirmation unavailable."
 _COINBASE_PRODUCTS = {Asset.BITCOIN: "BTC-USD"}
 
 
+def _products_base() -> str:
+    """
+    The base URL for Coinbase's ``/products/...`` endpoints.
+
+    The configured ``PRICE_API_BASE_URL`` points at the v2 REST API
+    (``https://api.coinbase.com/v2``), but the ticker and stats endpoints live
+    on the EXCHANGE host (``https://api.exchange.coinbase.com``) with no
+    version prefix. Building the products URL straight from the configured
+    base therefore returned 404 for every call - which is why the
+    price-action confirmation read "Price-action confirmation unavailable." on
+    all 32,286 live snapshot rows, and why the outcome loop could not record
+    a single price.
+
+    Only the known Coinbase hosts are rewritten. A different configured host
+    (a proxy, a mirror) is used exactly as given.
+    """
+    configured = (settings.price_api_base_url or "").rstrip("/")
+    if configured.endswith("/v2"):
+        configured = configured[:-3]
+    if "api.exchange.coinbase.com" in configured:
+        return configured
+    if "api.coinbase.com" in configured:
+        return configured.replace("api.coinbase.com",
+                                  "api.exchange.coinbase.com")
+    return configured
+
+
+def _unwrap(payload) -> dict:
+    """
+    The data object from a Coinbase response.
+
+    The v2 API wraps it in ``{"data": {...}}``; the exchange endpoints return
+    the object itself. Both shapes are accepted so the reader does not depend
+    on which host answered.
+    """
+    if not isinstance(payload, dict):
+        return {}
+    inner = payload.get("data")
+    if isinstance(inner, dict):
+        return inner
+    return payload
+
+
+async def get_spot_price(asset: Asset) -> tuple[float | None, str]:
+    """
+    The current spot price for the asset, as ``(price, source)``.
+
+    ``(None, "")`` when there is no feed for the asset or the fetch failed -
+    never a guess. This is the price the OUTCOME LOOP records as ground
+    truth, so it is a single timestamped quote rather than the 24-hour
+    change the confirmation leg uses.
+
+    Coverage mirrors ``get_price_reading``: BTC only. GOLD and SILVER have
+    no reachable spot feed here, so their outcomes stay PENDING until the
+    operator supplies a price series.
+    """
+    if not settings.price_data_enabled:
+        return None, ""
+    product = _COINBASE_PRODUCTS.get(asset)
+    if not product:
+        return None, ""
+    url = f"{_products_base()}/products/{product}/ticker"
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(url, timeout=10.0)
+            resp.raise_for_status()
+            data = _unwrap(resp.json())
+            price = float(data.get("price") or data.get("last"))
+    except Exception as exc:  # noqa: BLE001 - any failure means unavailable
+        log.debug("Spot price fetch failed for %s: %s", asset, exc)
+        return None, ""
+    if price <= 0:
+        return None, ""
+    return price, "Coinbase"
+
+
 @dataclass
 class PriceReading:
     available: bool
@@ -45,11 +121,11 @@ class PriceReading:
 
 async def _fetch_spot(client: httpx.AsyncClient, product: str) -> dict | None:
     """24h ticker from a public exchange endpoint."""
-    url = f"{settings.price_api_base_url.rstrip('/')}/products/{product}/stats"
+    url = f"{_products_base()}/products/{product}/stats"
     try:
         resp = await client.get(url, timeout=10.0)
         resp.raise_for_status()
-        return resp.json().get("data")
+        return _unwrap(resp.json())
     except Exception as exc:  # noqa: BLE001 - any failure means unavailable
         log.debug("Spot fetch failed for %s: %s", product, exc)
         return None

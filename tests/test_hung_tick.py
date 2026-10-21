@@ -32,10 +32,22 @@ def test_check_and_release_hung_tick_within_limit():
 
 
 def test_check_and_release_hung_tick_exceeds_limit():
-    """When tick exceeds MAX_TICK_DURATION_SECONDS, should release and return True."""
+    """A tick past the hard cap that has STOPPED heartbeating is wedged.
+
+    Elapsed time alone is not enough - a tick with a slow LLM provider
+    legitimately runs for 15+ minutes and keeps heartbeating. Releasing
+    such a tick let a second tick start while the first was still writing
+    to the same SQLite file, which is where the "database is locked"
+    failures came from.
+    """
     pipeline._running = True
     pipeline._tick_started_at = datetime.now(timezone.utc) - timedelta(seconds=pipeline.MAX_TICK_DURATION_SECONDS + 10)
-    
+    old_stamp = pipeline._last_successful_tick
+    pipeline._last_successful_tick = (
+        datetime.now(timezone.utc)
+        - timedelta(seconds=pipeline.HEARTBEAT_STALE_SECONDS + 60)
+    ).isoformat()
+
     try:
         result = pipeline.check_and_release_hung_tick()
         assert result is True
@@ -44,20 +56,48 @@ def test_check_and_release_hung_tick_exceeds_limit():
     finally:
         pipeline._running = False
         pipeline._tick_started_at = None
+        pipeline._last_successful_tick = old_stamp
+
+
+def test_check_and_release_keeps_a_slow_but_working_tick():
+    """A tick past the hard cap that is still heartbeating must be left alone."""
+    pipeline._running = True
+    pipeline._tick_started_at = datetime.now(timezone.utc) - timedelta(seconds=pipeline.MAX_TICK_DURATION_SECONDS + 10)
+    old_stamp = pipeline._last_successful_tick
+    pipeline._last_successful_tick = datetime.now(timezone.utc).isoformat()
+
+    try:
+        result = pipeline.check_and_release_hung_tick()
+        assert result is False
+        assert pipeline._running is True   # still working
+        assert pipeline._tick_started_at is not None
+    finally:
+        pipeline._running = False
+        pipeline._tick_started_at = None
+        pipeline._last_successful_tick = old_stamp
 
 
 def test_health_response_tick_hung_state():
-    """Health endpoint should return 503 with stale_reason='tick_hung' when tick is hung."""
+    """Health endpoint should return 503 with stale_reason='tick_hung'.
+
+    A tick is hung when it is past the hard cap AND has stopped
+    heartbeating - a slow-but-working tick keeps heartbeating and stays
+    healthy (see test_morning_stale_fix.py).
+    """
     from app.main import app
     from fastapi.testclient import TestClient
-    
+
     client = TestClient(app)
-    
+
     # Simulate a hung tick
+    old_stamp = pipeline._last_successful_tick
     pipeline._running = True
     pipeline._tick_started_at = datetime.now(timezone.utc) - timedelta(seconds=pipeline.MAX_TICK_DURATION_SECONDS + 10)
-    pipeline._last_successful_tick = datetime.now(timezone.utc).isoformat()
-    
+    pipeline._last_successful_tick = (
+        datetime.now(timezone.utc)
+        - timedelta(seconds=pipeline.HEARTBEAT_STALE_SECONDS + 60)
+    ).isoformat()
+
     try:
         response = client.get("/api/health")
         assert response.status_code == 503
@@ -68,6 +108,7 @@ def test_health_response_tick_hung_state():
     finally:
         pipeline._running = False
         pipeline._tick_started_at = None
+        pipeline._last_successful_tick = old_stamp
 
 
 def test_health_response_ok_when_not_hung():

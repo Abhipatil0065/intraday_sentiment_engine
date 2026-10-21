@@ -11,6 +11,7 @@ This module owns the end-to-end control flow. The background scheduler calls
 from __future__ import annotations
 
 import atexit
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -75,6 +76,62 @@ from app.utils.timestamp_parse import (
 
 log = get_logger(__name__)
 
+
+class _DriverView:
+    """
+    One driver in the shape the decision log reads it.
+
+    ``DecisionLog.record_bias`` does ``d.title`` / ``d.contribution`` /
+    ``d.direction``, which is the ``SentimentResult`` driver object shape. The
+    equity card's drivers are plain dicts, so they are wrapped here rather
+    than changing the log writer's contract for every other caller.
+    """
+
+    __slots__ = ("title", "contribution", "direction", "weight")
+
+    def __init__(self, raw):
+        if isinstance(raw, dict):
+            self.title = str(raw.get("title", ""))
+            self.contribution = float(raw.get("contribution", 0.0) or 0.0)
+            self.direction = raw.get("direction", "")
+            self.weight = float(raw.get("weight", 0.0) or 0.0)
+        else:
+            self.title = str(getattr(raw, "title", ""))
+            self.contribution = float(getattr(raw, "contribution", 0.0) or 0.0)
+            self.direction = getattr(raw, "direction", "")
+            self.weight = float(getattr(raw, "weight", 0.0) or 0.0)
+
+
+class _EquityCardVerdict:
+    """
+    Shape a session-aware equity card like a ``SentimentResult``.
+
+    The decision log and ``bias_snapshots`` both consume a result-shaped
+    object. The equity card is a different shape (``EquityCardResult``, with
+    plain-dict drivers and a string bias), so this adapter exposes exactly
+    the attributes those two writers read.
+
+    It exists so the pipeline can publish the equity card's OWN verdict - the
+    one the dashboard shows - instead of a second region-blind proxy.
+    """
+
+    __slots__ = ("asset", "bias", "score", "confidence", "mode",
+                 "event_risk", "drivers")
+
+    def __init__(self, card):
+        from app.analysis.sentiment_engine import Bias
+
+        self.asset = Asset.EQUITY
+        raw_bias = getattr(card, "bias", "BULLISH")
+        self.bias = (raw_bias if isinstance(raw_bias, Bias)
+                     else Bias(str(raw_bias)))
+        self.score = float(getattr(card, "score", 0.0))
+        self.confidence = float(getattr(card, "confidence", 0.0))
+        self.mode = str(getattr(card, "mode", "heuristic"))
+        self.event_risk = bool(getattr(card, "event_risk", False))
+        self.drivers = [_DriverView(d)
+                        for d in (getattr(card, "drivers", None) or [])]
+
 # Shared across runs so dedup survives within a process session.
 _dedup = EventDeduplicator()
 # Boot reseed latch: the index is rebuilt from the DB exactly once per process
@@ -112,10 +169,92 @@ def _save_last_successful_tick(value: str) -> None:
         pass
 
 
+def _refresh_tick_stamp(force: bool = False) -> None:
+    """Refresh the pipeline freshness stamp (in memory and on disk).
+
+    The stamp is a HEARTBEAT, not a one-shot event.
+
+    It used to be written exactly once per tick, right after ingestion, so
+    the freshness clock froze for the whole rest of the tick. A boot tick
+    whose LLM classification phase outlasts ``HEALTH_STALE_MINUTES`` (15
+    minutes) therefore looked stale to /api/health for the entire back half
+    of its run - the dashboard raised the red "no successful pipeline tick in
+    the last 15 minutes" banner over data that was demonstrably still being
+    computed. That is exactly the banner that appeared every morning.
+
+    Refreshing the stamp as the tick progresses makes the clock mean what it
+    says: "the pipeline last did work at HH:MM:SS". A tick that is alive
+    and working stays fresh; a tick that dies stops refreshing and goes
+    stale on its own.
+
+    Throttled to one write per ``TICK_HEARTBEAT_SECONDS`` so a 600-article
+    batch does not turn into 600 file writes.
+    """
+    global _last_update, _last_successful_tick, _last_heartbeat_mono
+    now_mono = time.monotonic()
+    if not force and (now_mono - _last_heartbeat_mono) < TICK_HEARTBEAT_SECONDS:
+        return
+    _last_heartbeat_mono = now_mono
+    _last_update = T.now_utc()
+    _last_successful_tick = _last_update.isoformat()
+    _save_last_successful_tick(_last_successful_tick)
+
+
+def set_paused(paused: bool) -> None:
+    """Mirror the operator's pause state into the pipeline module.
+
+    The API owns the pause button; the pipeline owns the freshness rule.
+    Mirroring the flag here lets ``compute_stale`` tell "the operator
+    stopped the engine" apart from "the engine died", which is the
+    difference between a PAUSED banner and a STALE banner.
+    """
+    global _engine_paused
+    _engine_paused = bool(paused)
+
+
+def is_paused() -> bool:
+    """True when the operator has deliberately paused the engine."""
+    return _engine_paused
+
+
+def _heartbeat_age_seconds(last_poll_ok: str | None) -> float | None:
+    """Seconds since the pipeline last heartbeated, or None if unknown."""
+    if not last_poll_ok:
+        return None
+    try:
+        stamp = datetime.fromisoformat(last_poll_ok)
+    except (ValueError, TypeError):
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - stamp).total_seconds()
+
+
+def _heartbeat_is_fresh(last_poll_ok: str | None) -> bool:
+    """True when the pipeline heartbeated within HEARTBEAT_STALE_SECONDS.
+
+    This is the "is the tick still working?" test. A tick that heartbeats
+    is alive, however long it has been running; a tick that stopped
+    heartbeating is wedged.
+    """
+    age = _heartbeat_age_seconds(last_poll_ok)
+    return age is not None and age <= HEARTBEAT_STALE_SECONDS
+
+
 # Load persisted tick on module import (process startup)
 _last_successful_tick = _load_last_successful_tick()
 _news_since_update = 0
 _running = False
+# Monotonic stamp of the last freshness heartbeat (see _refresh_tick_stamp).
+_last_heartbeat_mono: float = 0.0
+# Monotonic id of the current tick. A tick that is released as wedged and
+# later unwinds must not clear the running flag of the tick that replaced
+# it - the generation counter is what keeps the two apart.
+_tick_generation: int = 0
+# Operator pause state, mirrored from the API layer. A deliberately paused
+# engine is NOT a stale engine: the dashboard shows the PAUSED banner, so the
+# freshness check must not also raise the red STALE banner over it.
+_engine_paused: bool = False
 _last_regime = None  # RegimeAssessment from the most recent recompute
 # Economic-calendar signals from the most recent fetch, shared with the API.
 _calendar_signals: list[CalendarSignal] = []
@@ -153,9 +292,31 @@ MAX_TICK_DURATION_SECONDS = 600
 # the /api/dashboard payload builder can never drift apart on freshness.
 HEALTH_STALE_MINUTES = 15
 
+# How often a running tick refreshes its freshness stamp. A tick that is
+# alive and working must never look stale just because its LLM phase is slow,
+# so the stamp is heartbeated at least this often while the tick progresses.
+TICK_HEARTBEAT_SECONDS = 60
+
+# A tick is only considered HUNG when it has stopped making progress.
+#
+# The freshness stamp is heartbeated while a tick works, so a STALE
+# HEARTBEAT - not the elapsed time alone - is the signal that the tick is
+# wedged. The old rule ("running for more than MAX_TICK_DURATION_SECONDS
+# => hung") declared a healthy tick hung whenever the LLM provider was
+# slow: a boot tick with a degraded provider legitimately runs for 15+
+# minutes, and the release that followed let a SECOND tick start while the
+# first was still writing - two writers on one SQLite file, which is where
+# the "database is locked" failures and the lost articles came from.
+HEARTBEAT_STALE_SECONDS = 420
+
 # Hard cap on LLM classifications started within a single tick. Beyond this the
 # classifier falls back to deterministic heuristics, keeping every tick under
 # the ~120s budget even when the LLM endpoint is degraded.
+#
+# The LIVE value is ``settings.llm_batch_limit`` (env: LLM_BATCH_LIMIT), read
+# once per tick so the operator can tune it without a code change. This
+# constant is the fallback for a settings object that does not carry the
+# field.
 LLM_BATCH_LIMIT = 15
 
 # Source-quality tiers, ordered best-first. The priority sort below uses this to
@@ -407,24 +568,38 @@ def compute_stale(
     flashed a red STALE banner for the first few minutes of legitimate
     work. Both callers now share this helper, so they can never disagree.
 
+    A deliberately PAUSED engine is also not stale. The operator stopping
+    the engine is a decision, not a failure, and the dashboard already
+    shows a PAUSED banner for it - raising STALE on top of that would only
+    be noise (and, on a machine that is paused for the night, it would be
+    a permanent false alarm).
+
     Returns ``(stale, stale_reason)`` where reason is one of
     ``tick_hung`` / ``no_successful_tick`` / ``no_tick_completed`` /
     ``parse_error`` (stale) or ``None`` (healthy).
     """
+    if _engine_paused:
+        return False, None
+
     state = runtime_state()
     tick_running = state.get("running", False)
     tick_started = state.get("tick_started_at")
     last_poll_ok = state.get("last_successful_tick")
 
-    # A tick running past the hard cap is hung. The scheduler has
-    # max_instances=1, so a hung tick also blocks every future tick - it is
-    # stale no matter how fresh the last completed tick was.
+    # A tick running past the hard cap is only hung if it also stopped
+    # making progress. The scheduler has max_instances=1, so a genuinely
+    # hung tick blocks every future tick - it is stale no matter how fresh
+    # the last completed tick was. But elapsed time alone is NOT enough:
+    # with a degraded LLM provider a healthy tick legitimately runs for
+    # 15+ minutes, and calling that hung is what raised the false STALE
+    # banner every morning. The heartbeat is the liveness signal.
     if tick_running and tick_started:
         try:
             tick_start_dt = datetime.fromisoformat(tick_started)
             tick_age = datetime.now(timezone.utc) - tick_start_dt
             if tick_age > timedelta(seconds=MAX_TICK_DURATION_SECONDS):
-                return True, "tick_hung"
+                if not _heartbeat_is_fresh(last_poll_ok):
+                    return True, "tick_hung"
         except (ValueError, TypeError):
             pass
 
@@ -447,7 +622,13 @@ def compute_stale(
 
 
 def last_successful_tick() -> str | None:
-    """ISO timestamp of the most recent tick that finished without raising."""
+    """ISO timestamp of the last time the pipeline did work.
+
+    Heartbeated while a tick runs (see ``_refresh_tick_stamp``), so this is
+    "the pipeline last did something at" - not "the last tick that finished".
+    A tick that dies stops refreshing it and the timestamp ages into
+    staleness on its own.
+    """
     return _last_successful_tick
 
 
@@ -473,21 +654,37 @@ def reset_running_flag() -> None:
 
 def check_and_release_hung_tick() -> bool:
     """
-    Check if the current tick has exceeded MAX_TICK_DURATION_SECONDS.
-    If so, release the running flag and return True.
-    Returns False if no tick is running or tick is within time limit.
+    Release the running flag when the current tick is genuinely WEDGED.
+
+    A tick is wedged when it has been running past MAX_TICK_DURATION_SECONDS
+    AND it has stopped heartbeating (see HEARTBEAT_STALE_SECONDS). Elapsed
+    time alone is NOT enough: with a degraded LLM provider a healthy tick
+    legitimately runs for 15+ minutes, and releasing it let a second tick
+    start while the first was still writing - two writers on one SQLite
+    file, which is where the "database is locked" failures and the lost
+    articles came from.
+
+    Returns False if no tick is running, the tick is within the time limit,
+    or the tick is still making progress.
     """
-    global _running, _tick_started_at
+    global _running, _tick_started_at, _tick_generation
     if not _running or _tick_started_at is None:
         return False
     elapsed = (T.now_utc() - _tick_started_at).total_seconds()
-    if elapsed > MAX_TICK_DURATION_SECONDS:
-        log.warning("Tick hung for %.0fs (limit %ds) - releasing running flag",
-                    elapsed, MAX_TICK_DURATION_SECONDS)
-        _running = False
-        _tick_started_at = None
-        return True
-    return False
+    if elapsed <= MAX_TICK_DURATION_SECONDS:
+        return False
+    if _heartbeat_is_fresh(_last_successful_tick):
+        # Still working - a slow LLM phase is not a hang. Leave it alone.
+        return False
+    log.warning(
+        "Tick wedged for %.0fs (limit %ds) with no heartbeat - releasing "
+        "running flag", elapsed, MAX_TICK_DURATION_SECONDS)
+    _running = False
+    _tick_started_at = None
+    # Invalidate the wedged tick: when it finally unwinds it must not clear
+    # the flag of the tick that replaces it.
+    _tick_generation += 1
+    return True
 
 
 atexit.register(reset_running_flag)
@@ -529,6 +726,10 @@ class IngestStats:
     llm_new_failed: int = 0
     llm_new_skipped_batch: int = 0
     llm_new_skipped_breaker: int = 0
+    # New articles that fell back to heuristics because the tick's LLM TIME
+    # budget was spent. This is the third reason a model call is skipped, and
+    # the one that actually bounds a slow provider.
+    llm_new_skipped_budget: int = 0
     # One-shot policy: the model DID judge it and the verdict was MEDIUM /
     # LOW, so the article was deleted and suppressed for the trading day.
     llm_new_dropped_low: int = 0
@@ -552,12 +753,12 @@ class IngestStats:
     purged: dict = field(default_factory=dict)
 
     def verify_new_article_counters(self) -> bool:
-        """Assert that the five new-article LLM buckets sum to new_today.
+        """Assert that the new-article LLM buckets sum to new_today.
 
         The buckets are mutually exclusive: each new article is counted in
         exactly one of llm_new_ok / llm_new_failed / llm_new_skipped_breaker /
-        llm_new_skipped_batch / llm_new_dropped_low. Their sum must therefore
-        equal new_today exactly.
+        llm_new_skipped_batch / llm_new_skipped_budget / llm_new_dropped_low.
+        Their sum must therefore equal new_today exactly.
 
         ``llm_new_dropped_low`` is the one-shot fate rule: a model verdict of
         MEDIUM/LOW impact is still a verdict, and the article still counts -
@@ -566,6 +767,7 @@ class IngestStats:
         total = (self.llm_new_ok + self.llm_new_failed +
                  self.llm_new_skipped_batch +
                  self.llm_new_skipped_breaker +
+                 self.llm_new_skipped_budget +
                  self.llm_new_dropped_low)
         return total == self.new_today
 
@@ -1101,6 +1303,10 @@ def _recompute_sentiment(session, stats: IngestStats):
     verdicts: list = []
 
     for row in rows:
+        # HEARTBEAT: the recompute re-scores every stored row of the day, so
+        # on a busy news day this loop is long enough to matter. Refreshing
+        # the stamp here keeps a working tick from ever looking stale.
+        _refresh_tick_stamp()
         if row.published_at_utc is None:
             continue
         event = row.event_links[0].event if row.event_links else None
@@ -1339,13 +1545,116 @@ def _recompute_sentiment(session, stats: IngestStats):
     except Exception as exc:  # noqa: BLE001 - never break the recompute
         log.debug("event_risk_check failed: %s", exc)
 
+    # PER-ASSET BASELINE. Computed ONCE per tick, before the equity card and
+    # before the asset loop, from each asset's own persisted history.
+    #
+    # Two things matter here:
+    #   1. ONE baseline for the whole tick. The verdict, the published score,
+    #      the sentiment_snapshot row and the bias_snapshots row must all be
+    #      built on the SAME baseline, or the audit trail would show two
+    #      different numbers for the same tick.
+    #   2. NO LOOK-AHEAD. The history is read before this tick's rows are
+    #      written, so a tick can never influence its own baseline.
+    #
+    # The baseline is the asset's trailing median of its UNADJUSTED raw
+    # scores - so the history is a series of levels, never a series of
+    # already-centred values. That is what stops the adjustment from
+    # feeding back on itself and converging to zero.
+    baselines: dict[str, float | None] = {}
+    try:
+        from app.analysis.bias_baseline import baseline_score
+
+        for asset in Asset:
+            try:
+                baselines[asset.value] = baseline_score(asset.value)
+            except Exception as exc:  # noqa: BLE001 - baseline is optional
+                log.debug("baseline query failed for %s: %s", asset.value, exc)
+                baselines[asset.value] = None
+    except Exception as exc:  # noqa: BLE001 - baseline is optional
+        log.debug("baseline stage skipped: %s", exc)
+
+    # Session-aware global equity card: NOW-only, in-memory, never persisted.
+    # No SentimentSnapshot / BiasSnapshot rows - the frontend keys flip state
+    # by the region field in the payload.
+    #
+    # BUILT HERE, BEFORE THE ASSET LOOP, and that position is the point.
+    # The pipeline used to score a SECOND, region-blind equity proxy
+    # (``compute_sentiment(asset_signals, Asset.EQUITY)`` with the default
+    # history key) and publish THAT to the decision log and to
+    # bias_snapshots, while the dashboard showed the region-filtered card
+    # computed under its own ``EQUITY:<region>`` history key. Two different
+    # equity verdicts were published for the same tick, and every hit-rate
+    # number was measured against the one the trader never saw.
+    #
+    # Building the card first means the EQUITY verdict the pipeline logs and
+    # scores IS the verdict the dashboard shows.
+    global _last_equity_card, _last_equity_signals
+    equity_card_result = None
+    try:
+        from app.analysis.equity_card import build_equity_card, to_payload
+        _last_equity_signals = list(signals)
+        equity_card_result = build_equity_card(
+            signals, now=recompute_now,
+            baseline=baselines.get(Asset.EQUITY.value))
+        _last_equity_card = to_payload(equity_card_result)
+    except Exception as exc:  # noqa: BLE001 - equity card never breaks a poll
+        log.debug("equity card build failed: %s", exc)
+        _last_equity_card = None
+
     for asset in Asset:
+        if asset is Asset.EQUITY:
+            # Equity is served by the session-aware card
+            # (build_equity_card / top-level "equity" key), not by
+            # SentimentSnapshot rows - so there is no snapshot to write here.
+            #
+            # What IS written is the card's own verdict, into the decision log
+            # and into bias_snapshots, so the equity history that the hit-rate
+            # and calibration tooling read is the one a trader acted on.
+            #
+            # The card owns its carry-forward state under "EQUITY:<region>",
+            # so the pipeline must NOT also call remember_bias("EQUITY", ...)
+            # here: that would be a second, competing equity history.
+            if equity_card_result is None:
+                continue
+            try:
+                _decision_log().record_bias(
+                    _EquityCardVerdict(equity_card_result))
+            except Exception as exc:  # noqa: BLE001 - auditing is best-effort
+                log.debug("decision log write failed: %s", exc)
+            verdicts.append(AssetVerdict(
+                asset=asset,
+                score=float(equity_card_result.score),
+                confidence=float(equity_card_result.confidence),
+                bias=str(equity_card_result.bias),
+                article_count=int(equity_card_result.contributing_articles),
+                last_signal_age_min=_last_signal_age_min(
+                    [s for s in signals if s.asset is asset], T.now_utc()),
+                # The equity card's drivers are plain DICTS; bias_snapshots
+                # and the decision log both read them as objects with
+                # ``.title`` / ``.contribution`` / ``.direction``. Passing the
+                # dicts straight through raised AttributeError inside
+                # write_bias_snapshots, which swallowed it and wrote NOTHING
+                # for ANY asset - silently killing the whole audit trail.
+                bull_drivers=[_DriverView(d) for d in
+                              (equity_card_result.bull_drivers or [])],
+                bear_drivers=[_DriverView(d) for d in
+                              (equity_card_result.bear_drivers or [])],
+            ))
+            log.info(
+                "EQUITY: %s score=%+.1f (n=%d conf=%.2f)",
+                equity_card_result.bias, equity_card_result.score,
+                equity_card_result.contributing_articles,
+                equity_card_result.confidence,
+            )
+            continue
+
         asset_signals = [s for s in signals if s.asset is asset]
 
         current_result = compute_sentiment(
             asset_signals, asset, event_risk=at_risk,
             event_risk_note=risk_note,
-            now=recompute_now)
+            now=recompute_now,
+            baseline=baselines.get(asset.value))
 
         # Item 11: persist every published bias so it can be scored later.
         try:
@@ -1364,23 +1673,17 @@ def _recompute_sentiment(session, stats: IngestStats):
         for scope, result in (
             ("CURRENT", current_result),
         ):
-            if asset is Asset.EQUITY:
-                # Equity is served by the session-aware card
-                # (build_equity_card / top-level "equity" key), not by
-                # SentimentSnapshot rows. Skip writing those rows - the
-                # EQUITY computation above still runs so internal state
-                # (bias, verdicts) is unaffected.
-                continue
             # TASK 2: collect bull/bear on every snapshot row for every asset,
-            # including EQUITY and all three scopes, so historical r is
-            # reconstructable. EQUITY still has its own top-level card in
-            # build_payload, but its snapshots are no longer suppressed.
+            # so historical r is reconstructable from the persisted totals.
+            # EQUITY is no longer here: it is served by the session-aware card
+            # and was already handled above.
             session.add(
                 SentimentSnapshot(
                     asset=asset.value,
                     scope=scope,
                     score=result.score,
                     raw_score=result.raw_score,
+                    baseline_score=result.baseline_score,
                     confidence=result.confidence,
                     bias=result.bias.value,
                     mode=result.mode,
@@ -1437,6 +1740,13 @@ note=result.note,
                 asset_signals, T.now_utc()),
             bull_drivers=current_result.bull_drivers,
             bear_drivers=current_result.bear_drivers,
+            # The UNADJUSTED level goes into the audit trail as raw_score.
+            # The baseline history is a series of levels, so it must never be
+            # built from already-centred values - otherwise the adjustment
+            # would feed back on itself and the skew would never come out.
+            raw_score=current_result.raw_score,
+            baseline_score=current_result.baseline_score,
+            adjusted=(current_result.baseline_score is not None),
         ))
 
     # Phase 2: append-only validation log, written AFTER every verdict is
@@ -1447,21 +1757,27 @@ note=result.note,
         written = write_bias_snapshots(session, verdicts)
         if written:
             log.debug("bias_snapshots: %d row(s) appended", written)
+            # THE MEASUREMENT LOOP. Every published bias CHANGE is recorded as
+            # a PENDING outcome so the engine can be scored against what the
+            # price actually did. Before this, ``bias_outcome`` could only be
+            # filled by hand - one click per call - so it stayed empty and the
+            # confidence coefficients were never checked against anything.
+            #
+            # It runs only when the snapshot rows were actually written: the
+            # outcome rows reference a bias_snapshots row by foreign key, so
+            # attaching a call to a stale snapshot would corrupt the join.
+            try:
+                from app.services.outcomes import record_new_calls
+
+                record_new_calls(session, verdicts)
+            except Exception as exc:  # noqa: BLE001 - measurement is optional
+                log.debug("outcome capture skipped: %s", exc)
     except Exception as exc:  # noqa: BLE001 - diagnostics never break a poll
         log.warning("bias snapshot stage skipped: %s", exc)
 
-    # Session-aware global equity card: NOW-only, in-memory, never persisted.
-    # No SentimentSnapshot / BiasSnapshot rows - the frontend keys flip state
-    # by the region field in the payload.
-    global _last_equity_card, _last_equity_signals
-    try:
-        from app.analysis.equity_card import build_equity_card, to_payload
-        _last_equity_signals = list(signals)
-        _last_equity_card = to_payload(build_equity_card(signals,
-                                                         now=recompute_now))
-    except Exception as exc:  # noqa: BLE001 - equity card never breaks a poll
-        log.debug("equity card build failed: %s", exc)
-        _last_equity_card = None
+    # The session-aware equity card is built ABOVE, before the asset loop, so
+    # that the EQUITY verdict recorded here and in the decision log is the same
+    # one the dashboard shows. Nothing more to do at the end of the recompute.
 
     return signals, assessment
 
@@ -1697,6 +2013,41 @@ def _purge_unroutable_impacts(session) -> int:
         return 0
 
 
+async def _record_price_points() -> int:
+    """
+    Store one spot price per asset that has a reachable feed.
+
+    Best-effort and never fatal: an asset with no feed, or a feed that is
+    down, simply produces no row. The engine never invents a price.
+    """
+    from app.market.price_data import get_spot_price
+    from app.services.outcomes import record_price_point
+
+    quotes: list[tuple[Asset, float, str]] = []
+    for asset in Asset:
+        if asset is Asset.EQUITY:
+            continue
+        try:
+            price, source = await get_spot_price(asset)
+        except Exception as exc:  # noqa: BLE001 - a missing price is normal
+            log.debug("spot price failed for %s: %s", asset.value, exc)
+            continue
+        if price is not None:
+            quotes.append((asset, price, source))
+    if not quotes:
+        return 0
+    try:
+        with session_scope() as session:
+            written = 0
+            for asset, price, source in quotes:
+                if record_price_point(session, asset, price, source):
+                    written += 1
+            return written
+    except Exception as exc:  # noqa: BLE001 - measurement never breaks a tick
+        log.debug("price point write skipped: %s", exc)
+        return 0
+
+
 async def run_once() -> IngestStats:
     """
     Execute one full pipeline pass.
@@ -1704,22 +2055,28 @@ async def run_once() -> IngestStats:
     Never raises - errors are logged and returned in ``stats.errors`` so the
     scheduler keeps running.
     """
-    global _running, _last_update, _last_successful_tick, _news_since_update, _calendar_signals, _calendar_events, _tick_started_at
+    global _running, _last_update, _last_successful_tick, _news_since_update, _calendar_signals, _calendar_events, _tick_started_at, _tick_generation
 
     if _running:
-        log.debug("Pipeline already running; skipping this tick")
-        return IngestStats(errors=["pipeline already running"])
-
-    # Auto-release a hung tick from a previous/crashed run so we don't
-    # block forever on max_instances=1.
-    if check_and_release_hung_tick():
-        log.warning("Released hung tick from previous run; proceeding with new tick")
+        # A tick is already in flight. If it is genuinely WEDGED (no
+        # heartbeat, past the hard cap) release it and take over - otherwise
+        # the engine is stuck forever and the dashboard never gets a tick.
+        # A merely SLOW tick is left alone: releasing it would start a
+        # second tick while the first is still writing to the same SQLite
+        # file, which is how the "database is locked" errors and the lost
+        # articles happened.
+        if not check_and_release_hung_tick():
+            log.debug("Pipeline already running; skipping this tick")
+            return IngestStats(errors=["pipeline already running"])
+        log.warning("Released wedged tick from previous run; proceeding with new tick")
 
     # Reset LLM circuit breaker at the start of each tick so a degraded
     # endpoint gets a fresh chance on the next poll.
     await llm_client.reset_circuit_breaker()
 
     _running = True
+    _tick_generation += 1
+    my_generation = _tick_generation
     _tick_started_at = T.now_utc()
     stats = IngestStats()
     started = _tick_started_at
@@ -1743,10 +2100,11 @@ async def run_once() -> IngestStats:
 
         # Stamp the tick as soon as ingestion+calendar succeed so a later
         # failure in ingestion/classification/sentiment doesn't leave us at
-        # NO TICK forever.
-        _last_update = T.now_utc()
-        _last_successful_tick = _last_update.isoformat()
-        _save_last_successful_tick(_last_successful_tick)
+        # NO TICK forever. The stamp is then HEARTBEATED as the tick
+        # progresses (see _refresh_tick_stamp), so a slow-but-alive tick
+        # never ages past HEALTH_STALE_MINUTES and paints a false STALE
+        # banner over live data.
+        _refresh_tick_stamp(force=True)
 
         with session_scope() as session:
             # STEP 9.2: reseed the dedup index from stored headlines once per
@@ -1789,7 +2147,35 @@ async def run_once() -> IngestStats:
             report.articles = _priority_sort_articles(report.articles)
 
             llm_calls = 0
+            # THE LLM TIME BUDGET.
+            #
+            # The per-tick call COUNT cap (LLM_BATCH_LIMIT) is not enough to
+            # keep a tick inside its interval, because a slow provider burns
+            # the full 60s timeout on every call. The circuit breaker does not
+            # cover that case either: it counts CONSECUTIVE failures, so a
+            # provider that alternates success and timeout never trips it.
+            #
+            # MEASURED on the live database (last 80 ticks): the tick
+            # duration was p50 121s, p90 589s, max 946s (15.8 minutes), and
+            # 27 of 80 ticks ran past the 180s tick interval. The worst tick
+            # did 15 LLM calls that each timed out: 15 x 60s.
+            #
+            # A tick that takes ten minutes is a card that is ten minutes
+            # stale, which defeats the point of an intraday engine. So the
+            # tick now has a TIME allowance for model work: once it is spent,
+            # the remaining articles are classified deterministically and the
+            # tick finishes on time.
+            llm_started = time.monotonic()
+            llm_budget_seconds = float(settings.llm_tick_budget_seconds)
+            llm_batch_limit = int(getattr(settings, "llm_batch_limit",
+                                          LLM_BATCH_LIMIT))
             for art in report.articles:
+                # HEARTBEAT: the LLM classification of one article can take a
+                # full timeout budget (60s) when the provider is slow, and a
+                # batch of them can outlast the whole freshness window.
+                # Refreshing the stamp per article keeps /api/health honest
+                # about a tick that is alive and working.
+                _refresh_tick_stamp()
                 if art.guid in existing:
                     if _is_fj_session_report_sync(art):
                         log.debug(
@@ -1801,7 +2187,17 @@ async def run_once() -> IngestStats:
                 # reached, remaining new articles get deterministic heuristics
                 # so a degraded endpoint cannot turn one tick into a 10-minute
                 # slog. Heuristics are always available and correct.
-                use_llm = settings.has_llm and llm_calls < LLM_BATCH_LIMIT
+                llm_time_used = time.monotonic() - llm_started
+                budget_spent = llm_time_used >= llm_budget_seconds
+                use_llm = (settings.has_llm
+                           and llm_calls < llm_batch_limit
+                           and not budget_spent)
+                if settings.has_llm and llm_calls < llm_batch_limit and budget_spent:
+                    stats.llm_new_skipped_budget += 1
+                    log.info(
+                        "LLM time budget spent (%.0fs of %.0fs) - remaining "
+                        "articles classified by heuristic",
+                        llm_time_used, llm_budget_seconds)
                 try:
                     row = await _ingest_article(art, session, stats, use_llm)
                     if row is not None:
@@ -1876,7 +2272,11 @@ async def run_once() -> IngestStats:
             evaluate_and_emit(session, stats)
 
             # 3) SENTIMENT + PREP/WRAP ------------------------------------
+            # Heartbeat across the recompute too: it re-scores every stored
+            # article, which is the other slow phase of a tick.
+            _refresh_tick_stamp()
             _recompute_sentiment(session, stats)
+            _refresh_tick_stamp()
 
             if run_row is not None:
                 run_row.articles_new = stats.new_today
@@ -1884,6 +2284,15 @@ async def run_once() -> IngestStats:
                 run_row.llm_errors = stats.llm_new_failed + stats.llm_backlog_failed
                 run_row.status = "ok"
                 run_row.finished_at = T.now_utc()
+                # Record the tick's errors on the run row. The detail was
+                # written when the run STARTED, so it only carried the
+                # source counts - the errors the dashboard reads were
+                # always empty, and a tick failing every time showed
+                # nothing but a stale clock 15 minutes later.
+                run_row.detail = {
+                    **(run_row.detail or {}),
+                    "errors": list(stats.errors[:20]),
+                }
 
             # 4) HEALTH CACHE ------------------------------------------------
             # Update the in-memory metrics that /api/health and /api/dashboard
@@ -1907,6 +2316,30 @@ async def run_once() -> IngestStats:
             except Exception as exc:  # noqa: BLE001 - health cache must never break the tick
                 log.debug("health metrics cache update skipped: %s", exc)
 
+        # 5) OUTCOME LOOP --------------------------------------------------
+        # Record what the price actually was, then resolve every published
+        # call whose horizon has elapsed. This is the loop that lets the
+        # engine be measured against reality instead of against opinion.
+        #
+        # It runs OUTSIDE the main session: the price fetch is a network
+        # call, and holding a write transaction open across one is how the
+        # "database is locked" errors happen. Both steps are best-effort and
+        # can never break a tick.
+        try:
+            quoted = await _record_price_points()
+            if quoted:
+                log.debug("outcome loop: %d price point(s) recorded", quoted)
+            with session_scope() as session:
+                from app.services.outcomes import (
+                    resolve_pending,
+                    trim_price_points,
+                )
+
+                resolve_pending(session)
+                trim_price_points(session)
+        except Exception as exc:  # noqa: BLE001 - measurement never breaks a tick
+            log.debug("outcome loop skipped: %s", exc)
+
         log.info(
             "Pipeline complete: fetched=%d new=%d rejected=%d dup=%d "
             "llm_new_ok=%d llm_new_fail=%d llm_new_skip_batch=%d llm_new_skip_breaker=%d "
@@ -1922,19 +2355,31 @@ async def run_once() -> IngestStats:
     except Exception as exc:
         log.exception("Pipeline run failed")
         stats.errors.append(f"pipeline: {type(exc).__name__}: {exc}")
-        # Release any hung state so the next scheduler tick isn't blocked.
-        check_and_release_hung_tick()
+        # The running flag is cleared in the finally block below - a failed
+        # tick must release it unconditionally, heartbeat or not, or the
+        # next scheduler tick would be blocked forever.
         try:
             with session_scope() as session:
                 row = session.get(PipelineRun, run_id) if "run_id" in dir() else None
                 if row is not None:
                     row.status = "error"
                     row.finished_at = T.now_utc()
-                    row.detail = {"error": str(exc)}
+                    # Merge, don't replace: the source counts written at
+                    # the start of the run are still useful, and the
+                    # dashboard reads both from this blob.
+                    row.detail = {
+                        **(row.detail or {}),
+                        "error": str(exc),
+                        "errors": list(stats.errors[:20]),
+                    }
         except Exception:  # noqa: BLE001
             pass
         return stats
     finally:
-        _running = False
-        _tick_started_at = None
+        # Only clear the running flag if this tick still owns it. A tick
+        # that was released as wedged must not clear the flag of the tick
+        # that replaced it.
+        if my_generation == _tick_generation:
+            _running = False
+            _tick_started_at = None
 

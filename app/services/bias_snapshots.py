@@ -86,11 +86,16 @@ def build_rows(verdicts: Sequence[AssetVerdict],
     available; ``raw_score`` / ``baseline_score`` / ``adjusted`` are carried
     through verbatim so the audit trail is complete. Contains no price field,
     and reads nothing outside its arguments.
+
+    A verdict that carries no explicit ``raw_score`` falls back to its
+    ``score`` for that column, so the row never loses the level it was
+    published from.
     """
     stamp = now or T.now_utc()
     rows: list[dict] = []
     for v in verdicts:
         shown = to_display(v.score, v.bias, v.confidence)
+        level = v.raw_score if v.raw_score is not None else v.score
         rows.append({
             "timestamp_utc": stamp,
             "timestamp_ist": ist_stamp(stamp),
@@ -98,7 +103,7 @@ def build_rows(verdicts: Sequence[AssetVerdict],
             "bias": v.bias,
             "score": float(v.score),
             "confidence": float(v.confidence),
-            "raw_score": (None if v.raw_score is None else float(v.raw_score)),
+            "raw_score": (None if level is None else float(level)),
             "baseline_score": (None if v.baseline_score is None
                                else float(v.baseline_score)),
             "adjusted": bool(v.adjusted),
@@ -113,31 +118,6 @@ def build_rows(verdicts: Sequence[AssetVerdict],
     return rows
 
 
-def _compute_baselines(session, assets: Sequence[Asset]) -> dict[str, float | None]:
-    """
-    One baseline per asset, queried INSIDE this transaction.
-
-    The query orders by timestamp DESC and is executed BEFORE any of the new
-    rows below are flushed, so the current tick's own verdicts cannot appear in
-    their own baseline: there is no same-tick look-ahead by construction, and
-    the persisted history is the only source (articles are purged at 48h, so
-    snapshots are what survives a purge).
-
-    Returns a dict keyed by asset string; every asset has an entry so the
-    writer never has to branch on "is this asset in the map".
-    """
-    from app.analysis.bias_baseline import baseline_score
-
-    out: dict[str, float | None] = {}
-    for asset in assets:
-        try:
-            out[asset.value] = baseline_score(asset.value)
-        except Exception as exc:  # noqa: BLE001 - baseline is diagnostic only
-            log.debug("baseline query failed for %s: %s", asset.value, exc)
-            out[asset.value] = None
-    return out
-
-
 def write_bias_snapshots(session, verdicts: Sequence[AssetVerdict]) -> int:
     """
     Append the rows. Returns the number written, or 0 if logging is off.
@@ -145,38 +125,23 @@ def write_bias_snapshots(session, verdicts: Sequence[AssetVerdict]) -> int:
     Wrapped end-to-end in try/except: a failure is logged and swallowed so the
     poll continues untouched.
 
-    Item 1: each verdict's raw score is baseline-adjusted BEFORE the row is
-    written, so the persisted history is self-consistent - every row's
-    ``score`` is the value a later baseline query would have produced for it.
+    Item 1: the verdict's score is ALREADY baseline-adjusted - the pipeline
+    made the decision on the centred lean and published that number. This
+    writer therefore records what the reader was shown, verbatim, and does
+    NOT adjust it a second time. Re-adjusting here would subtract the
+    baseline twice and leave the audit trail disagreeing with the card.
+
+    The unadjusted level travels on ``raw_score`` and the baseline that was
+    subtracted on ``baseline_score``, so both numbers are reconstructable
+    from the row.
     """
     if not settings.bias_snapshot_enabled or not verdicts:
         return 0
     try:
         from app.models.db_models import BiasSnapshot
-        from app.analysis.bias_baseline import adjusted_score
 
-        baselines = _compute_baselines(session, [v.asset for v in verdicts])
-
-        # Adjust BEFORE building rows, so the published score and the display
-        # split it renders are computed from the SAME value. The verdict's
-        # original score is kept as raw_score for the audit trail.
-        adjusted_verdicts: list[AssetVerdict] = []
-        for v in verdicts:
-            raw = v.raw_score if v.raw_score is not None else v.score
-            adjusted, baseline = adjusted_score(raw, baselines.get(v.asset.value))
-            adjusted_verdicts.append(AssetVerdict(
-                asset=v.asset, score=float(adjusted), confidence=v.confidence,
-                bias=v.bias, article_count=v.article_count,
-                last_signal_age_min=v.last_signal_age_min,
-                bull_drivers=v.bull_drivers, bear_drivers=v.bear_drivers,
-                raw_score=float(raw), baseline_score=(None if baseline is None
-                                                      else float(baseline)),
-                adjusted=bool(baseline is not None
-                               and abs(raw) >= settings.baseline_min_score),
-            ))
-
-        rows = build_rows(adjusted_verdicts)
-        for row, verdict in zip(rows, adjusted_verdicts):
+        rows = build_rows(list(verdicts))
+        for row in rows:
             session.add(BiasSnapshot(**row))
         session.flush()
         log.debug("bias_snapshots: wrote %d row(s)", len(rows))

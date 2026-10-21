@@ -32,6 +32,12 @@ _BASE = Path(__file__).resolve().parent.parent
 _TMP_DB = Path(tempfile.mkdtemp(prefix="intraday_test_")) / "test.db"
 os.environ["DATABASE_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
 os.environ["APP_TESTING"] = "1"
+# Point the log file at the same throwaway directory. Without this the test
+# suite writes into the LIVE engine's logs/engine.log, where its own
+# failures ("Pipeline run failed" x156 on a single run) drown out the real
+# production events - the log that has to be read to diagnose a live
+# problem. The env var wins over the .env file in pydantic-settings.
+os.environ["LOG_FILE"] = str(_TMP_DB.parent / "engine_test.log")
 # Prevent the real .env from overriding the temp DB path.
 os.environ.pop("DATABASE_URL_2", None)
 

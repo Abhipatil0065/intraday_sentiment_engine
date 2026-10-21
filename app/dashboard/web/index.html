@@ -483,12 +483,14 @@
 <body>
   <div class="stale-banner hidden" id="staleBanner"></div>
   <div class="stale-banner hidden" id="pausedBanner" style="background:rgba(239,68,68,.95);">⏸️ ENGINE PAUSED — News fetching & sentiment computation stopped. Click <button class="engine-toggle on" id="resumeFromBanner" style="margin-left:10px;padding:2px 10px;font-size:11px;"><span class="dot"></span><span class="label">RESUME</span></button> to restart.</div>
+  <div class="stale-banner hidden" id="connBanner" style="background:rgba(220,38,38,.95);">🔌 CONNECTION LOST — the engine is not answering. Everything below is the last snapshot received.</div>
 <header>
   <h1>INTRADAY NEWS SENTIMENT &amp; MARKET IMPACT ENGINE</h1>
   <div class="status-strip" id="statusStrip">
     <span class="pill live" id="pLlm"><span class="dot"></span><span id="lLlm">LLM: LIVE</span></span>
     <span class="pill live" id="pPipe"><span class="dot"></span><span id="lPipe">Pipeline: RUNNING</span></span>
-    <span class="pill live" id="pDb"><span class="dot"></span><span id="lDb">Pipeline: OK</span></span>
+    <span class="pill live" id="pDb"><span class="dot"></span><span id="lDb">Tick: OK</span></span>
+    <span class="pill live" id="pNews"><span class="dot"></span><span id="lNews">News Feed: LIVE</span></span>
     <span class="pill alert-pill" id="pAlert"><span class="dot"></span><span id="lAlert">⚠️ ALERT: LLM Engine Down - Fallback Active</span></span>
     <button class="runbtn" id="runBtn" title="Run one pipeline pass now">RUN NOW</button>
     <button class="engine-toggle off" id="engineToggle" title="Pause/Resume the engine"><span class="dot"></span><span class="label">ENGINE: OFF</span></button>
@@ -531,15 +533,18 @@ let FEED={items:[],total:0,loaded:0,page:60,busy:false};
      /api/dashboard payload (status.*) and /api/health, so the pills reflect
      real-time engine health. Each has a colour map keyed by state. */
   let HEALTH={
-    llmStatus:'LIVE',          // LIVE | STOPPED | IDLE
-    pipelineStatus:'RUNNING',  // RUNNING | STOPPED
+    llmStatus:'LIVE',          // LIVE | DEGRADED | STOPPED
+    pipelineStatus:'RUNNING',  // RUNNING | IDLE | STOPPED
     dbStatus:'OK',             // OK | STALE
+    newsFeedStatus:'LIVE',     // LIVE | DEGRADED | STOPPED
     paused:false,              // engine paused by user
-    systemError:null,          // string | null
+    systemError:null,          // string | null  (headline of the alert)
+    systemErrors:[],           // string[]       (every alert, not just the first)
+    connectionLost:false,      // the engine stopped answering
     lastUpdated:''
   };
   const LLMMAP={LIVE:'live',STOPPED:'stopped',IDLE:'idle',DEGRADED:'degraded'};
-  const STD_MAP={LIVE:'live',STOPPED:'stopped',RUNNING:'live',OK:'live',STALE:'stopped'};
+  const STD_MAP={LIVE:'live',STOPPED:'stopped',RUNNING:'live',IDLE:'idle',OK:'live',STALE:'stopped',DEGRADED:'degraded'};
   function pillClass(key,state){
     if(key==='llm') return LLMMAP[state]||'idle';
     return STD_MAP[state]||'idle';
@@ -1276,10 +1281,33 @@ function renderHeader(d){
   var LLM_LABEL={ok:'LIVE',degraded:'DEGRADED',disabled:'STOPPED'};
   HEALTH.llmStatus = LLM_LABEL[llmKey] || 'LIVE';
   HEALTH.llmKey = llmKey;
-  HEALTH.pipelineStatus = st.running ? 'RUNNING' : 'STOPPED';
-  HEALTH.dbStatus = s.last_poll_ok ? 'OK' : 'STALE';
-  HEALTH.lastUpdated = st.last_updated || '';
   HEALTH.paused = s.paused || false;
+  /* "Is a tick executing RIGHT NOW" is not "is the engine alive". The engine
+     ticks every poll_interval_seconds and each tick takes a minute or two, so
+     the instantaneous flag is false for a good part of every cycle - and the
+     old rule read that as "Pipeline Stopped", lighting up a red ALERT on a
+     perfectly healthy engine every three minutes. The freshness clock is the
+     real signal: stale => in trouble, otherwise the engine is just between
+     ticks (IDLE). */
+  HEALTH.pipelineStatus = HEALTH.paused ? 'STOPPED'
+                        : (st.running ? 'RUNNING' : (st.stale ? 'STOPPED' : 'IDLE'));
+  /* Same rule as the STALE banner, so the pill and the banner can never
+     disagree. The old test ("is last_poll_ok a non-empty string?") said OK
+     even while the banner was screaming STALE. */
+  HEALTH.dbStatus = st.stale ? 'STALE' : 'OK';
+  /* News feed health, from the last tick's source counts. This was NEVER
+     assigned before, so the "News Feed Stopped" alert was dead code and a
+     completely dead feed looked identical to a healthy one.
+     sources_ok is null until the first tick has recorded a run: "no source
+     answered" and "we have not asked yet" are different states, and the
+     second one must never raise a dead-feed alert. */
+  var _polled=+s.sources_polled||0, _ok=(s.sources_ok===null||s.sources_ok===undefined)?null:(+s.sources_ok);
+  var _failed=Array.isArray(s.sources_failed)?s.sources_failed:[];
+  HEALTH.newsFeedStatus = (_ok===null) ? 'IDLE'
+                        : (_polled>0 && _ok*2<_polled) ? 'STOPPED'
+                        : (_polled>0 && _ok<_polled) ? 'DEGRADED' : 'LIVE';
+  HEALTH.sourcesPolled=_polled; HEALTH.sourcesOk=_ok; HEALTH.sourcesFailed=_failed;
+  HEALTH.lastUpdated = st.last_updated || '';
 
   updateEngineUI();
 
@@ -1293,6 +1321,8 @@ function renderHeader(d){
       : 'LLM off';
   }
    /* Any red status => show the error pill with a specific message.
+      Every problem is collected, not just the first: with a single
+      headline an LLM outage could hide a dead news feed behind it.
       NOTE: dbStatus is only ever 'OK' or 'STALE' (set above) - the label and
       the alert branch below must test those exact values. An earlier version
       tested 'CONNECTED'/'DISCONNECTED', which are never assigned, so the pill
@@ -1301,10 +1331,28 @@ function renderHeader(d){
    var reds = [];
    if(HEALTH.llmStatus==='STOPPED') reds.push('LLM Engine Down - Fallback Active');
    if(HEALTH.llmStatus==='DEGRADED') reds.push('LLM Degraded - Circuit Breaker Open');
-   if(HEALTH.newsFeedStatus==='STOPPED') reds.push('News Feed Stopped - No New Articles');
-   if(HEALTH.pipelineStatus==='STOPPED') reds.push('Pipeline Stopped - No Tick Running');
+   if(HEALTH.newsFeedStatus==='STOPPED'){
+     reds.push('News Feed Stopped - No Source Responded'
+               +(_failed.length?(' ('+_failed.slice(0,4).join(', ')+')'):''));
+   }
+   /* Only a STALE clock is a pipeline fault. "No tick running right now" is
+      the normal state between polls and must never raise an alert. */
+   if(HEALTH.pipelineStatus==='STOPPED' && !HEALTH.paused){
+     reds.push('Pipeline Stalled - No Successful Tick');
+   }
    if(HEALTH.dbStatus==='STALE') reds.push('Pipeline Stale - No Successful Tick');
-  HEALTH.systemError = reds.length ? reds[0] : null;
+   /* A tick that raised is a real fault. Per-source fetch blips (one
+      publisher 403-ing for a minute) are routine transients and are shown
+      on the news pill instead - alerting on them would cry wolf daily. */
+   var _errs=Array.isArray(s.errors)?s.errors:[];
+   var _fatal=_errs.filter(function(e){ return /^pipeline:/.test(String(e)); });
+   if(_fatal.length){
+     reds.push('Pipeline Error - '+String(_fatal[0]).slice(0,80));
+   }
+   HEALTH.systemErrors = reds;
+   HEALTH.systemError = reds.length
+     ? (reds[0] + (reds.length>1 ? (' (+'+(reds.length-1)+' more)') : ''))
+     : null;
 
   var setPill = function(id, state){
     var el=document.getElementById(id);
@@ -1312,22 +1360,22 @@ function renderHeader(d){
     el.className='pill '+pillClass(id.replace('p','').toLowerCase(), state);
   };
   setPill('pLlm', HEALTH.llmStatus);
-  setPill('pSent', HEALTH.globalSentiment);
   setPill('pNews', HEALTH.newsFeedStatus);
   setPill('pPipe', HEALTH.pipelineStatus);
   setPill('pDb', HEALTH.dbStatus);
 
-  /* lSent / lNews: those status pills were removed from the markup, so the
-     spans no longer exist. Without a guard the first render() threw
-     "Cannot set properties of null (setting 'textContent')" at this line,
-     which aborted render() before renderPrepStrip() ever ran - exactly why
-     the four asset cards stayed blank. Guard every pill span; a missing
-     element is silently skipped rather than crashing the whole render. */
+  /* Every pill span is guarded: a missing element is silently skipped
+     rather than crashing the whole render (a null textContent assignment
+     aborted render() before the asset cards were drawn). */
   var _lLlm=document.getElementById('lLlm'); if(_lLlm) _lLlm.textContent='LLM: '+HEALTH.llmStatus;
-  var _lSent=document.getElementById('lSent'); if(_lSent) _lSent.textContent='Sentiment: '+HEALTH.globalSentiment+' | Session: '+HEALTH.activeSession;
-  var _lNews=document.getElementById('lNews'); if(_lNews) _lNews.textContent='News Feed: '+HEALTH.newsFeedStatus;
+  /* The news pill carries the source counts, so a partially dead feed is
+     visible at a glance instead of only when every source is down. */
+  var _lNews=document.getElementById('lNews');
+  if(_lNews) _lNews.textContent='News Feed: '+HEALTH.newsFeedStatus
+      + ((HEALTH.sourcesOk!==null&&HEALTH.sourcesOk!==undefined&&HEALTH.sourcesPolled)
+         ? (' ('+HEALTH.sourcesOk+'/'+HEALTH.sourcesPolled+')') : '');
   var _lPipe=document.getElementById('lPipe'); if(_lPipe) _lPipe.textContent='Pipeline: '+HEALTH.pipelineStatus;
-   var _lDb=document.getElementById('lDb'); if(_lDb) _lDb.textContent='Pipeline: '+(HEALTH.dbStatus==='OK'?'OK':'NO TICK');
+   var _lDb=document.getElementById('lDb'); if(_lDb) _lDb.textContent='Tick: '+(HEALTH.dbStatus==='OK'?'OK':'STALE');
   var _ts=document.getElementById('tsLastUpdated'); if(_ts) _ts.textContent='Last Updated: '+(HEALTH.lastUpdated||'n/a');
   var _eng=document.getElementById('engineToggle');
   if(_eng){
@@ -1394,16 +1442,37 @@ function render(d){
   renderFeed(FEED.items);
   document.getElementById('disclaimer').textContent=d.disclaimer||'';
 }
+/* Show or clear the "engine is not answering" banner.
+   A failed fetch used to write one line to the browser console and nothing
+   else: the page kept showing the last render, frozen, with no indication
+   that the engine had died. The banner makes that visible. */
+function setConnLost(lost, err){
+  var b=document.getElementById('connBanner');
+  if(!b) return;
+  if(lost){
+    b.classList.remove('hidden');
+    b.textContent='🔌 CONNECTION LOST — the engine is not answering ('
+      +((err&&err.message)?err.message:'network error')
+      +'). Everything below is the last snapshot received.';
+  }else{
+    b.classList.add('hidden');
+  }
+}
 async function load(){
   try{
     const r=await fetch('/api/dashboard');
+    if(!r.ok) throw new Error('HTTP '+r.status);
     const d=await r.json();
+    setConnLost(false);
     try {
         render(d);
     } catch(err) {
         console.error('RENDER ERROR:', err.message, err.stack);
     }
-  }catch(e){ console.error('FETCH ERROR:', e); }
+  }catch(e){
+    console.error('FETCH ERROR:', e);
+    setConnLost(true, e);
+  }
   loadFinancialJuice();
   loadCalibLabels();
 }

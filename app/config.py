@@ -191,7 +191,7 @@ class Settings(BaseSettings):
     # STEP 11: bias_min_abs_score / bias_min_confidence / bias_score_scale
     # were the NO_BIAS-era floors. Item 2 replaced them with a BINARY bias
     # (BULLISH or BEARISH, never withheld), and the equivalents now live as
-    # module constants in app/analysis/sentiment_engine.py: EPS = 12.0 is the
+    # module constants in app/analysis/sentiment_engine.py: EPS = 25.0 is the
     # old bias_min_abs_score and TIEBREAK_MAX_CONFIDENCE = 0.30 is the old
     # bias_min_confidence. Keeping the settings copies invited reading a
     # threshold that nothing consults, so they are retired here; see
@@ -202,11 +202,18 @@ class Settings(BaseSettings):
     # below it the new reading is too thin to be trusted and the previous bias
     # is held instead, with the note recording the reason. This is a GATE on
     # flipping, not on publishing - the label stays binary, and a first-run
-    # verdict (no previous bias to hold) is never refused. 0.35 is the
-    # proposed default; raise it to make flips harder, lower to make them
-    # easier.
+    # verdict (no previous bias to hold) is never refused. A fresh Tier-1
+    # official release also ignores the floor: a confirmed release flips on
+    # its own, however thin the surrounding evidence.
+    #
+    # WIRED UP (this used to be dead): the value lived as a hardcoded 0.30 in
+    # sentiment_engine.py while THIS field sat at 0.50 and was read by
+    # nothing - the two disagreed and the field was inert. The engine now
+    # reads this field, and the default matches the value that was actually
+    # in force, so enabling the gate changes no behaviour until the operator
+    # chooses a different number.
     # DAY TRADING: lower threshold for faster flips (was 0.35)
-    flip_min_confidence: float = 0.50
+    flip_min_confidence: float = 0.30
     # Dampening factor for display/cue strength. damped = raw * total_weight / (total_weight + k).
     # k=0 disables dampening (damped = raw). Default 0.5.
     # DAY TRADING: less dampening for more responsive scores (was 0.5)
@@ -391,16 +398,98 @@ class Settings(BaseSettings):
     # How much a high-relevance gold story bleeds into silver (and vice versa).
     # Both relevance AND persistence are multiplied by this, so it is a single
     # knob for how much the pair shares a common driver. Lower values make
-    # silver require its OWN corroboration rather than inheriting gold's read;
-    # the 0.40 default reflects the historical observation that most macro
-    # headlines genuinely move both metals, while 0.30 is the proposed
-    # tightening that stops silver being a shadow of gold.
+    # silver require its OWN corroboration rather than inheriting gold's read.
+    #
+    # WIRED UP (this used to be dead): signal_factory.build_bleed_signal
+    # hardcoded 0.40 on both relevance and persistence, so this field - and
+    # every "tune the bleed" instruction that pointed at it - did nothing.
+    # The builder now reads this field. 0.30 is the tightening that stops
+    # silver being a shadow of gold; raise it toward 1.0 to let the pair
+    # share a driver more fully.
     gold_silver_bleed: float = 0.30
+
+    # ---------------- LLM budget ----------------
+    # How many articles may be classified by the model in one tick, and how
+    # many SECONDS of that tick the model may take.
+    #
+    # The COUNT cap alone cannot keep a tick inside its interval: a slow
+    # provider burns the full 60s timeout on every call. The circuit breaker
+    # does not cover that case either - it counts CONSECUTIVE failures, so a
+    # provider that alternates success and timeout never trips it.
+    #
+    # MEASURED on the live database (last 80 ticks): tick duration was
+    # p50 121s, p90 589s, max 946s (15.8 minutes), and 27 of 80 ticks ran
+    # past the 180s tick interval. A ten-minute tick is a ten-minute-stale
+    # card, which defeats the point of an intraday engine - so the tick now
+    # has a TIME allowance as well, and the remaining articles fall back to
+    # deterministic heuristics once it is spent.
+    llm_batch_limit: int = Field(default=15, validation_alias="LLM_BATCH_LIMIT")
+    llm_tick_budget_seconds: float = Field(
+        default=90.0, validation_alias="LLM_TICK_BUDGET_SECONDS")
 
     # ---------------- decision log / audit (item 11) ----------------
     # Every classification and every published bias is appended here so the
     # transmission map and decay table can be tuned against real outcomes.
     decision_log_path: str = "logs/decisions.jsonl"
+
+    # ---------------- stale mass cap ----------------
+    # How much OLD news may contribute to a card, as a multiple of the total
+    # FRESH news in the same card.
+    #
+    # The per-signal decay floors at DECAY_FLOOR (0.05) past the trading-day
+    # cutoff, so old news fades but never vanishes. That is deliberate and
+    # tested. The problem is that the floor is PER SIGNAL: with 130+ signals
+    # a tick, hundreds of hours-old headlines each add 5% of their weight and
+    # the accumulated shelf becomes the majority of the evidence.
+    #
+    # MEASURED on the live database - the day's surviving HIGH/VERY_HIGH
+    # weight mass that is already older than the 8h cutoff, by hour of the
+    # session:
+    #
+    #     hour  09  10  11  12  13  14  15  16  17  18  19  20  23
+    #     stale 20% 29% 29% 31% 31% 56% 54% 68% 66% 69% 67% 65% 57%
+    #
+    # Through the US session the card is majority-driven by news that was
+    # already priced in hours ago, and a headline that just landed cannot
+    # move it. That is the opposite of what a DAY-TRADING tool should be.
+    #
+    # With 0.5, each side's stale mass is capped at half the card's total
+    # fresh mass, so at least half of every card is news from the last 8
+    # hours. The cap is measured against the TOTAL fresh mass, not against
+    # the same side's fresh mass, so a side with no fresh news of its own
+    # cannot be drowned by the other side's stale news either.
+    #
+    # Set to 0.0 (or less) to disable the cap - old news then counts in full.
+    # Set to 1.0 to allow each side's stale mass to reach the whole fresh
+    # mass.
+    stale_mass_cap_ratio: float = Field(
+        default=0.5, validation_alias="STALE_MASS_CAP_RATIO")
+
+    # ---------------- outcome capture (the measurement loop) ----------------
+    # The engine now scores ITSELF. Every published bias CHANGE is recorded
+    # as a PENDING call, the price at the call is stored, and the call is
+    # resolved to WORKED / FAILED / Mixed once the horizon has elapsed.
+    #
+    # Until this existed, ``bias_outcome`` could only be filled by hand - one
+    # click per call, ~1,400 clicks a day - so it had zero rows for the whole
+    # life of the project and every tuning decision was unfalsifiable.
+    #
+    # NOTHING HERE FEEDS BACK INTO SCORING. The engine never reads these
+    # numbers when it decides a bias; they only tell you, afterwards,
+    # whether it was right.
+    outcome_capture_enabled: bool = True
+    # How long a call is given to prove itself, in minutes.
+    outcome_horizon_minutes: int = 30
+    # Dead band, in percent. A move smaller than this is MIXED (neither
+    # confirmed nor contradicted) rather than a hit or a miss.
+    outcome_min_move_pct: float = 0.05
+    # How far the entry and exit prices may sit from the exact window edges
+    # before the call is left PENDING rather than scored against a stale
+    # price.
+    outcome_max_lookback_minutes: int = 10
+    # How long price points are kept. The series only has to cover the
+    # horizon plus slack.
+    outcome_price_retention_hours: int = 72
 
     # ---------------- economic calendar ----------------
     economic_calendar_enabled: bool = True
@@ -785,10 +874,19 @@ TIER_MULTIPLIERS = {
 # even though gold trades that print for hours. Tier 2 speeches from London
 # open were dead by the 13:30 US window. Half-lives are now sized to how long
 # each event tier actually drives price intraday:
-#   TIER_1 (CPI/FOMC/NFP/geopolitical): 1.5h -> 63% at 2h, 40% at 4h
-#   TIER_2 (speeches/secondary data):    0.75h -> 47% at 1h, 28% at 2h
-#   TIER_3 (commentary/previews):        0.25h -> 25% at 30min, 6% at 1h
-# TRADING_DAY_CUTOFF_HOURS: any item older than this gets weight 0.
+#   TIER_1 (CPI/FOMC/NFP/geopolitical): 1.5h  -> 63% at 2h, 40% at 4h
+#   TIER_2 (speeches/secondary data):    1.25h -> 74% at 1h, 55% at 2h
+#   TIER_3 (commentary/previews):        1.0h  -> 71% at 30min, 50% at 1h
+#
+# TIER_2 and TIER_3 were both wrong in the comment above for a while - it
+# said 0.75h and 0.25h, which are half the live TIER_2 value and a quarter
+# of the live TIER_3 value. Commentary news was therefore living in the
+# scoring window four times longer than the comment claimed. The table below
+# is the truth; the comment above it now matches.
+#
+# TRADING_DAY_CUTOFF_HOURS: any item older than this does not get weight 0 -
+# it gets the DECAY_FLOOR (0.05), and the accumulated stale mass is capped
+# in _aggregate (see settings.stale_mass_cap_ratio).
 TIER_HALF_LIVES = {
     "TIER_1": 1.5,
     "TIER_2": 1.25,

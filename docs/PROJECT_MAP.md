@@ -44,17 +44,31 @@ app/config/transmission_map.json event types count; GENERAL_MACRO excluded detec
 
 ## Section 7 — Persistence model
 
-Tables: news_article, news_event, article_event, asset_impact, sentiment_snapshot, bias_snapshots, alert, pipeline_run, bias_outcome, dropped_article.
+Tables: news_article, news_event, article_event, asset_impact, sentiment_snapshot, bias_snapshots, alert, pipeline_run, bias_outcome, dropped_article, price_point.
 
 SentimentSnapshot columns include raw_score, bull, bear, cluster_conflict, evidence_split (verified PRAGMA output shows all present).
 
 Migrations in app/database.py: ensure idempotent ALTER TABLE statements for new columns.
 
+### The outcome loop (app/services/outcomes.py)
+
+The engine scores ITSELF. `record_new_calls` writes a PENDING `bias_outcome`
+row every time the published bias CHANGES for an asset; `record_price_point`
+stores what the price actually was; `resolve_pending` turns a call into
+WORKED / FAILED / Mixed once the horizon has elapsed. `price_point` is the
+ground truth the resolution needs.
+
+Before this, `bias_outcome` could only be filled by hand — one click per
+call — so it had 0 rows for the whole life of the project and every tuning
+decision in the repo was unfalsifiable. Nothing in this loop feeds back into
+scoring: it can only tell you, afterwards, whether the engine was right.
+
 ## Section 8 — Tests
 
-1450 tests collected. Full run timed out at ~49% (suspected hang on network-dependent test). No final pass count available from this run. Collected count verified: 1450.
+1542 tests collected and passing. Full run: 1542 passed in ~90s.
 
-Test files grouped by phase: Step 1–11, Task 1–2, verification passes (verify_*.py).
+Test files grouped by phase: Step 1–11, Task 1–2, verification passes (verify_*.py), plus
+test_outcome_capture.py (the outcome loop) and test_stale_mass_cap.py (the stale cap).
 
 ## Section 9 — Known discrepancies
 
