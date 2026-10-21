@@ -116,6 +116,12 @@ COUNTRY_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
       "payroll", "inflation"), "USD"),
 )
 
+#: The GENERIC fallback list - the one that attributes a title to the US
+#: because it mentions an indicator rather than a country. A country derived
+#: this way is LOW CONFIDENCE: the answer is usually right and always
+#: unproven.
+GENERIC_HINTS = COUNTRY_HINTS[-1][0]
+
 #: Speaker-style rows ("ECB's Lane Speaks") carry no numbers at all. They are
 #: recognised so they can still be PROFILED (phase 4), but must never produce
 #: a surprise because there is no forecast to compare against.
@@ -151,6 +157,30 @@ def render_tz_matches() -> bool:
     return configured.utcoffset(None) == timezone.utc.utcoffset(None)
 
 
+def guess_country_detail(title: str) -> tuple[str, str, bool]:
+    """
+    Derive the ISO country from an event title, and say HOW confident it is.
+
+    Returns ``(code, needle, is_generic)``. ``is_generic`` is True when the
+    country came from the GENERIC indicator list - the title named no country
+    at all and was attributed to the US because it mentions "cpi" or "pmi".
+    That answer is usually right and always unproven: a Swiss CPI and a US
+    CPI have the same words in them, and only an explicit country marker
+    distinguishes them. A generic derivation is therefore LOW CONFIDENCE and
+    is marked as such in the log.
+
+    ``needle`` is the word that decided it, for the audit trail.
+    """
+    lowered = (title or "").lower()
+    for pass_fn in (lambda n: re.search(rf"\b{re.escape(n)}\b", lowered),
+                    lambda n: n in lowered):
+        for needles, code in COUNTRY_HINTS:
+            for needle in needles:
+                if pass_fn(needle):
+                    return code, needle, needles is GENERIC_HINTS
+    return "", "", False
+
+
 def guess_country(title: str) -> str:
     """
     Derive the ISO country from an event title.
@@ -164,15 +194,11 @@ def guess_country(title: str) -> str:
     "fed" cannot match inside "federal"; then as plain substrings, so
     distinctive multi-word needles and possessives like "Fed's Williams Speaks"
     still resolve. A hit in either pass wins.
+
+    Use :func:`guess_country_detail` when the CONFIDENCE matters as well as
+    the answer.
     """
-    lowered = (title or "").lower()
-    for pass_fn in (lambda n: re.search(rf"\b{re.escape(n)}\b", lowered),
-                    lambda n: n in lowered):
-        for needles, code in COUNTRY_HINTS:
-            for needle in needles:
-                if pass_fn(needle):
-                    return code
-    return ""
+    return guess_country_detail(title)[0]
 
 
 def parse_page_date(heading: str, reference: datetime) -> date | None:
@@ -281,7 +307,17 @@ def parse_rows(raw_rows: list[dict], reference: datetime | None = None,
             skipped += 1
             continue
 
-        country = (row.get("country") or "").strip().upper() or guess_country(title)
+        country = (row.get("country") or "").strip().upper()
+        if not country:
+            country, needle, is_generic = guess_country_detail(title)
+            if country and is_generic:
+                # LOW CONFIDENCE: the title named no country, only an
+                # indicator. The answer is usually right and always unproven,
+                # so it is marked here rather than silently trusted.
+                log.info("FinancialJuice calendar: LOW-CONFIDENCE country "
+                         "derivation - %r -> %s via the generic fallback "
+                         "'%s' (no country marker in the title)",
+                         title[:60], country, needle)
         if not country:
             # No country means no country multiplier can be applied, and the
             # engine's USD-only gate would silently drop it anyway.

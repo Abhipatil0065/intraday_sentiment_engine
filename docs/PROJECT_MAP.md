@@ -70,8 +70,54 @@ scoring: it can only tell you, afterwards, whether the engine was right.
 Test files grouped by phase: Step 1–11, Task 1–2, verification passes (verify_*.py), plus
 test_outcome_capture.py (the outcome loop) and test_stale_mass_cap.py (the stale cap).
 
-## Section 9 — Known discrepancies
+## Section 9 — Region-scoped macro bias (2026-10-22)
 
+New modules (additive; nothing else in the engine changed):
+
+- `app/config/calendar_bias.json` — THE config file: the region whitelist
+  (code, currencies, aliases, weight, include/exclude keywords), impact
+  weights, impact floor, surprise settings (standardised / percent fallback /
+  sigma cap), time decay, inverted indicators, central-bank decision + speech
+  keywords and speech tags, `scenario_map`, `stance_map`, the signed
+  `asset_sensitivity` matrix, normalisation, label bands, the event-risk
+  window, the upcoming list, and the presentation knobs.
+- `app/analysis/calendar_config.py` — loads/validates that file, holds the
+  two-stage matcher (country/currency first, then the title keyword list) and
+  `filter_events()`. Raises `CalendarConfigError` on a broken file; callers
+  decide what that means (the input filter fails safe, the panel reports it).
+- `app/analysis/regional_bias.py` — the engine: surprise, stance (inverted
+  indicators, rate decisions, tagged speeches), scenario selection, time
+  decay, per-asset score, region breakdown, top drivers, upcoming list, event
+  risk, payload.
+
+Wiring:
+
+- `app/ingestion/economic_calendar.py::apply_region_filter` — the filter at
+  the calendar input; behind `settings.calendar_region_filter_enabled`
+  (`CALENDAR_REGION_FILTER_ENABLED`, default true).
+- `app/ingestion/economic_calendar.py::apply_impact_overrides_logged` — the
+  FORCED impact (`impact_overrides` in the config), applied before any
+  weighting and logged on every change.
+- `app/ingestion/calendar_cache.py::merge_history` / `save_history` — the
+  last 48 h of RAW events, persisted to `data/calendar_history.json`, so the
+  time decay survives a restart. The provider only exposes TODAY, so without
+  it a restart loses yesterday's releases - and their decay.
+- `app/services/pipeline.py` — `current_calendar_events()` (read-only copy)
+  and `regional_bias_payload()`.
+- `app/main.py` — the dashboard payload carries `regional_bias`.
+- `app/dashboard/web/index.html` — `SECTION A2 — REGIONAL MACRO BIAS`
+  (`renderRegionalBias`).
+- `app/ingestion/fj_calendar.py::guess_country_detail` — the country AND
+  its confidence: a derivation from the GENERIC fallback list is LOW
+  confidence and is logged as such.
+- `tools/audit_calendar.py` — the audit: every event, its derived country,
+  the confidence, the region, kept/dropped and why, plus the flags.
+
+Tests: `tests/test_calendar_regions.py`, `tests/test_regional_bias.py`,
+`tests/test_calendar_poll_cadence.py`, `tests/test_calendar_overrides.py`,
+`tests/test_calendar_history.py`.
+
+## Section 10 — Known discrepancies
 - raw_score: DB newest 5 rows all have raw_score populated (-68.7, -68.3, ...). Contradicts prior "raw_score write missing" if that was the claim; current state shows populated.
 - bull/bear: newest 5 rows populated (0.96/5.17 etc).
 - cluster_conflict: flagged on 941 of 1183 captured ticks (79.5%) before the

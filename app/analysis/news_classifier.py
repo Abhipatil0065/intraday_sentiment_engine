@@ -48,23 +48,51 @@ MAX_BODY_CHARS = 2000
 
 # Per-article LLM wall-clock budget. One article that hangs cannot stall the
 # entire tick: after this many seconds the classifier falls back to heuristics.
-# meta/llama-3.2-11b-vision-instruct consistently returns in ~6-16s; the 60s
-# ceiling gives it headroom for cold starts and variance without treating it
-# as a failure.
-LLM_PER_ARTICLE_TIMEOUT = 60
+#
+# RAISED 60s -> 90s on 2026-10-21. The old comment claimed the endpoint
+# "consistently returns in ~6-16s"; that stopped being true. Measured on the
+# live endpoint that day: a MINIMAL call (64 tokens, "return {"ok": true}")
+# took 30.4s, and a full classification ~21s when it worked at all. With the
+# HTTP timeout at 20s, calls sat exactly ON the provider's latency line, so
+# most of them timed out and the tick fell back to heuristics - the model was
+# paying for nothing. 90s leaves room for one slow attempt plus a retry
+# under the 45s HTTP timeout, while still bounding a hung article.
+LLM_PER_ARTICLE_TIMEOUT = 90
 
 # Max concurrent LLM calls per tick. Keeps the event loop responsive and
 # respects provider rate limits.
 LLM_MAX_CONCURRENT = settings.llm_max_concurrent
 
 _LLM_SEMAPHORE: asyncio.Semaphore | None = None
+# Loop the cached semaphore is bound to - see _llm_semaphore().
+_LLM_SEMAPHORE_LOOP: asyncio.AbstractEventLoop | None = None
 
 
 def _llm_semaphore() -> asyncio.Semaphore:
-    """Lazily created concurrency limiter for LLM classify calls."""
-    global _LLM_SEMAPHORE
-    if _LLM_SEMAPHORE is None:
+    """Lazily created concurrency limiter, rebound when the event loop changes.
+
+    The scheduler runs the pipeline in a worker thread via ``asyncio.run()``,
+    which opens and CLOSES a fresh event loop every tick. An
+    ``asyncio.Semaphore`` binds itself to the loop that first had to WAIT on
+    it, and asyncio then refuses to use it from any other loop ("... is bound
+    to a different event loop"). With a single call in flight the semaphore
+    never blocked and never bound, so the bug stayed invisible. It bites as
+    soon as calls overlap: the first call of the NEXT tick takes the
+    semaphore, the ones that have to wait raise, and the tick reports a
+    provider failure for a request that never left the process.
+
+    The tick now classifies concurrently (pipeline._preclassify_for_llm), so
+    this is live code. Same guard as llm_client.get_client(): when the
+    running loop changes, the cached object is replaced rather than reused.
+    """
+    global _LLM_SEMAPHORE, _LLM_SEMAPHORE_LOOP
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:  # pragma: no cover - always called from a loop
+        current_loop = None
+    if _LLM_SEMAPHORE is None or _LLM_SEMAPHORE_LOOP is not current_loop:
         _LLM_SEMAPHORE = asyncio.Semaphore(LLM_MAX_CONCURRENT)
+        _LLM_SEMAPHORE_LOOP = current_loop
     return _LLM_SEMAPHORE
 
 

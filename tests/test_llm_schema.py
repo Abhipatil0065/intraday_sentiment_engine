@@ -70,10 +70,32 @@ def test_missing_assets_key_is_rejected():
         validate_llm_payload(payload)
 
 
-def test_unknown_asset_is_rejected_not_coerced():
-    with pytest.raises(Exception):
-        validate_llm_payload(good_payload(assets=[{
-            "asset": "PETROL", "direction": "BULLISH", "magnitude": 0.5}]))
+def test_unknown_asset_is_dropped_not_coerced():
+    """An off-universe asset is dropped; the rest of the verdict survives.
+
+    CHANGED 2026-10-21. This used to reject the WHOLE response, which threw
+    away a completed model call (20-40s on the live endpoint) because the
+    model slipped in a neighbouring instrument. The contract is now: the
+    unknown entry is dropped, and it is NEVER coerced into one of our assets.
+    """
+    result = validate_llm_payload(good_payload(assets=[{
+        "asset": "PETROL", "direction": "BULLISH", "magnitude": 0.5}]))
+
+    assert [a.asset.value for a in result.assets] == []
+    # The rest of the verdict is still usable.
+    assert result.importance == "HIGH"
+    assert result.category is not None
+
+
+def test_unknown_asset_does_not_take_a_valid_one_with_it():
+    """A mixed payload keeps the real asset and drops the invented one."""
+    result = validate_llm_payload(good_payload(assets=[
+        {"asset": "USD/DXY", "direction": "BEARISH", "magnitude": 0.7},
+        {"asset": "XAUUSD", "direction": "BULLISH", "magnitude": 0.5},
+    ]))
+
+    assert [a.asset.value for a in result.assets] == ["XAUUSD"]
+    assert result.assets[0].direction == "BULLISH"
 
 
 def test_invalid_direction_is_rejected():

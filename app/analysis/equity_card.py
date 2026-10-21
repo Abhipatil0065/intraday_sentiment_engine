@@ -497,7 +497,24 @@ def build_equity_card(all_signals: Sequence[WeightedSignal],
         signal_count=int(getattr(result, "signal_count", 0)),
         no_data=False,
         stale=bool(getattr(result, "stale", False)),
-        note="",
+        # THE ENGINE'S NOTE, carried through like the asset cards carry theirs.
+        #
+        # It was dropped here (note=""), which was invisible while this card
+        # published no raw lean. Now that the card publishes ``raw_score`` on
+        # its evidence line, a reading whose VERDICT and AGGREGATE disagree
+        # needs its explanation on the card, exactly as it does on the asset
+        # cards - otherwise the reader sees "BEARISH" above "score +10.0" and
+        # no reason why.
+        #
+        # The notes that matter here are the engine's own:
+        #   - "Net score inside EPS; direction taken from the heaviest, newest
+        #     signal (binary tie-break)."   (|raw| < EPS, the common case)
+        #   - "Bias flipped: ... on a fresh Tier-1 release (day aggregate
+        #     still +39.8)."
+        #   - "Bias held (stability): ... maintained despite raw score -10.0."
+        # An ordinary tick carries an empty note, so the card is unchanged
+        # there.
+        note=str(getattr(result, "note", "") or ""),
         last_updated=T.stamp(),
         contradiction_detected=bool(getattr(
             result, "contradiction_detected", False)),
@@ -540,6 +557,39 @@ def to_payload(card: EquityCardResult) -> dict:
     # instead of a forced 51/49 lean.
     result["bull"] = float(card.bull)
     result["bear"] = float(card.bear)
+    # THE RAW LEAN, so this card can print the same evidence line as the asset
+    # cards ("score -60.9 - bull 0.5 - bear 2.3").
+    #
+    # The dashboard's equityCard() draws that line ONLY when ``raw_score`` is
+    # present - the gate is
+    #
+    #     (e.raw_score !== null && e.raw_score !== undefined) ? line : ''
+    #
+    # so a payload without the key renders no line at all, and the bull/bear
+    # totals go unprinted with it. The asset cards get the key from
+    # main._block() ("raw_score": _display_raw); this card is built by
+    # to_payload() instead, so the key has to be published here as well.
+    #
+    # It is the SAME value the asset cards publish: the un-flipped net lean
+    # (``raw`` in sentiment_engine.compute). ``score`` on this payload is the
+    # label-consistent twin of it (payload_score flips the sign so the number
+    # cannot contradict the badge), so the pair here matches the pair on every
+    # other card.
+    #
+    # NULL, NOT ZERO, WHEN NOTHING WAS AGGREGATED. A card with no evidence -
+    # no regional news at all (neutral_card), or every matched signal carrying
+    # zero relevance - has no captured lean: publishing 0.0 would print
+    # "score 0.0 - bull 0.0 - bear 0.0" and read as a MEASURED even split
+    # rather than the absence of one. The same usability test the display
+    # split uses (split_from_totals returns None when the two totals add up
+    # to nothing) decides it here, and the dashboard already skips the line
+    # for a null value. A genuine even split with evidence behind it
+    # (bull == bear > 0) still publishes 0.0, because that one IS measured.
+    result["raw_score"] = (
+        float(card.raw_score)
+        if (float(card.bull) + float(card.bear)) > 0.0
+        else None
+    )
     result["display"] = to_display(
         card.score, card.bias, card.confidence,
         tie_break=abs(float(card.raw_score)) < EPS,

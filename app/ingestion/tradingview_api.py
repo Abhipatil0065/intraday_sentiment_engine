@@ -33,7 +33,14 @@ NEWS_API_BASE = "https://news-mediator.tradingview.com/public/news-flow/v2/news"
 DEFAULT_FILTERS = ["lang:en"]
 DEFAULT_PARAMS = {
     "client": "landing",
-    "streaming": "false",
+    # streaming=true returns each story's LATEST UPDATE time, not the time it
+    # was first published. With streaming=false a story that TradingView keeps
+    # updating (a live gold price piece, for example) keeps its ORIGINAL
+    # timestamp and ages out of the trading-day window while it is still the
+    # freshest thing on the feed. Measured 2026-10-21: the same 30 items came
+    # back either way, but the newest item was 143 minutes old with
+    # streaming=false and 5 minutes old with streaming=true.
+    "streaming": "true",
     "user_prostatus": "non_pro",
 }
 
@@ -207,19 +214,43 @@ def _record_success(symbol: str) -> None:
         del _staleness[symbol]
 
 
+def _map_item(item: dict) -> dict:
+    """Raw API item -> internal schema."""
+    from datetime import timezone
+    return {
+        "news_id": item.get("id"),
+        "title": item.get("title", ""),
+        "url": "https://www.tradingview.com" + item.get("storyPath", ""),
+        "published_at": datetime.fromtimestamp(
+            item["published"], tz=timezone.utc).isoformat()
+            if item.get("published") else None,
+        "source": item.get("provider", {}).get("name", "TradingView"),
+        "symbols": [rs["symbol"] for rs in item.get("relatedSymbols", [])
+                    if rs.get("symbol")],
+        "is_flash": item.get("urgency", 0) >= 2,
+    }
+
+
 def fetch_tradingview_news_api(symbols: list[str], max_items: int = 30) -> list[dict]:
     """
     Fetch news from TradingView news-mediator API.
 
+    The budget is split EVENLY across the requested symbols. The API returns
+    up to 30 items per symbol call, and the first symbol alone fills that
+    window, so an early break on "max_items reached" starves every later
+    symbol: with [XAUUSD, XAGUSD, BTCUSD] the source delivered gold headlines
+    and NOTHING for silver or crypto, and the engine's XAGUSD/BTCUSD cards
+    never saw a TradingView line. Each symbol now gets max_items // len(symbols)
+    of the budget (10 of 30 for three symbols).
+
     Args:
         symbols: List of TradingView exchange-qualified symbols (e.g., ["OANDA:XAUUSD", "BINANCE:BTCUSD"])
-        max_items: Maximum number of news items to return (per symbol, deduplicated globally)
+        max_items: Maximum number of news items to return in total
 
     Returns:
         List of mapped news items with keys:
         news_id, title, url, published_at, source, symbols, is_flash
     """
-    from datetime import timezone
     session = _get_session()
     headers = {
         "User-Agent": (
@@ -232,31 +263,24 @@ def fetch_tradingview_news_api(symbols: list[str], max_items: int = 30) -> list[
 
     all_items: list[dict] = []
     seen_ids: set[str] = set()
+    per_symbol = max(1, max_items // max(1, len(symbols)))
 
     for symbol in symbols:
+        if len(all_items) >= max_items:
+            break
+        taken_for_symbol = 0
         # Check cache first
         cached = _get_cached(symbol, max_items)
         if cached is not None:
             for item in cached:
+                if taken_for_symbol >= per_symbol:
+                    break
                 news_id = item.get("id")
                 if not news_id or news_id in seen_ids:
                     continue
                 seen_ids.add(news_id)
-
-                mapped = {
-                    "news_id": news_id,
-                    "title": item.get("title", ""),
-                    "url": "https://www.tradingview.com" + item.get("storyPath", ""),
-                    "published_at": datetime.fromtimestamp(item["published"], tz=timezone.utc).isoformat()
-                        if item.get("published") else None,
-                    "source": item.get("provider", {}).get("name", "TradingView"),
-                    "symbols": [rs["symbol"] for rs in item.get("relatedSymbols", []) if rs.get("symbol")],
-                    "is_flash": item.get("urgency", 0) >= 2,
-                }
-                all_items.append(mapped)
-
-            if len(all_items) >= max_items:
-                break
+                all_items.append(_map_item(item))
+                taken_for_symbol += 1
             continue
 
         # Enforce rate limit before making request
@@ -271,9 +295,25 @@ def fetch_tradingview_news_api(symbols: list[str], max_items: int = 30) -> list[
             resp = session.get(NEWS_API_BASE, params=params, headers=headers, timeout=10)
 
             if resp.status_code != 200:
-                log.warning("TradingView API error for %s: HTTP %d", symbol, resp.status_code)
-                _record_empty(symbol)
-                continue
+                # The streaming feed is the fresh one; if it is unavailable for
+                # any reason, fall back to the non-streaming window rather than
+                # losing the symbol entirely.
+                log.warning(
+                    "TradingView API error for %s: HTTP %d - retrying without "
+                    "streaming", symbol, resp.status_code)
+                fallback_params = dict(params)
+                fallback_params["streaming"] = "false"
+                try:
+                    resp = session.get(NEWS_API_BASE, params=fallback_params,
+                                       headers=headers, timeout=10)
+                except requests.RequestException:
+                    _record_empty(symbol)
+                    continue
+                if resp.status_code != 200:
+                    log.warning("TradingView API error for %s: HTTP %d",
+                                symbol, resp.status_code)
+                    _record_empty(symbol)
+                    continue
 
             data = resp.json()
             items = data.get("items", [])
@@ -288,29 +328,14 @@ def fetch_tradingview_news_api(symbols: list[str], max_items: int = 30) -> list[
             _record_success(symbol)
 
             for item in items:
+                if taken_for_symbol >= per_symbol:
+                    break
                 news_id = item.get("id")
                 if not news_id or news_id in seen_ids:
                     continue
                 seen_ids.add(news_id)
-
-                # Map to internal schema
-                mapped = {
-                    "news_id": news_id,
-                    "title": item.get("title", ""),
-                    "url": "https://www.tradingview.com" + item.get("storyPath", ""),
-                    "published_at": datetime.fromtimestamp(item["published"], tz=timezone.utc).isoformat()
-                        if item.get("published") else None,
-                    "source": item.get("provider", {}).get("name", "TradingView"),
-                    "symbols": [rs["symbol"] for rs in item.get("relatedSymbols", []) if rs.get("symbol")],
-                    "is_flash": item.get("urgency", 0) >= 2,
-                }
-                all_items.append(mapped)
-
-                if len(all_items) >= max_items:
-                    break
-
-            if len(all_items) >= max_items:
-                break
+                all_items.append(_map_item(item))
+                taken_for_symbol += 1
 
         except requests.RequestException as exc:
             log.warning("TradingView API request failed for %s: %s", symbol, exc)
@@ -321,7 +346,8 @@ def fetch_tradingview_news_api(symbols: list[str], max_items: int = 30) -> list[
             _record_empty(symbol)
             continue
 
-    log.info("Fetched %d unique news items from TradingView API (symbols=%s)", len(all_items), symbols)
+    log.info("Fetched %d unique news items from TradingView API (symbols=%s, per_symbol=%d)",
+             len(all_items), symbols, per_symbol)
     return all_items[:max_items]
 
 

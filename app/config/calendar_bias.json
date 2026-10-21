@@ -1,0 +1,375 @@
+{
+  "_readme": [
+    "REGION-SCOPED MACRO BIAS CONFIG.",
+    "Every weight, threshold and keyword list used by the regional macro bias",
+    "engine and by the calendar region whitelist lives HERE - never in Python.",
+    "Regions may be added or removed, and their event lists edited, without",
+    "touching any code. See README section 'Regional macro bias'.",
+    "",
+    "Matching is two-stage and strict:",
+    "  1. the event's country/currency must map to a region listed below;",
+    "  2. the event title must match that region's include_keywords",
+    "     (unless the region sets require_keyword to false).",
+    "Anything that fails either stage is dropped."
+  ],
+  "version": 1,
+
+  "regions": [
+    {
+      "code": "USA",
+      "label": "United States",
+      "currencies": ["USD"],
+      "country_aliases": ["US", "USA", "UNITED STATES", "AMERICA"],
+      "weight": 1.0,
+      "require_keyword": true,
+      "include_keywords": [
+        "fed", "fomc", "federal reserve", "powell", "beige book",
+        "cpi", "core cpi", "ppi", "pce", "core pce", "consumer price",
+        "producer price", "price index", "deflator",
+        "nonfarm", "non-farm", "nfp", "payroll", "employment change",
+        "average hourly earnings", "jolts",
+        "unemployment", "jobless claim", "initial claim", "continuing claim",
+        "gdp",
+        "ism", "pmi", "purchasing managers",
+        "retail sales",
+        "consumer confidence", "umich sentiment", "umich",
+        "university of michigan", "university michigan",
+        "treasury", "yield", "10-year", "2-year", "30-year",
+        "speaks", "speech", "testimony", "press conference", "remarks"
+      ],
+      "exclude_keywords": [
+        "bid-to-cover", "high yield", "bill", "bond", "tips", "auction"
+      ]
+    },
+    {
+      "code": "EUR",
+      "label": "Eurozone",
+      "currencies": ["EUR"],
+      "country_aliases": ["EUROZONE", "EURO AREA", "EURO", "EA", "EMU"],
+      "weight": 0.6,
+      "require_keyword": true,
+      "include_keywords": [
+        "ecb", "lagarde", "eurozone", "euro area", "eurogroup",
+        "hicp", "cpi", "consumer price", "inflation", "price index",
+        "gdp",
+        "pmi", "purchasing managers",
+        "german", "germany", "ifo", "zew",
+        "speaks", "speech", "press conference", "testimony", "remarks"
+      ],
+      "exclude_keywords": []
+    },
+    {
+      "code": "CNY",
+      "label": "China",
+      "currencies": ["CNY"],
+      "country_aliases": ["CHINA", "CHINESE", "CN", "PRC"],
+      "weight": 0.5,
+      "require_keyword": true,
+      "include_keywords": [
+        "pboc", "lpr", "loan prime rate", "people's bank of china",
+        "reserve requirement",
+        "cpi", "ppi", "consumer price", "producer price",
+        "caixin", "pmi", "nbs", "manufacturing pmi",
+        "gdp",
+        "industrial production",
+        "trade balance", "trade surplus", "trade deficit", "exports", "imports",
+        "retail sales",
+        "speaks", "speech", "press conference", "remarks"
+      ],
+      "exclude_keywords": []
+    },
+    {
+      "code": "JPY",
+      "label": "Japan",
+      "currencies": ["JPY"],
+      "country_aliases": ["JAPAN", "JAPANESE", "JP"],
+      "weight": 0.6,
+      "require_keyword": true,
+      "include_keywords": [
+        "boj", "bank of japan", "ueda",
+        "cpi", "core cpi", "core-core", "inflation",
+        "tankan",
+        "gdp",
+        "pmi", "purchasing managers",
+        "trade balance", "exports", "imports",
+        "speaks", "speech", "press conference", "remarks"
+      ],
+      "exclude_keywords": []
+    },
+    {
+      "code": "GBP",
+      "label": "United Kingdom",
+      "currencies": ["GBP"],
+      "country_aliases": ["UK", "GB", "UNITED KINGDOM", "BRITAIN", "BRITISH"],
+      "weight": 0.4,
+      "require_keyword": true,
+      "include_keywords": [
+        "boe", "bank of england", "bailey", "mpc",
+        "cpi", "consumer price", "inflation",
+        "ppi", "rpi",
+        "gdp",
+        "employment", "unemployment rate", "jobless claim", "earnings", "payroll",
+        "retail sales",
+        "pmi", "purchasing managers",
+        "speaks", "speech", "press conference", "testimony", "remarks"
+      ],
+      "exclude_keywords": []
+    }
+  ],
+
+  "impact_overrides": [
+    {
+      "_readme": [
+        "FORCED IMPACT. A rule with keywords and an impact tag raises (or lowers)",
+        "an event's impact before any weighting happens, so the weight, the",
+        "upcoming list and the event-risk window all see the forced value.",
+        "Applied at the calendar input, so the verdict and the regional panel",
+        "agree. Every change is logged."
+      ],
+      "impact": "High",
+      "keywords": [
+        "fomc rate decision", "fomc statement", "fomc press conference",
+        "fomc", "powell", "lagarde", "ueda", "bailey",
+        "rate decision", "policy decision", "interest rate decision",
+        "policy rate", "interest rate", "cash rate", "repo rate",
+        "main refinancing rate", "loan prime rate", "lpr",
+        "cpi", "core cpi", "nfp", "nonfarm", "non-farm", "pce", "core pce"
+      ],
+      "exclude_keywords": ["cpi expectations", "cpi forecast"]
+    }
+  ],
+
+  "impact": {
+    "_readme": "Low-impact prints are noise by default. min_impact is the floor.",
+    "min_impact": "Medium",
+    "weights": {
+      "High": 3.0,
+      "Medium": 2.0,
+      "Low": 1.0
+    }
+  },
+
+  "surprise": {
+    "_readme": [
+      "surprise = (actual - forecast) / historical std of the indicator,",
+      "reusing the engine's own surprise_std_table. When the indicator has no",
+      "std of its own, the percent-deviation fallback is used instead:",
+      "  z = ((actual - forecast) / |forecast|) * 100 / percent_divisor",
+      "so a relative miss of percent_divisor % counts as one sigma.",
+      "max_sigma caps how far ONE release can move the panel: the std table",
+      "holds rule-of-thumb estimates, and an indicator whose std is too tight",
+      "would otherwise produce a 4-sigma print that swamps everything else.",
+      "Set it to 0 to disable the cap."
+    ],
+    "use_standardised": true,
+    "percent_divisor": 10.0,
+    "min_magnitude": 0.0,
+    "max_sigma": 3.0
+  },
+
+  "time_decay": {
+    "_readme": [
+      "Full weight for the first full_weight_hours after the release, then a",
+      "linear decay to zero at decay_to_zero_hours."
+    ],
+    "full_weight_hours": 4.0,
+    "decay_to_zero_hours": 48.0
+  },
+
+  "inverted_events": {
+    "_readme": "A HIGHER-than-forecast print of these is a WEAK economy, so their sign is inverted.",
+    "keywords": [
+      "unemployment rate",
+      "unemployment",
+      "jobless claim",
+      "jobless claims",
+      "initial claim",
+      "initial jobless claim",
+      "continuing claim",
+      "continuing claims"
+    ]
+  },
+
+  "central_bank": {
+    "_readme": [
+      "A rate decision is scored from the decision itself versus the",
+      "expectation (actual rate vs forecast rate). A speech carries no",
+      "numbers, so it is scored from the keyword tags below - and a speech",
+      "with no tag scores NOTHING rather than guessing.",
+      "speech_magnitude is how much a TAGGED speech is worth, in sigma: it",
+      "has no surprise, so its magnitude is a configured number, not an",
+      "invented one."
+    ],
+    "speech_magnitude": 1.0,
+    "decision_keywords": [
+      "rate decision", "policy rate", "interest rate decision", "interest rate",
+      "cash rate", "repo rate", "fomc", "ecb", "boj", "boe", "lpr",
+      "loan prime rate", "main refinancing rate", "deposit facility rate"
+    ],
+    "speech_keywords": [
+      "speaks", "speech", "press conference", "testimony", "testifies",
+      "remarks", "keynote", "presser", "briefing"
+    ],
+    "speech_tags": [
+      {
+        "stance": "HAWKISH",
+        "keywords": [
+          "hawkish", "tightening", "higher for longer", "rate hike",
+          "raise rates", "rate increase", "upside risk", "restrictive",
+          "not easing", "further tightening", "no rush to cut", "patient",
+          "sticky inflation", "inflation remains elevated", "inflation is sticky"
+        ]
+      },
+      {
+        "stance": "DOVISH",
+        "keywords": [
+          "dovish", "easing", "rate cut", "cut rates", "lower the target",
+          "downside risk", "stimulus", "accommodative", "supportive",
+          "pause", "slowing growth", "weak demand", "disinflation",
+          "won't hike", "will not hike"
+        ]
+      }
+    ]
+  },
+
+  "scenario_map": {
+    "_readme": [
+      "Which sensitivity row an event uses. The key is the REGION code, the",
+      "inner key is the STANCE resolved for that event:",
+      "  HAWKISH/DOVISH - a central-bank decision (tight or loose);",
+      "  STRONG/WEAK   - a data print (hot or cold);",
+      "  EASING/TIGHTENING - a Chinese policy move.",
+      "A region with no entry for a stance contributes nothing."
+    ],
+    "USA": {
+      "HAWKISH": "USD_HAWKISH",
+      "STRONG": "USD_HAWKISH",
+      "DOVISH": "USD_DOVISH",
+      "WEAK": "USD_DOVISH"
+    },
+    "EUR": {
+      "HAWKISH": "ECB_HAWKISH",
+      "STRONG": "ECB_HAWKISH",
+      "DOVISH": "ECB_DOVISH",
+      "WEAK": "ECB_DOVISH"
+    },
+    "GBP": {
+      "HAWKISH": "BOE_HAWKISH",
+      "STRONG": "BOE_HAWKISH",
+      "DOVISH": "BOE_DOVISH",
+      "WEAK": "BOE_DOVISH"
+    },
+    "JPY": {
+      "HAWKISH": "BOJ_HAWKISH",
+      "STRONG": "BOJ_HAWKISH",
+      "DOVISH": "BOJ_DOVISH",
+      "WEAK": "BOJ_DOVISH"
+    },
+    "CNY": {
+      "STRONG": "CHINA_STRONG",
+      "WEAK": "CHINA_WEAK",
+      "EASING": "PBOC_EASING",
+      "TIGHTENING": "PBOC_TIGHTENING"
+    }
+  },
+
+  "stance_map": {
+    "_readme": [
+      "How a region's own policy stance is NAMED. A rate decision above",
+      "expectation is 'tight_stance' for that region's central bank.",
+      "China names it TIGHTENING/EASING instead of HAWKISH/DOVISH."
+    ],
+    "USA": {"tight": "HAWKISH", "loose": "DOVISH"},
+    "EUR": {"tight": "HAWKISH", "loose": "DOVISH"},
+    "GBP": {"tight": "HAWKISH", "loose": "DOVISH"},
+    "JPY": {"tight": "HAWKISH", "loose": "DOVISH"},
+    "CNY": {"tight": "TIGHTENING", "loose": "EASING"}
+  },
+
+  "asset_sensitivity": {
+    "_readme": [
+      "Signed multiplier per scenario and asset, from -1 to +1.",
+      "The sign says how a scenario of that kind reaches the asset.",
+      "USA hawkish (hot CPI, strong NFP, hawkish Fed) is a stronger dollar:",
+      "gold/silver/bitcoin down, equities down (mild).",
+      "A hawkish ECB or BOE weakens the dollar: gold/silver up, equities down.",
+      "A hawkish BOJ is yen strength and carry-trade unwind risk: bitcoin and",
+      "equities down, gold up. Strong China data is silver-positive.",
+      "Assets: XAUUSD (gold), XAGUSD (silver), BTCUSD (bitcoin), EQUITY (equities)."
+    ],
+    "USD_HAWKISH":    {"XAUUSD": -0.90, "XAGUSD": -0.85, "BTCUSD": -0.80, "EQUITY": -0.30},
+    "USD_DOVISH":     {"XAUUSD":  0.90, "XAGUSD":  0.85, "BTCUSD":  0.80, "EQUITY":  0.40},
+    "ECB_HAWKISH":    {"XAUUSD":  0.50, "XAGUSD":  0.45, "BTCUSD":  0.20, "EQUITY": -0.25},
+    "ECB_DOVISH":     {"XAUUSD": -0.50, "XAGUSD": -0.45, "BTCUSD": -0.20, "EQUITY":  0.25},
+    "BOE_HAWKISH":    {"XAUUSD":  0.45, "XAGUSD":  0.40, "BTCUSD":  0.15, "EQUITY": -0.20},
+    "BOE_DOVISH":     {"XAUUSD": -0.45, "XAGUSD": -0.40, "BTCUSD": -0.15, "EQUITY":  0.20},
+    "BOJ_HAWKISH":    {"XAUUSD":  0.40, "XAGUSD":  0.35, "BTCUSD": -0.60, "EQUITY": -0.50},
+    "BOJ_DOVISH":     {"XAUUSD": -0.40, "XAGUSD": -0.35, "BTCUSD":  0.50, "EQUITY":  0.40},
+    "CHINA_STRONG":   {"XAUUSD":  0.30, "XAGUSD":  0.70, "BTCUSD":  0.30, "EQUITY":  0.60},
+    "CHINA_WEAK":     {"XAUUSD":  0.25, "XAGUSD": -0.60, "BTCUSD": -0.20, "EQUITY": -0.60},
+    "PBOC_EASING":    {"XAUUSD":  0.35, "XAGUSD":  0.60, "BTCUSD":  0.45, "EQUITY":  0.65},
+    "PBOC_TIGHTENING":{"XAUUSD": -0.30, "XAGUSD": -0.50, "BTCUSD": -0.35, "EQUITY": -0.55}
+  },
+
+  "dedupe": {
+    "_readme": [
+      "One release publishes an m/m AND a y/y row at the same minute. They are",
+      "one macro moment, not two, so only the larger surprise is counted."
+    ],
+    "frequency_variants": true
+  },
+
+  "normalization": {
+    "_readme": [
+      "score = 100 * raw / scale, clipped to [min, max].",
+      "scale is the raw total that maps to a full 100 points."
+    ],
+    "scale": 10.0,
+    "method": "linear_clip",
+    "min": -100.0,
+    "max": 100.0
+  },
+
+  "labels": {
+    "_readme": "score <= strong_bearish -> Strong Bearish, etc.",
+    "strong_bearish": -60.0,
+    "bearish": -20.0,
+    "bullish": 20.0,
+    "strong_bullish": 60.0,
+    "names": {
+      "strong_bearish": "Strong Bearish",
+      "bearish": "Bearish",
+      "neutral": "Neutral",
+      "bullish": "Bullish",
+      "strong_bullish": "Strong Bullish"
+    }
+  },
+
+  "event_risk": {
+    "_readme": [
+      "An UPCOMING high-impact print adds NO score, but it is flagged:",
+      "inside the window (window_before_minutes before the release until",
+      "window_after_minutes after it) the neutral band is widened by",
+      "neutral_band_multiplier, so a thin score is not presented as a call.",
+      "the window stays active until window_after_minutes after the release."
+    ],
+    "window_before_minutes": 30,
+    "window_after_minutes": 15,
+    "min_impact": "High",
+    "neutral_band_multiplier": 2.0
+  },
+
+  "upcoming": {
+    "_readme": "High-impact releases from the whitelisted regions in the next N hours.",
+    "horizon_hours": 24,
+    "min_impact": "High",
+    "max_items": 20
+  },
+
+  "dashboard": {
+    "_readme": "Presentation knobs for the REGIONAL MACRO BIAS panel.",
+    "top_drivers": 3,
+    "stale_minutes": 30,
+    "max_events_per_asset": 0
+  }
+}

@@ -4,6 +4,197 @@ All notable changes to the Intraday News Sentiment & Market Impact Engine.
 
 ---
 
+## FORCED IMPACT, A WORKING SPEECH TAGGER, AND A DECAY THAT SURVIVES A RESTART (2026-10-22)
+
+### Feature — `impact_overrides`: the impact you decide, not the one the provider guesses
+- **Files:** `app/config/calendar_bias.json` (`impact_overrides`),
+  `app/analysis/calendar_config.py` (`ImpactOverride`, `override_impact`,
+  `apply_impact_overrides`), `app/ingestion/economic_calendar.py`
+  (`apply_impact_overrides_logged`), `app/analysis/regional_bias.py`
+  (the override is applied before the weighting there too)
+- **The rule:** a release listed in `impact_overrides` is forced to High
+  BEFORE any impact weighting, so it carries the High weight (3, not 2),
+  appears in the upcoming high-impact list, and opens the event-risk window.
+  FOMC rate decision / statement / press conference, Powell, Lagarde, Ueda,
+  Bailey, every central-bank rate decision, CPI, Core CPI, NFP and PCE are
+  forced to High by default; a rule may carry `exclude_keywords` so a survey
+  ("CPI Expectations") is not mistaken for a print.
+- **Logged:** every change names the event, the old impact, the new one and
+  the keyword that forced it.
+- **Interaction, stated plainly:** an overridden release also escapes the
+  impact floor - if the config says CPI is High, it is used even when the
+  provider tagged it Low. (In production the provider drops Low rows before
+  this point, so the case is hypothetical.)
+
+### Fix — the speech tagger now actually reaches the engine
+- **Files:** `app/analysis/regional_bias.py` (`_read_events`,
+  `speech_stance`), `app/analysis/calendar_config.py` (`speech_magnitude`),
+  `app/config/calendar_bias.json` (`central_bank.speech_tags`,
+  `central_bank.speech_magnitude`)
+- **The bug:** a speech has no number, so it has no surprise - and the engine
+  skipped every event without an actual/forecast BEFORE it looked at the
+  stance. The keyword tagger was therefore dead code in the engine: a tagged
+  speech never scored. The stance is now resolved first, and a tagged speech
+  or press conference is worth `central_bank.speech_magnitude` sigma - a
+  configured number, never an invented surprise.
+- **Also:** the tagger is config-driven end to end, reports the keywords it
+  matched, logs them, and shows them on the card. An UNTAGGED speech still
+  scores nothing, and a title that matches both a hawkish and a dovish word
+  is treated as untagged.
+
+### Feature — the whitelist grows, and the auction rows go
+- **File:** `app/config/calendar_bias.json`
+- **UK:** added `ppi`, `rpi`, `retail sales`. UK PPI (input and output
+  prices), UK RPI and UK Core Retail Sales are UK releases, not filler.
+- **USA:** the Treasury AUCTION rows are out - `bid-to-cover`, `high yield`,
+  `bill`, `bond`, `tips`, `auction` are now the USA `exclude_keywords`. A
+  genuine "US 10-Year Treasury Yield" stays on the list; "US 20-Year Bond
+  High Yield" and its siblings do not.
+
+### Feature — the time decay survives a restart
+- **Files:** `app/ingestion/calendar_cache.py` (`save_history`,
+  `load_history`, `merge_history`), `app/ingestion/economic_calendar.py`
+  (`merge_with_history`), `app/config.py` (`calendar_history_hours`)
+- **The problem:** the provider only ever exposes TODAY, and the calendar was
+  in-memory only, so every restart lost yesterday's releases - and with them
+  the decay, exactly when it still matters (a print six hours old is still
+  worth 90% of its weight).
+- **The fix:** the last 48 h of events are persisted to
+  `data/calendar_history.json` and merged back into every poll. The history
+  holds the RAW feed, so the whitelist and the forced impact are re-applied
+  to it on every poll: a config edit still takes effect immediately instead
+  of resurrecting a release the user has since excluded.
+
+### Feature — a LOW-CONFIDENCE country derivation is marked, not hidden
+- **Files:** `app/ingestion/fj_calendar.py` (`guess_country_detail`,
+  `GENERIC_HINTS`, the parse-time log), `tools/audit_calendar.py` (new)
+- **Why:** FJ renders no country column, so the country comes from the
+  title. A country derived from the GENERIC fallback list ("cpi", "pmi",
+  "gdp", ...) is attributed to the US because the title names an indicator and
+  no country. That answer is usually right and always unproven - "Swiss CPI"
+  and "US CPI" contain the same words. Such a derivation is now marked LOW
+  confidence in the engine log and in the audit output.
+- **The audit tool:** `python tools/audit_calendar.py [--live]` prints every
+  event with its derived country, the confidence, the assigned region, whether
+  it was kept or dropped and why - and flags every untrustworthy derivation.
+
+### Report — the latest day, end to end
+- On the live feed (21 Oct, 72 events): 31 kept by the whitelist, of which
+  **7 had both an actual and a forecast**, and **4 contributed a non-zero
+  score**. The other 27 scored zero for a stated reason: 16 have no number
+  yet, 8 are untagged speeches, 2 are the m/m twin of a release already
+  counted, and 1 printed exactly on forecast (no surprise, no evidence).
+
+### Tests
+- 37 new tests: 16 for the forced impact and the country confidence, 12 for
+  the speech tagger, 5 for the history and the decay across a restart, and 4
+  for the whitelist changes. Suite: 1742 tests, 0 failures.
+
+---
+
+## CALENDAR: WIDER WHITELIST, OTHER-REGION RISK, REAL POLL CADENCE (2026-10-22)
+
+### Feature — the whitelist now admits the releases it was missing
+- **File:** `app/config/calendar_bias.json` (data only)
+- **USA:** added `consumer confidence`, `umich sentiment`, `umich`,
+  `university of michigan`, `university michigan`, `jolts`. (`powell` and
+  `average hourly earnings` were already there.)
+- **Japan:** added `pmi`, `purchasing managers` - Japanese PMI was being
+  dropped even though the region was whitelisted.
+- The live audit caught a wording gap: FJ renders the Michigan sentiment
+  releases as "University Michigan 1 Yr Inflation Final", which contains
+  neither "umich" nor "umich sentiment" - hence the two extra spellings.
+
+### Feature — a dropped event still warns you, labelled "other region"
+- **Files:** `app/analysis/calendar_risk.py` (`event_risk_check` gained
+  `other_events`), `app/ingestion/economic_calendar.py`
+  (`filtered_out_events()`), `app/services/pipeline.py` (the recompute passes
+  the dropped events through)
+- **The rule:** a high-impact release from a region OUTSIDE the whitelist -
+  a Swiss CPI, an RBA decision - still moves the market, so it still raises
+  the EVENT RISK note, labelled **"other region"**. It contributes **ZERO** to
+  every score: it is not evidence for a dollar, only a warning that a standing
+  bias may be about to be invalidated.
+- **Tests:** the dropped events are recorded with their reasons, the note says
+  "other region" (and only for those), a whitelisted release keeps the plain
+  "EVENT RISK:" wording, and an unwhitelisted release scores 0.
+
+### Fix — `FJ_CALENDAR_POLL_SECONDS` is now a real setting
+- **Files:** `app/services/pipeline.py` (`_calendar_poll_due`,
+  `_calendar_release_window`, the gated fetch in `run_once`),
+  `.env.example` (the FJ calendar block, which was missing entirely)
+- **Before:** the knob was read by no code. The FinancialJuice calendar was
+  re-rendered on EVERY pipeline tick (180s by default) even though the render
+  costs 10-20s and the site is Cloudflare-sensitive.
+- **Now:** the calendar has its own cadence. Inside a high-impact release's
+  window - from `FJ_CALENDAR_PRE_RELEASE_MINUTES` before the release until
+  `FJ_CALENDAR_POST_RELEASE_MINUTES` after it - the cadence tightens to
+  `FJ_CALENDAR_BURST_SECONDS`, so the actual number is picked up within a tick
+  of the print instead of waiting out the full interval. The four knobs that
+  were dead (POLL_SECONDS, PRE_RELEASE_MINUTES, POST_RELEASE_MINUTES,
+  BURST_SECONDS) are now all live.
+- **Tests:** seven, covering the cadence gate, the burst window, the
+  "first poll is always due" rule and the "cadence 0 means every tick" case.
+
+### Audit — the calendar, event by event
+- A live FinancialJuice poll (123 rows -> 72 events) was audited: every
+  event with its derived country, its assigned region, whether the whitelist
+  kept it and why. Result: 28 kept, 44 dropped, 0 unresolved countries, and
+  TWO derivation flags - both the Michigan sentiment releases, whose country
+  comes from the GENERIC fallback ("inflation") rather than from a country
+  marker. They are US releases, so the answer is right, but it is right by
+  luck: the title names no country. The fix is the two extra Michigan
+  spellings in the USA keyword list.
+
+---
+
+## REGION-SCOPED MACRO BIAS (2026-10-22)
+
+### Feature — a five-region calendar whitelist, and a REGIONAL MACRO BIAS panel
+- **Files:** `app/config/calendar_bias.json` (new), `app/analysis/calendar_config.py`
+  (new), `app/analysis/regional_bias.py` (new), `app/ingestion/economic_calendar.py`
+  (`apply_region_filter`), `app/config.py` (`calendar_region_filter_enabled`),
+  `app/analysis/calendar_risk.py` (`matched_std`), `app/services/pipeline.py`
+  (`current_calendar_events`, `regional_bias_payload`), `app/main.py` (payload key
+  `regional_bias`), `app/dashboard/web/index.html` (SECTION A2),
+  `tests/test_calendar_regions.py` (new), `tests/test_regional_bias.py` (new),
+  `README.md`, `.env.example`
+- **The problem:** the calendar carried every scheduled release the provider
+  publishes - for every country - and each one could reach a dollar verdict at a
+  weight as low as 0.05. A Swiss CPI print was treated as macro evidence for
+  gold.
+- **The filter:** matching is two-stage and strict. The event's country/currency
+  must map to a region listed in `app/config/calendar_bias.json` (default: USA,
+  Eurozone, China, Japan, UK), AND its title must match that region's
+  `include_keywords`. The filter runs at the calendar input
+  (`fetch_calendar()`), so the verdict, the calendar panel and the event-risk
+  check all see the same whitelisted set. It is behind
+  `CALENDAR_REGION_FILTER_ENABLED` (default true): with it off the previous
+  behaviour is restored exactly. A broken config file fails SAFE - it logs and
+  serves the calendar unfiltered rather than silently changing a published
+  verdict.
+- **The panel:** `SECTION A2 - REGIONAL MACRO BIAS` is a separate view, not a
+  change to the news-weighted verdict. It scores Gold, Silver, Bitcoin and
+  Equities independently on -100..+100 from
+  `|surprise| x impact x region x asset_sensitivity x time_decay`, and shows the
+  top 3 driving releases, the per-region contribution breakdown, and the next
+  24 h of high-impact releases with a countdown.
+- **What it refuses to do:** an upcoming print adds NO score (it is an event-risk
+  flag, and inside its window the neutral zone is widened); a speech with no
+  direction tag scores NOTHING; a print with no actual or no forecast is
+  SKIPPED, never guessed at; an inverted indicator (unemployment rate, jobless
+  claims) flips its sign; and one release cannot swamp the panel - the surprise
+  is capped at `surprise.max_sigma` because the std table holds rule-of-thumb
+  estimates. Every contributing event is logged with its region, weights,
+  surprise and final contribution.
+- **Tests:** 67 new tests - region filtering (both stages, the switch, the
+  fail-safe), inverted-event handling, surprise calculation (standardised,
+  percent fallback, the sigma cap, missing values), time decay (full window,
+  linear decay, the horizon, upcoming events), score normalisation and labels,
+  the event-risk window, the m/m + y/y dedupe, and the API payload.
+
+---
+
 ## THE CARD SPLIT IS THE RATIO OF THE EVIDENCE (2026-10-21)
 
 ### Fix — "bull 2.8 · bear 1.2" no longer publishes as "Bullish 49% / Bearish 51%"

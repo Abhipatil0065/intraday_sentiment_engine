@@ -453,13 +453,74 @@
      the pre-existing 1000px single-column step. Below that step the original
      1fr rules apply unchanged. Placed BEFORE the 1000px block so the later
      rule still wins where both match. */
+  /* ---- REGIONAL MACRO BIAS panel (five-region calendar bias) ----
+     A separate view from the news-weighted verdict above: this one is
+     scored ONLY from the scheduled releases of the whitelisted regions,
+     with its own -100..+100 score per asset, its own region breakdown and
+     its own upcoming-release list. */
+  .rbhead{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;
+          padding:0 2px 9px}
+  .rbhead .ft{font-size:12px;letter-spacing:2px;color:var(--txt);font-weight:700}
+  .rbhead .fd{font-size:11px;color:var(--gold);font-weight:600;letter-spacing:.6px}
+  .rbhead .fz{font-size:10.5px;color:var(--dim)}
+  .rbgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .rba{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+       padding:12px 14px;display:flex;flex-direction:column;gap:6px}
+  .rba.gold{border-top:3px solid var(--gold)}
+  .rba.silver{border-top:3px solid var(--silver)}
+  .rba.bitcoin{border-top:3px solid var(--btc)}
+  .rba.equity{border-top:3px solid var(--accent)}
+  .rba .an{font-size:10px;letter-spacing:1.3px;color:var(--dim)}
+  .rba .sc{font-size:25px;font-weight:700;line-height:1.05;
+           font-variant-numeric:tabular-nums}
+  .rba .bl{font-size:10.5px;font-weight:700;letter-spacing:1px}
+  .rba .sc.pos,.rba .bl.pos{color:var(--bull)}
+  .rba .sc.neg,.rba .bl.neg{color:var(--bear)}
+  .rba .sc.neu,.rba .bl.neu{color:var(--neu)}
+  /* Centred diverging bar: the fill grows LEFT or RIGHT from the midpoint. */
+  .rbbar{position:relative;display:block;height:8px;border-radius:5px;
+         background:#1b2130;overflow:hidden}
+  .rbbar::after{content:'';position:absolute;left:50%;top:0;bottom:0;width:1px;
+                background:var(--line)}
+  .rbbar i{position:absolute;top:0;bottom:0;height:100%;display:block}
+  .rbbar i.pos{left:50%;background:var(--bull)}
+  .rbbar i.neg{right:50%;background:var(--bear)}
+  .rba h5{font-size:9px;letter-spacing:1.2px;color:var(--dim);font-weight:700;
+          margin:3px 0 0}
+  .rba ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;
+          gap:4px}
+  .rba li{font-size:10px;color:var(--dim);line-height:1.35;padding-left:7px;
+          border-left:2px solid var(--line)}
+  .rba li.pos{border-left-color:var(--bull);color:var(--txt)}
+  .rba li.neg{border-left-color:var(--bear);color:var(--txt)}
+  .rbreg{display:flex;flex-wrap:wrap;gap:5px}
+  .rbreg span{font-size:9px;padding:1px 6px;border:1px solid var(--line);
+              border-radius:3px;color:var(--dim);font-variant-numeric:tabular-nums}
+  .rbreg span.pos{color:var(--bull);border-color:rgba(46,160,67,.45)}
+  .rbreg span.neg{color:var(--bear);border-color:rgba(248,81,73,.45)}
+  .rbrisk{font-size:9.5px;color:var(--gold);border:1px dashed rgba(240,180,41,.5);
+          border-radius:5px;padding:4px 7px;line-height:1.35;margin-top:2px}
+  .rbup{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+        padding:11px 14px;margin-top:12px}
+  .rbup h4{font-size:10px;letter-spacing:1.5px;color:var(--dim);font-weight:700;
+           margin-bottom:7px}
+  .rbup ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;
+           gap:5px}
+  .rbup li{font-size:10.5px;color:var(--dim);line-height:1.4;padding-left:8px;
+           border-left:2px solid var(--gold)}
+  .rbup li b{color:var(--txt)}
+  .rbwarn{font-size:11px;color:var(--gold);border:1px dashed rgba(240,180,41,.5);
+          border-radius:7px;padding:7px 11px;margin-bottom:10px;line-height:1.45}
+  .rbnone{font-size:10.5px;color:var(--dim);font-style:italic}
   @media (max-width:1250px){
     .strip-cards{grid-template-columns:repeat(2,1fr)}
     .fjgrid{grid-template-columns:repeat(2,1fr)}
+    .rbgrid{grid-template-columns:repeat(2,1fr)}
   }
   @media (max-width:1000px){
     .strip-cards{grid-template-columns:1fr}
     .fjgrid{grid-template-columns:1fr}
+    .rbgrid{grid-template-columns:1fr}
   }
    footer{border-top:1px solid var(--line);color:#6e7681;font-size:10px;
           text-align:center;padding:9px 18px;margin-top:20px}
@@ -505,6 +566,8 @@
   <div id="fjWrap"></div>
   <h2>SECTION A &mdash; ECONOMIC CALENDAR</h2>
   <div id="assets"></div>
+  <h2>SECTION A2 &mdash; REGIONAL MACRO BIAS <span class="n" id="rbMeta"></span></h2>
+  <div id="regionalBias"></div>
   <div id="alertsWrap"></div>
   <h2>SECTION B &mdash; TODAY'S NEWS IMPACT FEED <span class="n" id="feedCount"></span></h2>
   <div class="filters" id="filters"></div>
@@ -1448,12 +1511,90 @@ function renderFilters(){
   }).join('')
     +'<span class="fcount">Click a headline to expand its impact breakdown</span>';
 }
+
+/* ---- REGIONAL MACRO BIAS panel ---------------------------------------
+   Scored ONLY from the scheduled releases of the five whitelisted
+   regions. This is NOT the news-weighted verdict above: it has its own
+   -100..+100 score per asset, its own region breakdown, and its own
+   upcoming-release list. An upcoming high-impact release adds NO score -
+   it is shown as an event-risk flag, and inside its window the neutral
+   zone is widened so a thin reading is not dressed up as a call. */
+function rbDir(bias){
+  var b=String(bias||'').toUpperCase();
+  if(b.indexOf('BEARISH')>=0) return 'neg';
+  if(b.indexOf('BULLISH')>=0) return 'pos';
+  return 'neu';
+}
+function renderRegionalBias(rb){
+  var box=document.getElementById('regionalBias');
+  if(!box) return;
+  var meta=document.getElementById('rbMeta');
+  if(!rb){ box.innerHTML=''; if(meta) meta.textContent=''; return; }
+
+  var head='<div class="rbhead"><span class="ft">REGIONAL MACRO BIAS</span>'
+    +'<span class="fd">'+esc((rb.regions||[]).join(' / ')||'NO REGIONS')+'</span>'
+    +'<span class="fz">scheduled releases only &middot; last updated '
+    +esc(rb.last_updated_local||'unknown')
+    +(rb.display_timezone?(' ('+esc(rb.display_timezone)+')'):'')+'</span></div>';
+  if(meta) meta.textContent=(rb.regions||[]).length+' regions';
+
+  if(rb.error){
+    head+='<div class="rbwarn">&#9888; REGIONAL BIAS UNAVAILABLE &mdash; '
+      +esc(rb.error)+'</div>';
+  }else if(rb.stale){
+    head+='<div class="rbwarn">&#9888; CALENDAR STALE &mdash; '
+      +esc(rb.stale_reason||'the calendar data is not fresh')+'</div>';
+  }
+
+  var cards=(rb.assets||[]).map(function(a){
+    var dir=rbDir(a.bias);
+    var score=+a.score||0;
+    var pct=Math.min(50,Math.abs(score)/2);
+    var bar='<div class="rbbar"><i class="'+(score>=0?'pos':'neg')
+      +'" style="width:'+pct.toFixed(1)+'%"></i></div>';
+    var drivers=(a.top_drivers||[]).map(function(d){
+      var c=+d.contribution||0;
+      return '<li class="'+(c>=0?'pos':'neg')+'">'+esc(d.title)
+        +' <b>'+(c>=0?'+':'')+n1(c)+'</b> &middot; '+esc(d.region_code)
+        +' &middot; '+esc(d.when_local||'')+'</li>';
+    }).join('');
+    var regs=(a.region_breakdown||[]).map(function(r){
+      var c=+r.contribution||0;
+      return '<span class="'+(c>=0?'pos':'neg')+'">'+esc(r.code)+' '
+        +(c>=0?'+':'')+n1(c)+'</span>';
+    }).join('');
+    return '<div class="rba '+esc(String(a.label||'').toLowerCase())+'">'
+      +'<span class="an">'+esc(a.label||'')+'</span>'
+      +'<span class="sc '+dir+'">'+(score>=0?'+':'')+n1(score)+'</span>'
+      +'<span class="bl '+dir+'">'+esc(a.bias||'Neutral')+'</span>'
+      +bar
+      +'<h5>TOP DRIVERS</h5><ul>'+(drivers||'<li>no scored release</li>')+'</ul>'
+      +'<h5>REGION CONTRIBUTION</h5><div class="rbreg">'
+      +(regs||'<span>none</span>')+'</div>'
+      +(a.event_risk&&a.event_risk.active
+          ?'<div class="rbrisk">&#9888; '+esc(a.event_risk.note)+'</div>':'')
+      +'</div>';
+  }).join('');
+
+  var up=(rb.upcoming||[]).map(function(u){
+    return '<li><b>'+esc(u.title)+'</b> &middot; '+esc(u.region_code)
+      +' &middot; '+esc(u.impact)+' &middot; '+esc(u.when_local||'')
+      +' &middot; '+esc(u.countdown||'')+'</li>';
+  }).join('');
+
+  box.innerHTML=head
+    +'<div class="rbgrid">'+cards+'</div>'
+    +'<div class="rbup"><h4>UPCOMING HIGH-IMPACT EVENTS (next 24h)</h4>'
+    +(up?('<ul>'+up+'</ul>'):'<div class="rbnone">No high-impact release '
+      +'scheduled in the next 24h.</div>')+'</div>';
+}
 function render(d){
   console.log('RAW API DATA:', JSON.stringify({regime:d.regime, previous_session:d.previous_session, current_session:d.current_session, next_session:d.next_session}));
   DATA=d;
   renderHeader(d);
   renderPrepStrip(d.assets);
   renderAssets(d.assets);
+  renderRegionalBias(d.regional_bias);
   renderAlerts(d.alerts);
   renderCalib(d);
   /* Seed the feed from the payload's first page. On a refresh the page-1 rows

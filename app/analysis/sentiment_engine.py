@@ -70,6 +70,7 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 import re
 
+from app.analysis.policy_scope import foreign_policy_scope
 from app.analysis.text_match import contains_cue
 from app.config import (
     CLUSTER_CONFLICT_MIN_TOTAL_WEIGHT,
@@ -831,8 +832,18 @@ def event_tier(s: WeightedSignal) -> str:
     TIER_2: central-bank speeches / secondary data / official statements.
     TIER_3: analyst opinion / previews / commentary / forecasts.
     Reads existing fields only; no new classifier lives here.
+
+    POLICY SCOPE: TIER_1 means "this event reprices these assets". A
+    central-bank stance that belongs to a FOREIGN central bank is not such
+    an event for gold, silver, bitcoin or the S&P - it does not move US
+    rates. Such a headline is capped at TIER_2, which also removes it from
+    the fresh-Tier-1 flip override (``_has_fresh_tier1_opposite``) that let
+    "hawkish RBA" flip the gold badge on its own. The US central bank keeps
+    the full TIER_1 treatment. See app/analysis/policy_scope.py.
     """
     if s.importance is EconomicImportance.VERY_HIGH:
+        if foreign_policy_scope(s.title or ""):
+            return "TIER_2"
         return "TIER_1"
     if s.report_kind is ReportKind.ACTUAL:
         return "TIER_1"
@@ -894,6 +905,7 @@ def _signal_weight(s: WeightedSignal, now: datetime | None) -> float:
         now = now.replace(tzinfo=timezone.utc)
 
     from app.analysis.cue_rules import detect_verification
+    from app.analysis.policy_scope import policy_event_scale
     from app.analysis.release_surprise import MAX_SURPRISE_WEIGHT
     from app.analysis.transmission_map import detect_event_types, transmission
     from app.config import (
@@ -1000,12 +1012,21 @@ def _signal_weight(s: WeightedSignal, now: datetime | None) -> float:
             nonzero = [et for et in detected if transmission(et, s.asset).sign != 0]
             if nonzero:
                 # compute max magnitude among nonzero events
+                #
+                # POLICY SCOPE: a central-bank stance that belongs to a
+                # FOREIGN central bank does not travel the US rate channel
+                # the map is written for, so its magnitude is scaled down
+                # before the sensitivity is read. A hawkish Fed keeps the
+                # full channel; a hawkish RBA keeps a weak one. Without this
+                # the word "hawkish" alone gave any central bank the top
+                # driver slot on the gold card.
                 max_m = 0.0
                 for et in nonzero:
                     entry = transmission(et, s.asset)
                     # entry.sign != 0 guaranteed by filter
-                    if entry.magnitude > max_m:
-                        max_m = entry.magnitude
+                    magnitude = entry.magnitude * policy_event_scale(et.value, s.title)
+                    if magnitude > max_m:
+                        max_m = magnitude
                 if max_m > 0:
                     asset_sensitivity = min(1.0, max(0.3, max_m))
                 else:

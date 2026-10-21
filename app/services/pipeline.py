@@ -10,6 +10,7 @@ This module owns the end-to-end control flow. The background scheduler calls
 
 from __future__ import annotations
 
+import asyncio
 import atexit
 import time
 from dataclasses import dataclass, field
@@ -20,6 +21,7 @@ from sqlalchemy import and_, delete, exists, func, or_, select
 
 from app.analysis import llm_client, release_surprise
 from app.analysis.economic_impact import (
+    CalendarEvent,
     CalendarSignal,
     signals_for_events,
     to_calendar_summary,
@@ -75,6 +77,18 @@ from app.utils.timestamp_parse import (
 )
 
 log = get_logger(__name__)
+
+# Cross-tick LLM cooldown.
+#
+# When the provider answers NOTHING in a tick (every call timed out or
+# failed), the next tick does not spend its whole 90s budget asking again:
+# the engine would take 90s longer for zero verdicts and would hammer an
+# endpoint that is already down. The heuristics still classify every article
+# in that tick - the model is simply not asked - and the cooldown expires
+# after LLM_COOLDOWN_SECONDS, so a provider that comes back is picked up on
+# the next tick.
+LLM_COOLDOWN_SECONDS = 150.0
+_llm_cooldown_until: float = 0.0
 
 
 class _DriverView:
@@ -263,6 +277,11 @@ _calendar_signals: list[CalendarSignal] = []
 # though only today's prints become signals.
 _calendar_events: list = []
 
+# When the calendar was last fetched. The FinancialJuice render is expensive
+# (10-20s) and Cloudflare-sensitive, so it is polled on ITS OWN cadence
+# (FJ_CALENDAR_POLL_SECONDS) rather than on every pipeline tick.
+_calendar_last_fetch_utc = None
+
 # Down-weight news that duplicates a calendar release.
 CALENDAR_NEWS_DUP_FACTOR = 0.35
 # Session-aware global equity card from the most recent recompute (NOW-only).
@@ -345,20 +364,118 @@ def _make_aware(dt: datetime | None) -> datetime | None:
     return dt
 
 
-def _priority_sort_articles(articles: list) -> list:
+def _safe_int(value, default: int = 0) -> int:
+    """int() that never raises - settings may be a mock in tests."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_float(value, default: float = 0.0) -> float:
+    """float() that never raises - settings may be a mock in tests."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _llm_priority_indices(
+    items: list[tuple[str, float | None, str | None]],
+    known_guids: set | None = None,
+) -> set[int]:
+    """
+    Indices of the batch items that get FIRST pick of the tick's LLM budget.
+
+    ``items`` is a list of (source_name, published_epoch_seconds, guid) tuples
+    in the order the batch is to be sorted. The return value is the set of
+    indices to promote ahead of everything else.
+
+    WHY THIS EXISTS
+    ---------------
+    The LLM budget is small and strictly first-come-first-served over the
+    sorted batch. Measured on the live endpoint (2026-10-21): one model call
+    costs 20-40s, so the 90s tick budget buys only 2-5 verdicts per tick and
+    the batch COUNT cap of 15 is never reached. The order therefore decides who
+    is judged AT ALL - and the order is tier-then-recency, so a source whose
+    headlines sit 10-30 minutes behind the freshest wire copy never wins a
+    model call, however much it contributes. TradingView was exactly that
+    source: 26 rows ingested, 0 model verdicts, every headline scored by the
+    heuristic instead.
+
+    The reservation is deliberately small and age-bounded:
+      * at most ``llm_priority_slots`` items are promoted, so the sources that
+        normally win the queue keep the rest of the budget;
+      * only items younger than ``llm_priority_max_age_hours`` qualify, so a
+        backlog after a restart cannot spend the whole budget on stale rows;
+      * an item whose guid is already stored does NOT qualify (when
+        ``known_guids`` is supplied). A source that re-serves the same
+        headlines every tick would otherwise spend the whole reservation on
+        rows the tick skips before the LLM phase - the reservation would be
+        gone before a genuinely new headline ever reached the model.
+
+    With no sources configured (the default) this returns an empty set and the
+    sort behaves exactly as it did before.
+    """
+    raw_names = getattr(settings, "llm_priority_sources", "") or ""
+    if not isinstance(raw_names, str):
+        raw_names = ""
+    names = {n.strip().lower() for n in raw_names.split(",") if n.strip()}
+    slots = _safe_int(getattr(settings, "llm_priority_slots", 0), 0)
+    max_age_h = _safe_float(
+        getattr(settings, "llm_priority_max_age_hours", 0.0), 0.0)
+    if not names or slots <= 0 or max_age_h <= 0:
+        return set()
+
+    now = time.time()
+    candidates: list[tuple[float, int]] = []
+    for index, (source, published_epoch, guid) in enumerate(items):
+        # The contract is epoch seconds; anything else is ignored rather than
+        # allowed to raise inside a tick.
+        if not isinstance(published_epoch, (int, float)):
+            continue
+        if not published_epoch or published_epoch <= 0:
+            continue
+        if (source or "").strip().lower() not in names:
+            continue
+        if known_guids is not None and guid and guid in known_guids:
+            # Already stored: the tick skips it before the LLM phase, so
+            # promoting it would waste the reservation.
+            continue
+        age_h = (now - published_epoch) / 3600.0
+        if age_h < 0 or age_h > max_age_h:
+            continue
+        candidates.append((published_epoch, index))
+
+    # Newest first, so the reservation always goes to the FRESHEST items of
+    # the listed sources.
+    candidates.sort(reverse=True)
+    return {index for _epoch, index in candidates[:slots]}
+
+
+def _priority_sort_articles(articles: list, known_guids: set | None = None) -> list:
     """
     Sort a fetched batch so the highest-priority articles reach the LLM cap.
 
     Order, in priority:
-      1. source_quality  - TIER_1_OFFICIAL first, then TIER_2_MAJOR, etc.
-      2. published_at    - newest first (parsed from published_raw).
-      3. title           - stable tiebreaker so the sort is deterministic.
+      1. LLM reservation  - items from a source listed in
+         ``settings.llm_priority_sources`` that are fresh enough to be
+         promoted (see ``_llm_priority_indices``). Empty by default, so this
+         tier is inert unless the operator configures it.
+      2. source_quality  - TIER_1_OFFICIAL first, then TIER_2_MAJOR, etc.
+      3. published_at    - newest first (parsed from published_raw).
+      4. title           - stable tiebreaker so the sort is deterministic.
 
     Why this matters: LLM_BATCH_LIMIT caps model calls per tick, and without a
     sort the cap is hit in arrival order - a rush of Tier 4 social-media noise
     can consume every slot and leave a Tier 1 central-bank release to heuristics.
     Sorting first means the 15 most important articles are the ones classified
     by the model; the remainder are still ingested and scored, just deterministically.
+
+    ``known_guids`` is the set of guids already stored. The tick skips those
+    BEFORE the LLM phase, so they must not be allowed to consume the
+    reservation - otherwise a source that re-serves the same headlines every
+    tick would spend the whole reservation on rows the tick never judges.
 
     Note on importance: RawArticle carries no importance field - importance is a
     CLASSIFICATION output (see cue_rules.detect_importance), so it cannot be a
@@ -367,7 +484,16 @@ def _priority_sort_articles(articles: list) -> list:
     official statistical releases and central-bank statements outrank wire
     copy, which outranks aggregator chatter.
     """
-    def _key(art):
+    indexed = list(enumerate(articles))
+    reserved = _llm_priority_indices([
+        (getattr(art, "source", "") or "", _article_epoch(art),
+         getattr(art, "guid", None))
+        for _index, art in indexed
+    ], known_guids=known_guids)
+
+    def _key(pair):
+        index, art = pair
+        group = 0 if index in reserved else 1
         quality_rank = _SOURCE_QUALITY_RANK.get(
             (getattr(art, "source_quality", "") or "").upper(), 99)
         published = getattr(art, "published_raw", None)
@@ -378,9 +504,18 @@ def _priority_sort_articles(articles: list) -> list:
             ts_rank = -_parse_timestamp_rank(published)
         except Exception:
             ts_rank = 999
-        return (quality_rank, ts_rank, (getattr(art, "title", "") or "").lower())
+        return (group, quality_rank, ts_rank, (getattr(art, "title", "") or "").lower())
 
-    return sorted(articles, key=_key)
+    return [art for _index, art in sorted(indexed, key=_key)]
+
+
+def _article_epoch(art) -> float | None:
+    """Publication time of a RawArticle as epoch seconds, or None."""
+    try:
+        rank = _parse_timestamp_rank(getattr(art, "published_raw", None))
+    except Exception:
+        return None
+    return rank if rank and rank > 0 else None
 
 
 def _parse_timestamp_rank(value: str | None) -> float:
@@ -494,6 +629,27 @@ def _guid_suppressed(session, guid: str) -> bool:
         )
     )
     return found is not None
+
+
+def _suppressed_guids(session) -> set:
+    """
+    Every guid deleted under the one-shot policy for the CURRENT trading day.
+
+    The bulk form of ``_guid_suppressed``: one query for the whole set instead
+    of one per headline. The LLM pre-classification phase needs to know which
+    guids are already dead BEFORE it spends a model call on them, and the
+    batch is ~700 articles per tick.
+    """
+    try:
+        rows = session.scalars(
+            select(DroppedArticle.guid).where(
+                DroppedArticle.dropped_day == _current_market_day_key(),
+            )
+        ).all()
+    except Exception as exc:  # noqa: BLE001 - a miss must not break the tick
+        log.warning("Suppressed-guid preload failed (%s) - continuing", exc)
+        return set()
+    return set(rows)
 
 
 def _drop_low_impact_article(session, row, analysis,
@@ -843,8 +999,135 @@ def _fj_session_report_is_admissible(published: datetime,
     return 0 <= age_days <= 1
 
 
+async def _preclassify_for_llm(
+    articles: list,
+    session,
+    existing: set,
+    batch_limit: int,
+    budget_seconds: float,
+) -> dict:
+    """
+    PHASE A of a tick: classify the LLM-bound articles CONCURRENTLY.
+
+    WHY
+    ---
+    The tick's model allowance is wall-clock (``LLM_TICK_BUDGET_SECONDS``),
+    not a count, and one call costs 20-40s on the live endpoint. A sequential
+    loop therefore spends the whole allowance on 2-5 articles even though
+    ``LLM_MAX_CONCURRENT`` slots are configured and never used - the
+    classifier's semaphore existed with exactly one caller at a time, so it
+    was a no-op. Classifying the batch concurrently multiplies the verdicts
+    per tick by the concurrency factor WITHOUT lengthening the tick: the
+    calls overlap instead of queueing behind each other.
+
+    MEASURED on the live endpoint (2026-10-21): 90s of budget at ~30s a call
+    bought 3 verdicts per tick, and the count cap of 15 was never reached.
+    With three calls in flight the same 90s buys about nine.
+
+    HOW
+    ---
+    The candidates are the first ``batch_limit`` NEW articles in the already
+    priority-sorted batch - the same articles the sequential path would have
+    sent to the model, in the same order. The cheap filters that would have
+    rejected them anyway (already stored, suppressed by the one-shot policy,
+    outside the rolling window) are applied first, so a wasted call is rare.
+
+    Returns ``{guid: (analysis, llm_ok, skip_reason)}`` for every candidate.
+    A candidate whose call was cancelled by the deadline is present with a
+    ``None`` value, which tells phase B not to call the provider again for
+    it - that is the difference between "the model said no" and "we ran out
+    of time", and the second must not be spent twice.
+    """
+    global _llm_cooldown_until
+
+    results: dict = {}
+    if not settings.has_llm or batch_limit <= 0 or budget_seconds <= 0:
+        return results
+
+    if time.monotonic() < _llm_cooldown_until:
+        # The provider answered NOTHING last tick. Spending another full
+        # budget on it would make the tick 90s long for zero verdicts, and
+        # would hammer an endpoint that is already down. The heuristics
+        # still classify every article; the model is simply not asked.
+        log.info("LLM cooldown active for %.0fs more - provider answered "
+                 "nothing last tick, articles use heuristics",
+                 _llm_cooldown_until - time.monotonic())
+        return results
+
+    from app.analysis.news_classifier import analyze_article
+
+    suppressed = _suppressed_guids(session)
+    candidates: list[RawArticle] = []
+    for art in articles:
+        if len(candidates) >= batch_limit:
+            break
+        if art.guid in existing or art.guid in suppressed:
+            continue
+        published, _updated, _tz = _parse_article_time(art)
+        if published is None:
+            continue
+        if not within_rolling_window(published) or not within_max_age(published):
+            continue
+        if _is_fj_session_report_sync(art) and not _fj_session_report_is_admissible(
+                published):
+            continue
+        candidates.append(art)
+
+    if not candidates:
+        return results
+
+    log.info("LLM phase A: %d candidate(s) in flight, budget=%.0fs",
+             len(candidates), budget_seconds)
+
+    async def _classify(art: RawArticle):
+        try:
+            verdict = await analyze_article(art.title, art.body)
+        except Exception as exc:  # noqa: BLE001 - one row never kills the phase
+            log.warning("LLM phase A failed for %r: %s",
+                        (art.title or "")[:70], exc)
+            return art.guid, (None, False, "error")
+        return art.guid, verdict
+
+    tasks = []
+    task_guids: dict = {}
+    for art in candidates:
+        task = asyncio.create_task(_classify(art))
+        tasks.append(task)
+        task_guids[task] = art.guid
+
+    started = time.monotonic()
+    done, pending = await asyncio.wait(tasks, timeout=budget_seconds)
+    for task in done:
+        guid, verdict = task.result()
+        results[guid] = verdict
+    if pending:
+        for task in pending:
+            task.cancel()
+        # Let the cancellations settle so no request outlives the tick.
+        await asyncio.gather(*pending, return_exceptions=True)
+        # A cancelled candidate has NO verdict: mark it so phase B does not
+        # spend another call on it.
+        for task in pending:
+            results[task_guids[task]] = None
+
+    elapsed = time.monotonic() - started
+    judged = sum(1 for v in results.values()
+                 if v is not None and len(v) >= 2 and v[1])
+    log.info("LLM phase A: %d verdict(s) from %d candidate(s) in %.0fs "
+             "(%d cut off by the deadline)",
+             judged, len(candidates), elapsed, len(pending))
+
+    if judged == 0:
+        # Nothing came back. Back off for a tick so the engine stays
+        # responsive and the endpoint is not hammered while it is down.
+        _llm_cooldown_until = time.monotonic() + LLM_COOLDOWN_SECONDS
+        log.warning("LLM provider returned no verdict this tick - cooling "
+                    "down for %.0fs", LLM_COOLDOWN_SECONDS)
+    return results
+
+
 async def _ingest_article(art: RawArticle, session, stats: IngestStats,
-                          use_llm: bool = True):
+                          use_llm: bool = True, precomputed=None):
     """Apply the TODAY filter, classify, cluster and store one article.
 
     ONE-SHOT: this is the only place an article is ever classified, and the
@@ -939,7 +1222,11 @@ async def _ingest_article(art: RawArticle, session, stats: IngestStats,
     session.flush()
     session.commit()
     row = session.merge(row)
-    if use_llm:
+    if precomputed is not None:
+        # Phase A already asked the model about this article (concurrently).
+        # Use that verdict; never call the provider twice for one article.
+        analysis, llm_ok, skip_reason = precomputed
+    elif use_llm:
         analysis, llm_ok, skip_reason = await analyze_article(art.title, art.body)
     else:
         from app.analysis.news_classifier import heuristic_analyze
@@ -1253,6 +1540,50 @@ def current_calendar_signals() -> list[CalendarSignal]:
     return list(_calendar_signals)
 
 
+def current_calendar_events() -> list[CalendarEvent]:
+    """
+    Read-only view of the most recent RAW calendar events.
+
+    The signals are the engine's own reading of those events; this is the
+    event list itself, which is what the regional macro bias panel scores.
+    Returned as a copy so a caller cannot mutate the scheduler's state.
+    """
+    return list(_calendar_events)
+
+
+def regional_bias_payload() -> dict:
+    """
+    The REGIONAL MACRO BIAS panel payload.
+
+    Scored from the SAME events the verdict uses - the five-region calendar
+    view with its own per-asset score, its own region breakdown and its own
+    upcoming-event list. It never raises: a failure here must not take the
+    dashboard down, so the panel reports the error instead.
+    """
+    from app.analysis.regional_bias import compute_regional_bias, to_payload
+
+    try:
+        return to_payload(compute_regional_bias(current_calendar_events()))
+    except Exception as exc:  # noqa: BLE001 - a panel must never break a request
+        log.warning("Regional macro bias panel failed: %s: %s",
+                    type(exc).__name__, exc)
+        return {
+            "generated_at_utc": None,
+            "generated_at_local": "",
+            "display_timezone": settings.display_timezone,
+            "last_updated_utc": None,
+            "last_updated_local": "",
+            "stale": True,
+            "stale_reason": f"the regional bias panel failed: {exc}",
+            "error": f"{type(exc).__name__}: {exc}",
+            "regions": [],
+            "assets": [],
+            "upcoming": [],
+            "stats": {},
+            "now_local": "",
+        }
+
+
 def _recompute_sentiment(session, stats: IngestStats):
     """
     Rebuild every asset's CURRENT / PREP / WRAP sentiment from today's rows.
@@ -1552,10 +1883,17 @@ def _recompute_sentiment(session, stats: IngestStats):
     # Read from the RAW event list, not from the signals: only RELEASED prints
     # become signals, but an unreleased high-impact print is exactly the thing
     # the trader must be warned about.
+    #
+    # A release from a region OUTSIDE the whitelist is passed separately: it
+    # scores nothing (it is not evidence for a dollar) but it still moves the
+    # market, so it raises the same warning, labelled "other region".
     at_risk, risk_note = (False, "")
     try:
         from app.analysis.calendar_risk import event_risk_check
-        at_risk, risk_note = event_risk_check(_calendar_events)
+        from app.ingestion.economic_calendar import filtered_out_events
+        at_risk, risk_note = event_risk_check(
+            _calendar_events,
+            other_events=[e for e, _reason in filtered_out_events()])
     except Exception as exc:  # noqa: BLE001 - never break the recompute
         log.debug("event_risk_check failed: %s", exc)
 
@@ -2070,6 +2408,57 @@ async def _record_price_points() -> int:
         return 0
 
 
+def _calendar_release_window(now=None) -> bool:
+    """
+    Is a high-impact release inside its burst window?
+
+    The window runs from ``FJ_CALENDAR_PRE_RELEASE_MINUTES`` before the
+    release until ``FJ_CALENDAR_POST_RELEASE_MINUTES`` after it. Inside it the
+    calendar is polled at the faster ``FJ_CALENDAR_BURST_SECONDS`` cadence, so
+    the actual number is picked up within a tick of the print instead of
+    waiting out the full poll interval.
+    """
+    burst = int(settings.fj_calendar_burst_seconds or 0)
+    if burst <= 0 or not _calendar_events:
+        return False
+    now = now or T.now_utc()
+    pre = timedelta(minutes=int(settings.fj_calendar_pre_release_minutes or 0))
+    post = timedelta(minutes=int(settings.fj_calendar_post_release_minutes or 0))
+    for event in _calendar_events:
+        when = getattr(event, "when_utc", None)
+        if when is None:
+            continue
+        if str(getattr(event, "impact", "") or "").strip().capitalize() != "High":
+            continue
+        if when - pre <= now <= when + post:
+            return True
+    return False
+
+
+def _calendar_poll_due(now) -> tuple[bool, float, float]:
+    """
+    Is the calendar due for a refresh?
+
+    Returns ``(due, seconds_until_due, cadence_seconds)``. The cadence is
+    ``FJ_CALENDAR_POLL_SECONDS``, tightened to ``FJ_CALENDAR_BURST_SECONDS``
+    while a high-impact release sits inside its window. A cadence of 0 means
+    "every tick", which is the pre-existing behaviour.
+    """
+    cadence = float(settings.fj_calendar_poll_seconds or 0)
+    if cadence <= 0:
+        return True, 0.0, 0.0
+    burst = float(settings.fj_calendar_burst_seconds or 0)
+    if burst > 0 and _calendar_release_window(now):
+        cadence = burst
+    last = _calendar_last_fetch_utc
+    if last is None or not _calendar_events:
+        return True, 0.0, cadence
+    elapsed = (now - last).total_seconds()
+    if elapsed >= cadence:
+        return True, 0.0, cadence
+    return False, max(0.0, cadence - elapsed), cadence
+
+
 async def run_once() -> IngestStats:
     """
     Execute one full pipeline pass.
@@ -2077,7 +2466,7 @@ async def run_once() -> IngestStats:
     Never raises - errors are logged and returned in ``stats.errors`` so the
     scheduler keeps running.
     """
-    global _running, _last_update, _last_successful_tick, _news_since_update, _calendar_signals, _calendar_events, _tick_started_at, _tick_generation
+    global _running, _last_update, _last_successful_tick, _news_since_update, _calendar_signals, _calendar_events, _calendar_last_fetch_utc, _tick_started_at, _tick_generation
 
     if _running:
         # A tick is already in flight. If it is genuinely WEDGED (no
@@ -2111,8 +2500,20 @@ async def run_once() -> IngestStats:
 
         # Economic calendar: optional enrichment, never fatal. Failures are
         # recorded and the pipeline continues with news-only sentiment.
-        events, calendar_errors = await fetch_calendar()
-        stats.errors.extend(calendar_errors)
+        #
+        # The calendar has ITS OWN cadence (FJ_CALENDAR_POLL_SECONDS): the
+        # FinancialJuice render is slow and Cloudflare-sensitive, so it is not
+        # re-rendered on every tick. Inside a high-impact release's window
+        # the cadence tightens to FJ_CALENDAR_BURST_SECONDS.
+        due, wait, cadence = _calendar_poll_due(T.now_utc())
+        if due:
+            events, calendar_errors = await fetch_calendar()
+            _calendar_last_fetch_utc = T.now_utc()
+            stats.errors.extend(calendar_errors)
+        else:
+            events, calendar_errors = list(_calendar_events), []
+            log.info("Economic calendar: next poll in %.0fs (cadence %.0fs) - "
+                     "reusing %d event(s)", wait, cadence, len(events))
         _calendar_events = events
         _calendar_signals = signals_for_events(
             events, horizon_hours=settings.economic_calendar_horizon_hours
@@ -2165,8 +2566,10 @@ async def run_once() -> IngestStats:
             # noise can consume every slot, leaving a Tier 1 release to
             # heuristics. Sort is by source_quality then published_at (newest
             # first); every article is still ingested, only the classification
-            # mode differs.
-            report.articles = _priority_sort_articles(report.articles)
+            # mode differs. The guids already stored are passed in so the LLM
+            # reservation is not spent on rows the tick skips anyway.
+            report.articles = _priority_sort_articles(
+                report.articles, known_guids=existing)
 
             llm_calls = 0
             # THE LLM TIME BUDGET.
@@ -2191,6 +2594,25 @@ async def run_once() -> IngestStats:
             llm_budget_seconds = float(settings.llm_tick_budget_seconds)
             llm_batch_limit = int(getattr(settings, "llm_batch_limit",
                                           LLM_BATCH_LIMIT))
+            budget_logged = False
+
+            # PHASE A - classify the LLM-bound articles CONCURRENTLY.
+            #
+            # The tick's model allowance is wall-clock, and one call costs
+            # 20-40s on the live endpoint, so a sequential loop spends the
+            # whole allowance on 2-5 articles even though LLM_MAX_CONCURRENT
+            # slots are configured and never used (the classifier's semaphore
+            # had exactly one caller at a time - it was a no-op). Overlapping
+            # the calls multiplies the verdicts per tick by the concurrency
+            # factor without lengthening the tick.
+            #
+            # The candidates are the first llm_batch_limit NEW articles of the
+            # already priority-sorted batch - the same articles, in the same
+            # order, that the sequential path would have sent to the model.
+            precomputed = await _preclassify_for_llm(
+                report.articles, session, existing, llm_batch_limit,
+                llm_budget_seconds)
+
             for art in report.articles:
                 # HEARTBEAT: the LLM classification of one article can take a
                 # full timeout budget (60s) when the provider is slow, and a
@@ -2211,17 +2633,29 @@ async def run_once() -> IngestStats:
                 # slog. Heuristics are always available and correct.
                 llm_time_used = time.monotonic() - llm_started
                 budget_spent = llm_time_used >= llm_budget_seconds
-                use_llm = (settings.has_llm
-                           and llm_calls < llm_batch_limit
-                           and not budget_spent)
-                if settings.has_llm and llm_calls < llm_batch_limit and budget_spent:
+                verdict = None
+                if art.guid in precomputed:
+                    # Phase A already handled this one. A None verdict means
+                    # the deadline cut the call off - do not spend another one.
+                    verdict = precomputed[art.guid]
+                    use_llm = verdict is not None
+                    if not use_llm:
+                        stats.llm_new_skipped_budget += 1
+                else:
+                    use_llm = (settings.has_llm
+                               and llm_calls < llm_batch_limit
+                               and not budget_spent)
+                if (settings.has_llm and llm_calls < llm_batch_limit
+                        and budget_spent and not budget_logged):
+                    budget_logged = True
                     stats.llm_new_skipped_budget += 1
                     log.info(
                         "LLM time budget spent (%.0fs of %.0fs) - remaining "
                         "articles classified by heuristic",
                         llm_time_used, llm_budget_seconds)
                 try:
-                    row = await _ingest_article(art, session, stats, use_llm)
+                    row = await _ingest_article(art, session, stats, use_llm,
+                                                precomputed=verdict)
                     if row is not None:
                         existing.add(art.guid)
                         new_articles.append(row)

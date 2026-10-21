@@ -370,11 +370,17 @@ def collect_articles(session, window: OvernightWindow) -> list[NewsArticle]:
     return list(rows)
 
 
-def _article_priority_key(article: NewsArticle) -> tuple:
+def _article_priority_key(article: NewsArticle, group: int = 0) -> tuple:
     """
     Tier first, newest second - the same ordering the live pipeline uses to
     spend its LLM budget on the most trustworthy batch members, so the
     morning pass sees the Tier 1 releases even when the batch is large.
+
+    ``group`` is the LLM-reservation group: 0 for a row that a source listed
+    in ``settings.llm_priority_sources`` promoted to the front of the batch,
+    1 for everything else. It mirrors ``_priority_sort_articles`` in the live
+    pipeline, so the catch-up pass and the live tick judge the same rows
+    first.
     """
     from app.services.pipeline import _SOURCE_QUALITY_RANK
 
@@ -386,7 +392,44 @@ def _article_priority_key(article: NewsArticle) -> tuple:
                     if published else 0.0)
     except (TypeError, ValueError, OSError):
         ts_rank = 999
-    return (quality_rank, ts_rank, (article.title or "").lower())
+    return (group, quality_rank, ts_rank, (article.title or "").lower())
+
+
+def _ordered_for_llm(articles: list[NewsArticle]) -> list[NewsArticle]:
+    """
+    Order the catch-up batch the way the live tick orders its own batch.
+
+    Same two rules, in the same order:
+      1. the LLM reservation for the configured priority sources (see
+         ``pipeline._llm_priority_indices``);
+      2. tier, then newest.
+    """
+    from app.services.pipeline import _llm_priority_indices
+
+    indexed = list(enumerate(articles))
+    reserved = _llm_priority_indices([
+        (getattr(art, "source", "") or "", _published_epoch(art),
+         getattr(art, "guid", None))
+        for _index, art in indexed
+    ])
+    return [
+        art for _index, art in sorted(
+            indexed,
+            key=lambda pair: _article_priority_key(
+                pair[1], group=0 if pair[0] in reserved else 1),
+        )
+    ]
+
+
+def _published_epoch(article: NewsArticle) -> float | None:
+    """Publication time of a stored article as epoch seconds, or None."""
+    published = article.published_at_utc
+    if not published:
+        return None
+    try:
+        return _naive(published).replace(tzinfo=timezone.utc).timestamp()
+    except (TypeError, ValueError, OSError):
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -571,7 +614,7 @@ async def classify_articles(session, articles: list[NewsArticle], *,
         outcome.llm_called = False
         return outcome
 
-    ordered = sorted(articles, key=_article_priority_key)
+    ordered = _ordered_for_llm(articles)
     since_commit = 0
     for index, article in enumerate(ordered, start=1):
         if not rejudge_all and article.llm_used:

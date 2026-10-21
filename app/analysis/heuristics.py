@@ -7,8 +7,26 @@ from app.models.enums import (
 )
 
 CATEGORY_KEYWORDS: dict[NewsCategory, list[str]] = {
+    # The CB keyword list used to name only the Fed, the ECB, the BoE and the
+    # BoJ, so a story about any other central bank ("hawkish RBA", "BoC
+    # signals a cut") matched NO central-bank keyword at all and fell through
+    # to a generic bucket. The list now covers the other major policy makers.
+    #
+    # PBOC / "People's Bank of China" is deliberately NOT here: the engine
+    # models a China-demand channel for gold and silver, so those stories
+    # belong to the China bucket, which already carries the PBOC keyword.
+    # (The PBOC is still a FOREIGN central bank for the policy-channel
+    # question - see app/analysis/policy_scope.py, which asks a different
+    # question and therefore keeps its own list.)
     NewsCategory.CENTRAL_BANK: ["federal reserve", "fed", "fomc", "ecb", "boe", "boj",
-                                "central bank", "rate decision", "powell", "lagarde"],
+                                "central bank", "rate decision", "powell", "lagarde",
+                                "rba", "reserve bank of australia",
+                                "rbnz", "reserve bank of new zealand",
+                                "boc", "bank of canada",
+                                "snb", "swiss national bank",
+                                "bok", "bank of korea",
+                                "riksbank", "norges bank", "bank of russia",
+                                "banco de mexico"],
     NewsCategory.INTEREST_RATES: ["interest rate", "rate cut", "rate hike", "policy rate",
                                   "monetary policy", "basis points", "bps", "funds rate"],
     NewsCategory.INFLATION: ["cpi", "pce", "inflation", "consumer prices", "price index",
@@ -105,14 +123,21 @@ VERY_HIGH_TRIGGERS = [
     "bitcoin etf approval", "sec approves", "intervention", "crisis",
     # Explicit policy-path repricing is a genuine intraday market mover.
     "higher for longer", "fewer rate cuts", "more rate cuts", "cut rates",
-    "raise rates", "hawkish", "dovish",
+    "raise rates",
     "missile strike", "missile strikes", "airstrike", "airstrikes", "declares war",
     "us payrolls", "u.s. payrolls", "payrolls report", "payrolls data",
     "non-farm payrolls", "employment report", "jobs data",
 ]
+# "hawkish" and "dovish" are STANCE adjectives, not events. They used to sit
+# in VERY_HIGH_TRIGGERS, which made a single adjective in a market report
+# ("Australian Dollar hits one-month high as hawkish RBA gives boost") a
+# release-grade event: Tier 1, full multiplier, and enough to flip a card on
+# the fresh-Tier-1 override. A stance is Tier 2 material - "Fed signals rate
+# hike" (a decision, "rate hike") still reaches Tier 1; "markets turn hawkish"
+# does not. The words live in HIGH_TRIGGERS below.
 HIGH_TRIGGERS = ["fed", "rate", "yield", "dollar", "gdp", "pmi", "inflation",
                  "payroll", "etf", "sanction", "tariff", "china", "treasury",
-                 "policy"]
+                 "policy", "hawkish", "dovish"]
 
 # Low-impact tells: filler/minor items that must not be promoted just because
 # they mention a macro word. NOTE: "speech"/"comment" are deliberately absent -

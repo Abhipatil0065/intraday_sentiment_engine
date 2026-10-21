@@ -34,13 +34,33 @@ _SEMAPHORE: asyncio.Semaphore | None = None
 _CLIENT: httpx.AsyncClient | None = None
 # Loop the cached client is bound to - see get_client().
 _CLIENT_LOOP: asyncio.AbstractEventLoop | None = None
+# Loop the cached semaphore is bound to - see _semaphore_fixed().
+_SEMAPHORE_LOOP: asyncio.AbstractEventLoop | None = None
 
 
 def _semaphore_fixed() -> asyncio.Semaphore:
-    """Lazily created concurrency limiter (created inside the running loop)."""
-    global _SEMAPHORE
-    if _SEMAPHORE is None:
+    """Lazily created concurrency limiter, rebound when the event loop changes.
+
+    The scheduler runs the pipeline in a worker thread via ``asyncio.run()``,
+    which opens and CLOSES a fresh event loop every tick. An
+    ``asyncio.Semaphore`` binds itself to the loop that first had to WAIT on
+    it, and asyncio then refuses to use it from any other loop ("... is bound
+    to a different event loop"). With a single call in flight the semaphore
+    never blocked, so it never bound, and the bug stayed invisible; with
+    concurrent calls it blocks, and the NEXT tick would fail every call past
+    the first with an exception that looks like a provider failure.
+
+    Same guard as ``get_client()`` below: when the running loop changes, the
+    cached object is replaced rather than reused.
+    """
+    global _SEMAPHORE, _SEMAPHORE_LOOP
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:  # pragma: no cover - always called from a loop
+        current_loop = None
+    if _SEMAPHORE is None or _SEMAPHORE_LOOP is not current_loop:
         _SEMAPHORE = asyncio.Semaphore(settings.llm_max_concurrent)
+        _SEMAPHORE_LOOP = current_loop
     return _SEMAPHORE
 
 
@@ -143,13 +163,19 @@ class CircuitBreaker:
     Tracks consecutive LLM failures (503, timeout). After 3 consecutive failures,
     the breaker opens and LLM calls fail fast for the remainder of the tick.
     The breaker resets automatically at the start of the next tick.
+
+    No asyncio.Lock: the counter is read and written without an await between
+    them, so it is already atomic inside the event loop. A lock would be a
+    liability here - an asyncio.Lock binds to the loop that first had to wait
+    on it, and the scheduler opens a fresh loop every tick, so the lock from
+    the previous tick would raise "bound to a different event loop" exactly
+    when several calls fail at once (which is when the breaker matters most).
     """
 
     def __init__(self, threshold: int = 3):
         self.threshold = threshold
         self._consecutive_failures = 0
         self._open = False
-        self._lock = asyncio.Lock()
 
     @property
     def is_open(self) -> bool:
@@ -157,28 +183,25 @@ class CircuitBreaker:
 
     async def record_success(self) -> None:
         """Reset failure counter on success."""
-        async with self._lock:
-            if self._consecutive_failures > 0:
-                log.debug("LLM circuit breaker: reset after success")
-                self._consecutive_failures = 0
+        if self._consecutive_failures > 0:
+            log.debug("LLM circuit breaker: reset after success")
+            self._consecutive_failures = 0
 
     async def record_failure(self) -> None:
         """Increment failure counter; open breaker if threshold reached."""
-        async with self._lock:
-            self._consecutive_failures += 1
-            if self._consecutive_failures >= self.threshold:
-                self._open = True
-                log.warning(
-                    "LLM circuit breaker OPEN after %d consecutive failures - "
-                    "skipping LLM for remainder of tick",
-                    self._consecutive_failures,
-                )
+        self._consecutive_failures += 1
+        if self._consecutive_failures >= self.threshold:
+            self._open = True
+            log.warning(
+                "LLM circuit breaker OPEN after %d consecutive failures - "
+                "skipping LLM for remainder of tick",
+                self._consecutive_failures,
+            )
 
     async def reset(self) -> None:
         """Reset breaker state (called at tick start)."""
-        async with self._lock:
-            self._consecutive_failures = 0
-            self._open = False
+        self._consecutive_failures = 0
+        self._open = False
 
 
 _CIRCUIT_BREAKER: CircuitBreaker | None = None

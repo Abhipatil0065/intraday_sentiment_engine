@@ -298,6 +298,179 @@ ECONOMIC_CALENDAR_HORIZON_HOURS=48        # how far ahead it can influence PREP
 Calendar failures never stop the pipeline - they are logged and the engine falls
 back to news-only sentiment.
 
+### Region whitelist
+
+The calendar carries every scheduled release the provider publishes - for every
+country. Only the regions you whitelist may reach the sentiment engine. The
+whitelist lives in **`app/config/calendar_bias.json`** (data, not code):
+
+```
+{
+  "regions": [
+    { "code": "USA", "currencies": ["USD"], "weight": 1.0,
+      "include_keywords": ["fed", "fomc", "cpi", "nfp", ...] },
+    ...
+  ]
+}
+```
+
+The match is **two-stage and strict**:
+
+1. **Country / currency first.** The event's `country` field must map to a
+   region in the file (`USD`, `EUR`, `CNY`, `JPY`, `GBP` and a few aliases such
+   as `US`, `UK`, `EUROZONE`). A country that is not listed is dropped - there
+   is no catch-all region.
+2. **Then the title.** The event title must match one of that region's
+   `include_keywords`. A region may set `"require_keyword": false` to accept
+   every one of its events instead.
+
+Both stages must pass. Everything else is dropped at the calendar input, so a
+Swiss CPI print can never reach a dollar verdict. The filter runs inside
+`fetch_calendar()`, so the verdict, the calendar panel and the event-risk check
+all see the same whitelisted set.
+
+The switch is in `.env`:
+
+```
+CALENDAR_REGION_FILTER_ENABLED=true   # false = the previous, unfiltered behaviour
+```
+
+Turning it off restores the old verdict exactly, which is how you compare the
+two. A broken config file never silently changes a published verdict: the
+filter fails safe and logs the error instead.
+
+**A dropped event is not a hidden event.** A high-impact release from outside
+the whitelist — a Swiss CPI, an RBA decision — still moves the market, so it
+still raises the EVENT RISK note, labelled **"other region"**. It contributes
+**ZERO** to every score: it is not evidence for a dollar, it is only a warning
+that a standing bias may be about to be invalidated.
+
+### The calendar's own poll cadence
+
+The FinancialJuice render is heavy (10–20 s) and the site is Cloudflare-
+sensitive, so the calendar is **not** re-rendered on every pipeline tick. It
+has its own cadence in `.env`:
+
+```
+FJ_CALENDAR_POLL_SECONDS = 600        # the calendar's own interval
+FJ_CALENDAR_PRE_RELEASE_MINUTES = 15  # the burst window opens
+FJ_CALENDAR_POST_RELEASE_MINUTES = 30 # ... and closes
+FJ_CALENDAR_BURST_SECONDS = 60        # the cadence inside that window
+```
+
+Inside the burst window — from 15 minutes before a high-impact release until
+30 minutes after it — the calendar is polled at the faster cadence, so the
+actual number is picked up within a tick of the print instead of waiting out
+the full interval.
+
+### Regional macro bias (the five-region panel)
+
+`SECTION A2 — REGIONAL MACRO BIAS` is a **separate view** from the
+news-weighted verdict above. It is scored ONLY from the scheduled releases of
+the whitelisted regions and it has its own arithmetic:
+
+```
+contribution(asset) = |surprise| x impact_weight x region_weight
+                                 x asset_sensitivity x time_decay
+score              = 100 x sum(contributions) / scale      (clipped -100..+100)
+```
+
+* **Surprise** — `(actual - forecast) / std`, using the engine's own
+  `SURPRISE_STD_TABLE`. An indicator with no std of its own falls back to a
+  percent deviation.
+* **Direction** — the sign lives in the sensitivity matrix; the stance picks
+  the row. A hot US CPI is `USD_HAWKISH` (gold down), a soft one is
+  `USD_DOVISH` (gold up), and an **inverted** indicator (unemployment rate,
+  jobless claims) flips: higher than forecast means a WEAK economy, so gold is
+  up.
+* **Central banks** — a rate decision is scored from the decision itself
+  versus the expectation. A speech or press conference carries no numbers, so
+  it is scored from its keyword tags, and an **untagged speech scores nothing**.
+  A tagged one is worth `central_bank.speech_magnitude` sigma — a configured
+  number, not an invented surprise — and the matched keywords are logged and
+  shown on the card.
+* **Forced impact** — `impact_overrides` raises a release's impact before any
+  weighting, so an FOMC press conference or a Bailey speech weighs like a
+  rate decision even when the provider tagged it Medium. Every change is
+  logged. An overridden release also escapes the impact floor: if the config
+  says CPI is High, it is used.
+* **Time decay** — full weight for 4 h after the release, then a linear decay
+  to zero at 48 h. An **upcoming** print adds **no score**: it is listed as an
+  event risk, and inside its risk window (30 min before → 15 min after) the
+  neutral zone is widened so a thin reading is not dressed up as a call.
+* **The decay survives a restart** — the provider only ever exposes TODAY, so
+  the last 48 h of events are persisted to `data/calendar_history.json` and
+  merged back into every poll. Without it, a restart would lose yesterday's
+  releases — and their decay — exactly when it still matters. The history
+  holds the RAW feed, so the whitelist and the forced impact are re-applied to
+  it on every poll and a config edit still takes effect immediately.
+* **Output** — one card per asset (Gold, Silver, Bitcoin, Equities) with the
+  score, the label and the top 3 driving releases; a per-region contribution
+  breakdown; and the next 24 h of high-impact releases with a countdown.
+
+Everything the panel uses is in `app/config/calendar_bias.json`:
+
+| Key | What it tunes | Default |
+|---|---|---|
+| `regions[].weight` | How much one region counts (USA 1.0, EUR 0.6, CNY 0.5, JPY 0.6, GBP 0.4) | as above |
+| `regions[].include_keywords` | Which releases of that region are in scope | per region |
+| `regions[].exclude_keywords` | Which releases of that region are OUT of scope | per region |
+| `impact_overrides` | Forced impact, matched on the title | FOMC/rate decisions/speakers/CPI/NFP/PCE → High |
+| `impact.weights` | High / Medium / Low weight | 3 / 2 / 1 |
+| `impact.min_impact` | Floor below which a release is ignored | `Medium` |
+| `surprise.max_sigma` | Cap on one release's surprise (the std table is a rule of thumb) | 3.0 |
+| `time_decay.full_weight_hours` / `decay_to_zero_hours` | How long a release keeps its influence | 4 h / 48 h |
+| `asset_sensitivity` | Signed multiplier per scenario and asset (-1..+1) | see the file |
+| `scenario_map` / `stance_map` | Which sensitivity row an event uses | see the file |
+| `inverted_events.keywords` | Indicators where "higher" means weaker | unemployment, claims |
+| `central_bank.speech_tags` | The hawkish / dovish words, per stance | see the file |
+| `central_bank.speech_magnitude` | What a TAGGED speech is worth, in sigma | 1.0 |
+| `normalization.scale` | Raw total that maps to a full 100 points | 10.0 |
+| `labels.*` | The band edges of the five labels | ±20 / ±60 |
+| `event_risk.*` | The risk window and how far the neutral zone widens | 30 / 15 min, ×2 |
+| `upcoming.*` | The upcoming-release list horizon and impact floor | 24 h, High |
+
+**Tuning it**
+
+* *I want more US releases* — add the keyword to the USA `include_keywords`
+  list. Nothing else changes.
+* *A region is too noisy* — remove a keyword, or set its `weight` to 0.
+* *I want another region* — add an entry with its `currencies`,
+  `include_keywords` and a `weight`; then add its row to `scenario_map` and
+  `stance_map`, and its scenario to `asset_sensitivity`. A region with no
+  scenario entry contributes nothing.
+* *The scores feel too loud* — raise `normalization.scale` (a bigger scale
+  means a smaller score for the same evidence).
+* *A release should count for longer* — raise
+  `time_decay.decay_to_zero_hours`.
+* *I want to compare against the old behaviour* — set
+  `CALENDAR_REGION_FILTER_ENABLED=false` and watch the verdict above the
+  panel change while the panel stays region-scoped.
+* *A speech reads wrong* — add or remove a word in
+  `central_bank.speech_tags`; a title that matches both a hawkish and a
+  dovish word is treated as untagged (and scores nothing).
+* *A release matters more than the provider thinks* — add it to
+  `impact_overrides`.
+
+Every event that contributes to a score is logged with its region, weights,
+surprise and final contribution, so any number on the panel can be traced back
+to the release that produced it.
+
+### Auditing the calendar
+
+```
+python tools/audit_calendar.py           # the persisted calendar
+python tools/audit_calendar.py --live    # a live FinancialJuice poll
+```
+
+Prints every event with its derived country, the region the whitelist
+assigned it, whether it was kept or dropped and why — and flags every
+derivation that is not trustworthy. FJ renders no country column, so the
+country comes from the title; a country derived from the **generic** fallback
+list ("cpi", "pmi", "gdp", …) is marked **LOW** confidence, because the title
+named no country at all and was attributed to the US by convention. The same
+marking appears in the engine log.
+
 ---
 
 ## 5. Asset-specific logic
@@ -417,6 +590,7 @@ See `.env.example` for the full annotated list. Key values:
 | `MAX_ARTICLE_AGE_HOURS` | `26` | Hard cap on article age |
 | `NEWS_RETENTION_DAYS` | `2` | Days of news kept in the DB (today + previous day); `0` keeps everything |
 | `DEDUP_SIMILARITY_THRESHOLD` | `0.72` | Event merge threshold |
+| `CALENDAR_REGION_FILTER_ENABLED` | `true` | Only whitelisted regions may reach the sentiment engine |
 | `PRICE_DATA_ENABLED` | `false` | Price-action confirmation (master switch; BTC via Coinbase) |
 | `USE_MOCK_SOURCE` | `false` | Offline synthetic demo |
 | `DATABASE_URL` | `sqlite:///./data/...` | Swap for PostgreSQL in prod |

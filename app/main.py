@@ -705,6 +705,7 @@ def build_payload(session) -> dict:
         "regime_confidence": (regime.confidence if regime else 0.0),
         "regime_drivers": (regime.drivers if regime else []),
         "assets": assets_out,
+        "regional_bias": pipeline.regional_bias_payload(),
         "news_feed": news_feed,
         "news_feed_total": news_feed_total,
         "alerts": alerts,

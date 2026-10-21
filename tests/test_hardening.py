@@ -238,19 +238,27 @@ class TestLLMBatchLimit:
         Base.metadata.create_all(bind=engine)
 
     def test_llm_batch_limit_respected(self):
-        """LLM_BATCH_LIMIT=15 limits concurrent LLM calls (Item 5)."""
+        """LLM_BATCH_LIMIT=15 limits model calls per tick (Item 5)."""
         from app.services.pipeline import LLM_BATCH_LIMIT
 
         assert LLM_BATCH_LIMIT == 15
 
-        # Verify concurrency constant in news_classifier
+        # The classifier's concurrency cap must track the CONFIGURED value -
+        # since 2026-10-21 the tick classifies its LLM-bound articles
+        # concurrently, so this is the number of calls in flight at once.
         from app.analysis import news_classifier
-        assert news_classifier.LLM_MAX_CONCURRENT == 2
+        from app.config import settings
+
+        assert news_classifier.LLM_MAX_CONCURRENT == settings.llm_max_concurrent
+        assert 1 <= news_classifier.LLM_MAX_CONCURRENT <= 4
 
     def test_concurrency_cap_respected(self):
-        """Concurrency capped at 2."""
+        """The concurrency cap is a real, bounded number."""
         from app.analysis.news_classifier import LLM_MAX_CONCURRENT
-        assert LLM_MAX_CONCURRENT == 2
+        from app.config import settings
+
+        assert LLM_MAX_CONCURRENT == settings.llm_max_concurrent
+        assert 1 <= LLM_MAX_CONCURRENT <= 4
 
 
 if __name__ == "__main__":

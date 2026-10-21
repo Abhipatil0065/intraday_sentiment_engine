@@ -1116,6 +1116,7 @@ def resolve(text: str, category: NewsCategory,
     second = 0.9, etc. Applied ONCE in the weight path.
     """
     from app.analysis.event_polarity import direct_asset_moves
+    from app.analysis.policy_scope import policy_event_scale
     from app.analysis.text_quality import neutralise_on_negation
     from app.config import DRIVER_RANKINGS
 
@@ -1194,10 +1195,18 @@ def resolve(text: str, category: NewsCategory,
             specificity = 1.0 / (1.0 + 0.5 * index)
             # Task 6: apply per-asset driver rank weight (top driver = 1.0).
             driver_rank = DRIVER_RANKINGS.get(asset.name, {}).get(event_type.value, 0.3)
-            contribution = sign * entry.magnitude * scale * specificity * driver_rank
+            # POLICY SCOPE: a central-bank stance that belongs to a FOREIGN
+            # central bank does not travel the US rate channel this map is
+            # written for. Its contribution is scaled down instead of being
+            # dropped, so the story still registers - weakly - instead of
+            # being carried at full US-central-bank strength. See
+            # app/analysis/policy_scope.py.
+            cb_scale = policy_event_scale(event_type.value, text)
+            contribution = (sign * entry.magnitude * scale * specificity
+                            * driver_rank * cb_scale)
             signed += contribution
-            if entry.magnitude > best_weight:
-                best_weight = entry.magnitude
+            if entry.magnitude * cb_scale > best_weight:
+                best_weight = entry.magnitude * cb_scale
                 dominant = event_type
 
         # A recognised mechanism with a non-zero magnitude that nets to zero

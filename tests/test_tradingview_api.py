@@ -284,6 +284,79 @@ def test_fetch_tradingview_news_api_max_items_limit():
         assert len(items) == 5
 
 
+def test_fetch_tradingview_news_api_splits_budget_across_symbols():
+    """Every symbol must get its share of the budget.
+
+    The first symbol's 30-item window used to fill the whole cap, so the
+    later symbols (silver, crypto) were never fetched at all.
+    """
+    def _payload(prefix: str, symbol: str) -> dict:
+        return {
+            "items": [
+                {"id": f"{prefix}_{i}", "title": f"{prefix} {i}",
+                 "published": 1792513758 + i, "urgency": 2,
+                 "relatedSymbols": [{"symbol": symbol}],
+                 "storyPath": f"/news/{prefix}{i}/",
+                 "provider": {"name": "Reuters"}}
+                for i in range(30)
+            ],
+            "pagination": {},
+        }
+
+    symbols = ["OANDA:XAUUSD", "OANDA:XAGUSD", "BINANCE:BTCUSD"]
+    payloads = [_payload("gold", symbols[0]), _payload("silver", symbols[1]),
+                _payload("btc", symbols[2])]
+
+    from app.ingestion.tradingview_api import _cache
+    _cache.clear()
+
+    with patch("app.ingestion.tradingview_api._get_session") as mock_get_session:
+        mock_session = Mock()
+        mock_session.get.side_effect = [
+            Mock(status_code=200, json=Mock(return_value=p)) for p in payloads
+        ]
+        mock_get_session.return_value = mock_session
+
+        items = fetch_tradingview_news_api(symbols, max_items=30)
+
+    # 30 total, split 10 / 10 / 10.
+    assert len(items) == 30
+    counts = {}
+    for item in items:
+        key = item["news_id"].split("_")[0]
+        counts[key] = counts.get(key, 0) + 1
+    assert counts == {"gold": 10, "silver": 10, "btc": 10}
+
+
+def test_fetch_tradingview_news_api_falls_back_when_streaming_fails():
+    """A streaming failure must not lose the symbol."""
+    def _payload(prefix: str) -> dict:
+        return {
+            "items": [
+                {"id": f"{prefix}_0", "title": f"{prefix} 0", "published": 1792513758,
+                 "urgency": 2, "relatedSymbols": [{"symbol": "OANDA:XAUUSD"}],
+                 "storyPath": f"/news/{prefix}0/", "provider": {"name": "Reuters"}}
+            ],
+            "pagination": {},
+        }
+
+    from app.ingestion.tradingview_api import _cache
+    _cache.clear()
+
+    with patch("app.ingestion.tradingview_api._get_session") as mock_get_session:
+        mock_session = Mock()
+        mock_session.get.side_effect = [
+            Mock(status_code=503, json=Mock(return_value={})),
+            Mock(status_code=200, json=Mock(return_value=_payload("gold"))),
+        ]
+        mock_get_session.return_value = mock_session
+
+        items = fetch_tradingview_news_api(["OANDA:XAUUSD"], max_items=30)
+
+    assert len(items) == 1
+    assert items[0]["news_id"] == "gold_0"
+
+
 def test_tradingview_api_source_wrapper():
     """Test the TradingViewAPISource wrapper class."""
     spec = parse_source_config("TradingView API News|tradingview_api|https://www.tradingview.com/news/|1.0|TIER_1_PRIMARY")[0]

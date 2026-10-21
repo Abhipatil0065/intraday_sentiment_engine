@@ -427,6 +427,43 @@ class Settings(BaseSettings):
     llm_tick_budget_seconds: float = Field(
         default=90.0, validation_alias="LLM_TICK_BUDGET_SECONDS")
 
+    # ---------------- LLM priority sources ----------------
+    # Source names (comma-separated, case-insensitive) that get FIRST pick of
+    # the per-tick LLM budget instead of queueing behind fresher wire copy.
+    #
+    # WHY THIS EXISTS
+    # ---------------
+    # The LLM budget is small and STRICTLY FIRST-COME-FIRST-SERVED over the
+    # sorted batch. Measured on the live endpoint (2026-10-21): a model call
+    # costs 20-40s, so the 90s tick budget buys only 2-5 verdicts per tick -
+    # the batch count cap of 15 is never reached. The order therefore decides
+    # who is judged at all, and the order is tier-then-recency: a source whose
+    # headlines are consistently 10-30 minutes behind the freshest wire copy
+    # NEVER wins a model call, however much it contributes.
+    #
+    # TradingView was exactly that source: 26 rows ingested, 0 model verdicts,
+    # so every TradingView headline was scored by the deterministic heuristic
+    # instead - a weaker importance read, and (because only a model verdict may
+    # delete an article) a MEDIUM/LOW headline that would have been deleted
+    # sat in the feed instead.
+    #
+    # The reservation is deliberately small and age-bounded:
+    #   llm_priority_slots          how many of the tick's model calls may go
+    #                               to the listed sources (the rest of the
+    #                               budget is untouched).
+    #   llm_priority_max_age_hours  a listed-source item older than this does
+    #                               NOT get the reservation, so a backlog after
+    #                               a restart cannot spend the whole budget on
+    #                               stale rows.
+    #
+    # Empty (the default) changes nothing: the sort behaves exactly as before.
+    llm_priority_sources: str = Field(
+        default="", validation_alias="LLM_PRIORITY_SOURCES")
+    llm_priority_slots: int = Field(
+        default=2, validation_alias="LLM_PRIORITY_SLOTS")
+    llm_priority_max_age_hours: float = Field(
+        default=1.0, validation_alias="LLM_PRIORITY_MAX_AGE_HOURS")
+
     # ---------------- decision log / audit (item 11) ----------------
     # Every classification and every published bias is appended here so the
     # transmission map and decay table can be tuned against real outcomes.
@@ -498,6 +535,18 @@ class Settings(BaseSettings):
     # How far ahead an event is allowed to influence PREP (hours).
     economic_calendar_horizon_hours: int = 48
 
+    # REGION WHITELIST for the calendar. When enabled, only events whose
+    # country/currency belongs to a region listed in
+    # ``app/config/calendar_bias.json`` (default: USA, Eurozone, China, Japan,
+    # UK) AND whose title matches that region's event list may reach the
+    # sentiment engine. Everything else is dropped at the calendar input.
+    #
+    # Set it to false to restore the previous behaviour exactly - useful for
+    # comparing the old verdict against the region-filtered one. The
+    # whitelist itself (regions, keywords, weights) lives in the JSON file,
+    # never here.
+    calendar_region_filter_enabled: bool = True
+
     # FinancialJuice is the sole calendar provider.
     calendar_providers: str = "financialjuice"
 
@@ -560,6 +609,13 @@ class Settings(BaseSettings):
     # Phase 8 cache: serve the last good payload when every provider fails.
     calendar_cache_enabled: bool = True
     calendar_cache_max_age_days: int = 7
+
+    # How far back the PERSISTED calendar history reaches, in hours. The
+    # provider only ever exposes TODAY, so without this the time decay of
+    # yesterday's releases would be lost on every restart. The history holds
+    # the RAW feed; the region whitelist and the forced impact are re-applied
+    # to it on every poll, so a config edit still takes effect immediately.
+    calendar_history_hours: int = 48
 
     # Phase 8: conditional requests where a provider supports them. FJ is a
     # browser render and cannot send ETag.
