@@ -265,7 +265,27 @@ class _Sig:
         self.reason = "hot print"
 
 
-def test_calendar_expected_event_is_damped_versus_released():
+def test_calendar_expected_event_does_not_score_the_box():
+    """
+    PHASE 7: a scheduled print is a RISK, not evidence.
+
+    An EXPECTED (not yet released) print is excluded from the box's bull/bear
+    split entirely - the report's own "Docket" section still lists it, but a
+    box that moves on a number nobody has published is moving on a guess.
+    """
+    ctx = F.context_from_calendar([_Sig("EXPECTED")])
+    assert ctx.calendar == {}
+    assert ctx.calendar_count == 0
+
+
+def test_calendar_expected_event_is_damped_versus_released(monkeypatch):
+    """
+    Legacy mode: with ``calendar_upcoming_contributes`` on, an expectation
+    still counts - but damped relative to a released print.
+    """
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "calendar_upcoming_contributes", True)
     released = F.context_from_calendar([_Sig("RELEASED")]).calendar[Asset.GOLD]
     expected = F.context_from_calendar([_Sig("EXPECTED")]).calendar[Asset.GOLD]
     assert expected.bear < released.bear

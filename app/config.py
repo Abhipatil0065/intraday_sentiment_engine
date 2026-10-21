@@ -603,6 +603,20 @@ class Settings(BaseSettings):
     )
     # Core measures are the better read of the same release.
     calendar_core_bonus: float = 0.20
+
+    # PHASE 7: DOES A SCHEDULED PRINT MOVE A CARD BEFORE IT HAPPENS?
+    #
+    #   false (default) - an UPCOMING print is a RISK, not evidence. It is
+    #     still listed in the economic-calendar panel and it still raises the
+    #     EVENT RISK note ("this bias may be invalidated by the print"), but
+    #     it never adds bull/bear weight to a card. The card moves only when
+    #     the real number is published and the surprise is known.
+    #   true - the previous behaviour: a consensus expectation contributes at
+    #     reduced persistence (0.35 instead of 0.75) and is damped/dropped
+    #     once it goes stale. It also means an UNPUBLISHED print scores on
+    #     the CONSENSUS direction, which for a growth survey can invert the
+    #     sign of the read.
+    calendar_upcoming_contributes: bool = False
     # When a release publishes both m/m and y/y, keep one row per asset.
     calendar_dedupe_mom_yoy: bool = True
 

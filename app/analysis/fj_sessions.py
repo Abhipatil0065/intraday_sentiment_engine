@@ -39,6 +39,7 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from app.analysis.cue_rules import BEARISH_CUES, BULLISH_CUES, score_cues
+from app.config import settings
 from app.models.enums import Asset
 from app.utils.timestamp_parse import parse_timestamp
 
@@ -772,15 +773,23 @@ def context_from_calendar(signals: Iterable) -> SessionContext:
     """
     Build a context from economic-calendar signals.
 
-    Only events the calendar module already resolved to a direction count, and an
-    EXPECTED (not-yet-released) print is damped relative to a released one: a
-    scheduled event is a forward-looking risk, not a realised move.
+    Only events the calendar module already resolved to a direction count.
+
+    PHASE 7: an UPCOMING print (no actual yet) does NOT score here either.
+    A scheduled event is a forward-looking risk, not a realised move, so it
+    is excluded from the box's bull/bear split unless
+    ``calendar_upcoming_contributes`` is switched on. The session report's
+    own "Docket"/"Calendar" sections still list the scheduled prints - the
+    trader sees WHAT IS COMING without it being counted as evidence.
     """
     ctx = SessionContext()
     for sig in signals or []:
         try:
             key = Asset(_enum_name(getattr(sig, "asset", "")))
         except ValueError:
+            continue
+        if (_enum_name(getattr(sig, "mode", "RELEASED")) != "RELEASED"
+                and not settings.calendar_upcoming_contributes):
             continue
         signed = _signed_contribution(
             _enum_name(getattr(sig, "direction", "")),

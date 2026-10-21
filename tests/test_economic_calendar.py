@@ -160,10 +160,21 @@ def test_unchanged_consensus_is_neutral():
         assert sig.direction is Direction.NEUTRAL
 
 
-def test_no_forecast_and_no_previous_yields_nothing():
-    """Nothing to reason from -> no signal, rather than a fabricated one."""
-    assert evaluate(_event(forecast=None, previous=None, actual=None),
-                    Asset.GOLD) is None
+def test_no_forecast_and_no_previous_yields_a_neutral_catalyst():
+    """
+    Nothing to reason from -> a NEUTRAL catalyst, never a fabricated lean.
+
+    The row is still listed (a scheduled print the trader must know about),
+    but with no forecast, no previous and no actual there is nothing to
+    compare, so it takes no side and carries no surprise.
+    """
+    sig = evaluate(_event(forecast=None, previous=None, actual=None),
+                   Asset.GOLD)
+    assert sig is not None
+    assert sig.direction is Direction.NEUTRAL
+    assert sig.surprise is None
+    assert sig.mode == "UPCOMING"
+    assert "catalyst" in sig.reason
 
 
 # --------------------------------------------------------------------------

@@ -1459,7 +1459,21 @@ def _recompute_sentiment(session, stats: IngestStats):
 
     # Economic calendar joins the same aggregation as the news flow, so the
     # bullish/bearish verdict reflects scheduled macro risk too.
+    #
+    # PHASE 7: A SCHEDULED PRINT IS NOT EVIDENCE.
+    #
+    # Only a RELEASED print - one with a real ``actual`` - may add bull/bear
+    # weight to a card. An UPCOMING print (no actual yet) is a forward-looking
+    # catalyst: it belongs in the economic-calendar panel and in the EVENT
+    # RISK note, and NOWHERE in the score. Before this gate the card moved on
+    # a CONSENSUS that nobody had published yet, and it moved on the
+    # CONSENSUS DIRECTION, which is a guess about a print that has not
+    # happened. ``calendar_upcoming_contributes`` restores the old behaviour
+    # for anyone who wants it.
     for sig in _calendar_signals:
+        if (sig.mode != "RELEASED"
+                and not settings.calendar_upcoming_contributes):
+            continue
         cal_signal = _calendar_signal_to_weighted(sig)
         signals.append(cal_signal)
         # IMPROVEMENT 5: calendar bleed too - a high-impact FOMC/CPI print

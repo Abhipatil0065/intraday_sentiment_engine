@@ -19,6 +19,12 @@ is labelled UPCOMING and shown as a risk, never an outcome. The moment the
 same release reappears with an ``actual`` it is resolved through the RELEASED
 branch and counted then.
 
+AND (phase 7) only a RELEASED print may SCORE: an UPCOMING print is listed
+in the calendar panel and raises the EVENT RISK note, but it adds no
+bull/bear weight to any card, because a card that moves on a number nobody
+has published yet is moving on a guess. ``calendar_upcoming_contributes``
+restores the old behaviour.
+
 Nothing from yesterday, tomorrow, or further out is included - the same-day
 boundary uses the engine's market timezone (``settings.market_timezone``).
 
@@ -134,6 +140,11 @@ TITLE_RULES: tuple[tuple[str, int], ...] = (
     ("initial claim", 1), ("labour market", 1), ("labor market", 1),
     ("fomc", 2), ("federal reserve", 2), ("fed ", 2), ("powell", 2),
     ("ecb", 2), ("boe", 2), ("boj", 2), ("central bank", 2),
+    # Central banks whose NAME does not contain a needle above. "Fed's
+    # Williams Speaks" is handled by the possessive folding in
+    # _normalise_for_rules(); these are the named institutions that no
+    # short form covers ("Bank of England's Bailey Speaks").
+    ("bank of england", 2), ("bank of japan", 2), ("bundesbank", 2),
     ("rate decision", 3), ("policy rate", 3), ("interest rate", 3),
     ("cash rate", 3),
     ("treasury yield", 4), ("bond yield", 4), ("10-year", 4), ("auction", 4),
@@ -142,6 +153,28 @@ TITLE_RULES: tuple[tuple[str, int], ...] = (
     ("retail sales", 6), ("consumer confidence", 6),
     ("copper", 7), ("industrial", 7), ("manufacturing", 7), ("factory", 7),
     ("china", 8), ("chinese", 8), ("caixin", 8), ("pboc", 8),
+)
+
+#: A regional Reserve Bank SURVEY is not a policy decision. "Kansas City Fed
+#: Composite Index", "Philly Fed Manufacturing Survey", "Chicago Fed National
+#: Activity Index" - the "fed " needle in TITLE_RULES would classify all of
+#: them as CENTRAL_BANK, the strongest macro class, and that is wrong twice
+#: over: a regional sentiment survey is growth data, not a policy signal, and
+#: the CENTRAL_BANK hot-bias INVERTS the read (a weaker-than-expected survey
+#: became "dovish -> bullish BTC" instead of "slower growth -> bearish").
+_SURVEY_MARKERS: tuple[str, ...] = (
+    "survey", "composite index", "manufacturing", "business outlook",
+    "activity index", "leading index", "business climate", "sentiment",
+    "current conditions", "capacity utilization", "outlook",
+)
+
+#: ...unless the title is a SPEECH or a DECISION, which are policy events
+#: whatever else they mention ("Fed's Williams Speaks on Manufacturing",
+#: "Fed Signals Rate Decision").
+_SPEECH_MARKERS: tuple[str, ...] = (
+    "speaks", "speech", "press conference", "press conf", "testimony",
+    "testifies", "remarks", "presser", "keynote", "minutes", "decision",
+    "interest rate", "policy rate", "rate cut", "rate hike",
 )
 
 # Countries whose currency is a first-order driver for all three assets.
@@ -370,14 +403,52 @@ def to_float(raw) -> float | None:
     return value
 
 
+def _normalise_for_rules(title: str) -> str:
+    """
+    Lowercase a title for rule matching, with the possessives folded away.
+
+    "Fed's Williams Speaks" -> "fed williams speaks".
+
+    The possessives are decoration, and without this the ``"fed "`` needle -
+    which needs a space after the word - MISSED every Fed row that writes
+    itself with an apostrophe. Those titles were classified as unknown, so
+    they produced no calendar signal at all: not a release, not a catalyst,
+    not even a row in the calendar panel.
+    """
+    lowered = (title or "").lower().replace("\u2019", "'")
+    return lowered.replace("'s ", " ").replace("' ", " ").replace("'", " ")
+
+
+def _is_regional_survey(lowered: str) -> bool:
+    """
+    True when a title the CENTRAL_BANK rule would claim is really a survey.
+
+    A regional Reserve Bank survey ("Kansas City Fed Composite Index") is
+    growth/sentiment data. It is re-profiled as INDUSTRIAL_DEMAND, whose
+    hot-bias is MIXED - so a released print is read as NEUTRAL instead of
+    carrying an inverted policy direction, and a print that has not happened
+    cannot vote at all.
+    """
+    if any(marker in lowered for marker in _SPEECH_MARKERS):
+        return False
+    return any(marker in lowered for marker in _SURVEY_MARKERS)
+
+
 def classify_event(event: CalendarEvent) -> EventProfile | None:
     """Match a calendar title to a transmission profile, or None if unknown."""
-    lowered = (event.title or "").lower()
+    lowered = _normalise_for_rules(event.title)
     if not lowered:
         return None
     for needle, index in TITLE_RULES:
         if needle in lowered and index < len(PROFILES):
-            return PROFILES[index]
+            profile = PROFILES[index]
+            # Only the US Fed needles are re-profiled: an ECB or BoJ report is
+            # a policy document, while a regional Reserve Bank survey is
+            # growth data.
+            if (needle in ("fed ", "federal reserve")
+                    and _is_regional_survey(lowered)):
+                return PROFILES[7]
+            return profile
     return None
 
 
@@ -575,9 +646,19 @@ def evaluate(event: CalendarEvent, asset: Asset,
 
         if band == "NEUTRAL" or hot_bias is Direction.MIXED:
             direction = Direction.NEUTRAL
-            reason = (f"{event.title} came in at {actual_v:g} vs "
-                      f"{forecast_v:g} forecast - no material surprise "
-                      f"({band.lower()}).")
+            if hot_bias is Direction.MIXED:
+                # The class has no fixed direction for this asset (growth
+                # data, a regional survey), so the number cannot be turned
+                # into a lean. Say that - "no material surprise (extreme)"
+                # would read as a contradiction.
+                reason = (f"{event.title} came in at {actual_v:g} vs "
+                          f"{forecast_v:g} forecast ({surprise:+g}, "
+                          f"{band.lower()} surprise) - this class has no fixed "
+                          f"direction for {asset.value}, so it carries no lean.")
+            else:
+                reason = (f"{event.title} came in at {actual_v:g} vs "
+                          f"{forecast_v:g} forecast - no material surprise "
+                          f"({band.lower()}).")
         else:
             is_hot = (z or 0.0) > 0
             direction = hot_bias if is_hot else _opposite(hot_bias)
@@ -628,7 +709,34 @@ def evaluate(event: CalendarEvent, asset: Asset,
             transmission=profile.transmission, surprise=None,
         )
 
-    # No forecast and no previous: nothing to reason from.
+    # ---- SCHEDULED, NO NUMBERS: a catalyst, never a lean ----------------
+    # "FOMC Press Conference", "Fed Chair Powell Speaks", "Bank of England
+    # Bailey Speaks" - an event the market can move on, with NOTHING to
+    # compare a number against: no forecast, no previous, no actual. The
+    # engine never invents a direction for it, so the row resolves as
+    # NEUTRAL: it is listed in the calendar panel as a catalyst to watch,
+    # it raises the EVENT RISK note, and it carries no lean on any card.
+    #
+    # Before this branch such a row was dropped outright, so the docket was
+    # missing exactly the rows a trader watches for - the people due to
+    # speak.
+    if (event.forecast is None and event.previous is None
+            and event.actual is None):
+        return CalendarSignal(
+            event=event, profile=profile, asset=asset,
+            direction=Direction.NEUTRAL,
+            strength=_strength_for(event.impact, importance, None, event.country),
+            importance=importance,
+            relevance=min(1.0, weighted_relevance * (1.0 + core_bonus)),
+            persistence=0.35, mode="UPCOMING",
+            reason=(f"{event.title} is scheduled; no forecast is published, "
+                    f"so it carries no directional read - a catalyst to watch, "
+                    f"not evidence."),
+            transmission=profile.transmission, surprise=None,
+        )
+
+    # A number the provider published but the engine could not read: no
+    # signal, rather than a guess.
     return None
 
 
