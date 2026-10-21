@@ -412,10 +412,19 @@ def _block(session, asset: str, scope: str) -> dict:
             "price_note": "Price-action confirmation unavailable.",
             "last_updated": "",
         }
-    # The display bull/bear split is derived from the raw engine verdict
-    # (raw_score), NOT the baseline-adjusted score. The adjusted score
-    # centres around 0 and is therefore useless for a magnitude-based
-    # percentage - using it would make every card read 50/50.
+    # The display bull/bear split is the RATIO of the two aggregate totals
+    # (``snap.bull`` / ``snap.bear``), not a projection of the score. The card's
+    # own evidence line prints those two numbers, so the bar and the two
+    # percentage boxes now show exactly what the reader can check: 2.80 bullish
+    # weight against 1.21 bearish weight is a 70/30 split.
+    #
+    # WHY NOT THE SCORE. The score projection (bull_pct = round(50 + score / 2))
+    # answers "how far from even is the net lean" and cannot express the split
+    # when the badge and the aggregate disagree - a fresh Tier-1 release flips
+    # the badge on its own while the day's aggregate still leans the other way.
+    # The old code answered that by publishing a synthetic one-point lean, so a
+    # card showed "Bullish 49% / Bearish 51%" against evidence that was really
+    # 70/30. The badge keeps the engine's verdict; the split is the evidence.
     #
     # Step 1: ``raw_score`` is now a declared column on SentimentSnapshot, so
     # it is read DIRECTLY. On a tie-break verdict ``score`` is a
@@ -471,7 +480,8 @@ def _block(session, asset: str, scope: str) -> dict:
         "confidence": snap.confidence,
         "bias": snap.bias,
         "display": to_display(_display_raw, snap.bias, snap.confidence,
-                               tie_break=_tie_break),
+                               tie_break=_tie_break,
+                               bull=snap.bull, bear=snap.bear),
         # When this dominant side began, from snapshot history. The card uses it
         # to show "since ..." on a fresh page load, before the browser has
         # witnessed a flip of its own.

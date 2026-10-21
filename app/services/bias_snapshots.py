@@ -56,6 +56,12 @@ class AssetVerdict:
     raw_score: float | None = None
     baseline_score: float | None = None
     adjusted: bool = False
+    # The two aggregate totals behind the verdict. The dashboard's split IS
+    # their ratio, so the log has to carry them as well - otherwise the row
+    # records a split the reader could not reproduce from the numbers the card
+    # printed.
+    bull: float = 0.0
+    bear: float = 0.0
 
 
 def _drivers(rows: Sequence) -> list[dict]:
@@ -80,7 +86,10 @@ def build_rows(verdicts: Sequence[AssetVerdict],
 
     ``bullish_pct`` / ``bearish_pct`` come from ``display.to_display`` - the same
     projection the dashboard renders - so a manual reader compares against
-    exactly what was shown, never a re-derived number.
+    exactly what was shown, never a re-derived number. The split itself is the
+    RATIO of the two aggregate totals, which the verdict carries as
+    ``bull`` / ``bear``, so the logged pair is reproducible from the logged
+    evidence.
 
     Item 1: the published ``score`` is baseline-adjusted when a baseline is
     available; ``raw_score`` / ``baseline_score`` / ``adjusted`` are carried
@@ -94,7 +103,8 @@ def build_rows(verdicts: Sequence[AssetVerdict],
     stamp = now or T.now_utc()
     rows: list[dict] = []
     for v in verdicts:
-        shown = to_display(v.score, v.bias, v.confidence)
+        shown = to_display(v.score, v.bias, v.confidence,
+                           bull=v.bull, bear=v.bear)
         level = v.raw_score if v.raw_score is not None else v.score
         rows.append({
             "timestamp_utc": stamp,

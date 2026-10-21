@@ -4,6 +4,52 @@ All notable changes to the Intraday News Sentiment & Market Impact Engine.
 
 ---
 
+## THE CARD SPLIT IS THE RATIO OF THE EVIDENCE (2026-10-21)
+
+### Fix — "bull 2.8 · bear 1.2" no longer publishes as "Bullish 49% / Bearish 51%"
+- **Files:** `app/analysis/display.py` (`split_from_totals`, `to_display`),
+  `app/main.py` (`_block`), `app/analysis/equity_card.py` (`to_payload`),
+  `app/services/bias_snapshots.py` (`AssetVerdict`, `build_rows`),
+  `app/services/pipeline.py` (both `AssetVerdict` build sites),
+  `app/analysis/fj_sessions.py` (`bullish_bearish_from_score`),
+  `app/dashboard/web/index.html` (`disp`, `chipText`, `msplit`),
+  `tests/test_display.py`, `tests/test_fj_sessions.py`
+- **The bug:** the card's evidence line printed the aggregate
+  (`score 39.8 · bull 2.8 · bear 1.2` — a 70/30 bullish split) while the boxes
+  under it published "Bullish 49% / Bearish 51%". The 49/51 was not a
+  calculation: `to_display()` projected the score
+  (`bull_pct = round(50 + score / 2)`), and when the badge contradicted the
+  projected split it REPLACED the whole split with a hard-coded one-point lean
+  (`LEAN_BULL_PCT = 51`). That path fires whenever a fresh Tier-1 release
+  flips the badge while the day's aggregate still leans the other way —
+  `tier1_override` — which is why the card could say "BEARISH 51%" over
+  evidence that was 70/30 bullish.
+- **The rule now:** the split IS the ratio of the two captured totals,
+  `bull_pct = round(100 * bull / (bull + bear))`, on every card — the asset
+  cards, the EQUITY card and the five FinancialJuice boxes. The badge keeps
+  the engine's verdict; where the verdict owns the split it also carries the
+  percentage, and where it does not (the Tier-1 override case) the badge
+  withholds the percentage instead of faking one, and the card's existing note
+  explains the disagreement. The FJ boxes lost their 0.34 conviction cap for
+  the same reason: a ratio cannot fabricate conviction, because a ratio IS the
+  evidence — and the same 2.8-vs-1.2 evidence no longer reads 59/41 on one
+  card and 70/30 on another.
+- **Also changed:** the confidence shrink no longer applies to the ratio path
+  (confidence already has its own badge, and shrinking toward 50/50 would
+  re-create the very "boxes say 49/51, evidence says 70/30" problem); the
+  client's "Flipped …" clock now tracks the engine's bias instead of the
+  split's dominant side, because a ratio crosses 50% regularly; and
+  `bias_snapshots` rows carry `bull` / `bear` so the logged split is
+  reproducible from the logged evidence. Legacy rows with no captured totals
+  fall back to the score projection, so no migration is needed.
+- **Tests:** `test_display.py` locks the ratio split, the withheld percentage
+  on a contradicting verdict, the "no synthetic 49/51" case, the legacy
+  fallback, the JS fallback mirroring the server rule, and the FJ box's
+  ratio. `test_fj_sessions.py` replaces the cap assertions with ratio
+  assertions. Full suite: 1460 passed.
+
+---
+
 ## EQUITY MARKETS IS THE FOURTH CARD IN EVERY FINANCIALJUICE SESSION BOX (2026-10-13)
 
 ### Feature — the FJ session boxes score four instruments, not three

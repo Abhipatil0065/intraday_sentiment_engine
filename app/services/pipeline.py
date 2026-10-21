@@ -1639,6 +1639,10 @@ def _recompute_sentiment(session, stats: IngestStats):
                               (equity_card_result.bull_drivers or [])],
                 bear_drivers=[_DriverView(d) for d in
                               (equity_card_result.bear_drivers or [])],
+                # The two aggregate totals: the logged split is their ratio, so
+                # the row has to carry the numbers the ratio was made from.
+                bull=float(equity_card_result.bull),
+                bear=float(equity_card_result.bear),
             ))
             log.info(
                 "EQUITY: %s score=%+.1f (n=%d conf=%.2f)",
@@ -1747,6 +1751,10 @@ note=result.note,
             raw_score=current_result.raw_score,
             baseline_score=current_result.baseline_score,
             adjusted=(current_result.baseline_score is not None),
+            # The two aggregate totals: the logged split is their ratio, so
+            # the row has to carry the numbers the ratio was made from.
+            bull=float(current_result.bull_weight),
+            bear=float(current_result.bear_weight),
         ))
 
     # Phase 2: append-only validation log, written AFTER every verdict is

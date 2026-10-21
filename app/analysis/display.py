@@ -37,6 +37,24 @@ Two guards survive that, because a bare sign still is not a verdict:
   (BULLISH) instead of being inferred from the raw number, so a malformed
   payload is never guessed at - it is resolved to a direction the same way a
   50/50 split is, never left blank.
+
+THE SPLIT IS THE RATIO OF THE EVIDENCE
+--------------------------------------
+When the two aggregate totals are available - which is every live tick, since
+the engine captures them on every reading - the split is their ratio and
+nothing else:
+2.80 bullish weight against 1.21 bearish weight is a 70/30 split. The card's
+evidence line already prints those two numbers, so the bar and the boxes
+finally show the same thing the reader can check.
+
+This replaced a score-based projection that could not express the split when a
+verdict and the aggregate disagreed: a fresh Tier-1 release flips the badge on
+its own while the day's aggregate still leans the other way, and the old code
+answered that by replacing the whole split with a synthetic one-point lean. A
+card then published "Bullish 49% / Bearish 51%" against evidence that was
+really 70/30. The badge keeps the engine's verdict and the boxes keep the
+evidence; where the two disagree the badge withholds its percentage rather
+than printing one it cannot support.
 """
 
 from __future__ import annotations
@@ -95,10 +113,67 @@ def _leading_side(bull_pct: int) -> str:
     return DEFAULT_DISPLAY_BIAS
 
 
+def split_from_totals(bull, bear) -> tuple | None:
+    """
+    The bull/bear split implied by the two aggregate evidence totals.
+
+    ``bull_pct = round(100 * bull / (bull + bear))`` - the RATIO, nothing
+    else. This is the same pair the dashboard card already prints on its
+    evidence line ("score 39.8 - bull 2.8 - bear 1.2"), so the bar and the two
+    percentage boxes finally show numbers the reader can check against the
+    line above them.
+
+    Returns ``None`` when the totals are unusable - missing (legacy rows
+    written before TASK 2 captured them), NaN, or adding up to nothing - so
+    the caller falls back to the score projection instead of inventing a
+    split.
+    """
+    try:
+        b = float(bull)
+        r = float(bear)
+    except (TypeError, ValueError):
+        return None
+    if b != b or r != r:                      # NaN must not reach the UI
+        return None
+    b = max(0.0, b)
+    r = max(0.0, r)
+    total = b + r
+    if total <= 0.0:
+        return None
+    bull_pct = max(0, min(100, int(round(100.0 * b / total))))
+    return bull_pct, 100 - bull_pct
+
+
 def to_display(score: float, bias, confidence: float | None = None,
-               tie_break: bool = False) -> dict:
+               tie_break: bool = False,
+               *, bull: float | None = None, bear: float | None = None) -> dict:
     """
     Project an engine verdict onto the dashboard's bull/bear split.
+
+    THE SPLIT IS THE RATIO OF THE TWO EVIDENCE TOTALS.
+    -----------------------------------------------
+    When ``bull`` and ``bear`` are supplied - the aggregate weights behind the
+    verdict - the split IS their ratio: 2.80 bullish weight against 1.21
+    bearish weight is a 70/30 bullish split, whatever the badge says. That is
+    the number the card's own evidence line already prints, so the bar, the
+    two percentage boxes and the line above them are one story.
+
+    WHY THE SCORE IS NOT THE SPLIT ANY MORE
+    The score projection (``bull_pct = round(50 + score / 2)``) answers a
+    different question - "how far from even is the net lean" - and it cannot
+    express the split when a verdict and the aggregate disagree. A fresh
+    Tier-1 release flips the badge on its own (``tier1_override``) while the
+    day's aggregate is still strongly the other way, and the score projection
+    then had to be REPLACED by a synthetic one-point lean
+    (``LEAN_BULL_PCT``), so the card published "Bullish 49% / Bearish 51%"
+    against evidence that was really 70/30. The ratio removes that
+    fabrication: the split is always the evidence, and the badge keeps the
+    engine's verdict.
+
+    The confidence shrink is deliberately NOT applied to the ratio path:
+    confidence already carries its own badge on the card, and shrinking the
+    ratio toward 50/50 would re-introduce exactly the "the boxes say 49/51
+    while the evidence says 70/30" problem this replaces.
 
     ``bull_pct = round(50 + score / 2)`` and ``bear_pct = 100 - bull_pct``, so
     the two always sum to exactly 100 and neither can leave 0..100.
@@ -131,9 +206,16 @@ def to_display(score: float, bias, confidence: float | None = None,
             split toward 50/50 proportionally. None means no shrinking.
         tie_break: optional; True when the label came from the tie-break rule
             (|raw_score| < EPS) rather than from the score's own sign.
+        bull: optional; the aggregate bullish weight behind the verdict. When
+            it and ``bear`` are both usable, the split is their ratio and the
+            score projection is not used at all.
+        bear: optional; the aggregate bearish weight behind the verdict.
 
     Returns:
-        ``{"label", "pct", "bull_pct", "bear_pct"}``.
+        ``{"label", "pct", "bull_pct", "bear_pct"}``. ``pct`` is None only on
+        the ratio path, when the engine's verdict contradicts the day's
+        evidence split - the badge then names the side without a percentage it
+        cannot honestly print.
     """
     try:
         numeric = float(score)
@@ -143,6 +225,47 @@ def to_display(score: float, bias, confidence: float | None = None,
         numeric = 0.0  # NaN / inf must not propagate into the UI
 
     name = _bias_name(bias)
+
+    # --- THE RATIO SPLIT ---------------------------------------------------
+    # When the two aggregate totals are known, the split IS their ratio. This
+    # is the path every live card takes, because the engine captures bull/bear
+    # on every reading.
+    #
+    # The badge keeps the ENGINE's verdict (a fresh Tier-1 release flips it on
+    # its own, and that call must stay visible), while the split is the
+    # evidence. When the two agree - the normal case - the badge also carries
+    # the percentage, exactly as before.
+    #
+    # When they DISAGREE, the badge shows the verdict and WITHHOLDS the
+    # percentage rather than inventing one. The old code answered this case
+    # by replacing the whole split with a synthetic one-point lean
+    # (LEAN_BULL_PCT), which is how a card ended up publishing "Bullish 49% /
+    # Bearish 51%" against evidence that was really 70/30. The note on the
+    # card explains the disagreement ("day aggregate still +39.8").
+    #
+    # NO_BIAS is left alone: an explicit withhold is an honest answer, and it
+    # still reads NEUTRAL 50/50.
+    ratio = split_from_totals(bull, bear)
+    if ratio is not None and name != "NEUTRAL":
+        bull_pct, bear_pct = ratio
+        owns_split = (
+            (name == BULLISH and bull_pct >= bear_pct)
+            or (name == BEARISH and bear_pct >= bull_pct)
+        )
+        if owns_split:
+            pct = bull_pct if name == BULLISH else bear_pct
+            return {
+                "label": name,
+                "pct": pct,
+                "bull_pct": bull_pct,
+                "bear_pct": bear_pct,
+            }
+        return {
+            "label": name,
+            "pct": None,
+            "bull_pct": bull_pct,
+            "bear_pct": bear_pct,
+        }
 
     # A score outside the nominal range would push the split out of 0..100 and
     # break the 100-total invariant, so it is clamped before the arithmetic.

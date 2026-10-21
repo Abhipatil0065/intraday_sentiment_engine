@@ -18,8 +18,9 @@ Design rules enforced here:
   only as a secondary validator, never as the primary key.
 * **Exactly five boxes, fixed order** - see :data:`SESSION_ORDER`.
 * **Binary sentiment only.** Every asset renders Bullish % + Bearish % that sum
-  to exactly 100.0. There is no NEUTRAL / MIXED / SIDEWAYS output anywhere;
-  weak evidence collapses toward 50/50 rather than inventing conviction
+  to exactly 100.0. There is no NEUTRAL / MIXED / SIDEWAYS output anywhere, and
+  the split is the RATIO of the two evidence scores - the same rule the asset
+  cards use, so one piece of evidence reads the same on every card
   (see :func:`bullish_bearish_from_score`).
 * **TOP DRIVERS & KEY RISKS come from the report's own sentences** - see
   :func:`extract_drivers_and_risks`. Drivers are the lines that lean
@@ -317,9 +318,17 @@ def is_fj_session_report_row(row) -> bool:
 # ---------------------------------------------------------------------------
 # 3. SENTIMENT - BINARY ONLY, ALWAYS 100%
 # ---------------------------------------------------------------------------
-#: The furthest the split may ever stray from 50/50, even on overwhelming
-#: one-sided evidence. Anything beyond this would be fabricated conviction.
-CONVICTION_CAP = 0.34
+#: The split is the RATIO of the two evidence scores, exactly as on the main
+#: dashboard cards: ``bull_pct = round(100 * bull / (bull + bear))``. Two cue
+#: points of bullish evidence against one of bearish evidence is a 67/33 box,
+#: and the reader can check it against the box's own drivers.
+#:
+#: The old formula scaled the net lean by an evidence factor and a conviction
+#: cap (the retired ``CONVICTION_CAP = 0.34``, which kept every box inside an
+#: 84/16 band), so the same 2.8-vs-1.2 evidence published as 59/41 here and
+#: as 70/30 on the asset cards - two cards, two answers, same evidence. The
+#: cap is gone: a ratio cannot fabricate conviction, because a ratio IS the
+#: evidence.
 
 
 def _clamp(v: float, lo: float = 0.0, hi: float = 1.0) -> float:
@@ -329,17 +338,14 @@ def _clamp(v: float, lo: float = 0.0, hi: float = 1.0) -> float:
 def bullish_bearish_from_score(
     bull_score: float,
     bear_score: float,
-    *,
-    evidence: float = 1.0,
-    conviction_cap: float = CONVICTION_CAP,
 ) -> tuple:
     """
-    Convert a signed evidence score into Bullish % / Bearish %.
+    Convert the two evidence scores into Bullish % / Bearish %.
 
-    ``evidence`` (0..1) scales how far the split may stray from 50/50, so a
-    report with no usable content stays near EVEN instead of inventing a
-    direction. The bearish value is derived from the ALREADY-ROUNDED bullish
-    value, so the published pair always sums to exactly 100.0.
+    The split is their ratio: ``bull_pct = round(100 * bull / (bull + bear))``.
+    The bearish value is derived from the ALREADY-ROUNDED bullish value, so the
+    published pair always sums to exactly 100.0, and no evidence at all stays
+    an honest flat 50/50.
     """
     bull_score = max(0.0, float(bull_score))
     bear_score = max(0.0, float(bear_score))
@@ -349,9 +355,7 @@ def bullish_bearish_from_score(
         # No directional evidence at all -> an honest, flat 50/50.
         return 50.0, 50.0
 
-    net = (bull_score - bear_score) / total            # -1.0 .. +1.0
-    scaled = net * _clamp(evidence) * _clamp(conviction_cap, 0.0, 0.5)
-    bull_pct = round(50.0 + scaled * 100.0, 1)
+    bull_pct = round(100.0 * bull_score / total, 1)
     bull_pct = max(0.0, min(100.0, bull_pct))
     return bull_pct, round(100.0 - bull_pct, 1)
 
@@ -616,12 +620,9 @@ def analyse_report_text(text: str, context=None) -> dict:
             bear += ctx.bear
             drivers = list(dict.fromkeys(drivers + ctx.drivers))[:5]
 
-        total = bull + bear
-        # Weak evidence -> stay near EVEN. Strong, one-sided evidence -> the
-        # split may move out to the 84/16 band.
-        evidence = _clamp(total / 6.0) if total else 0.0
-        bull_pct, bear_pct = bullish_bearish_from_score(
-            bull, bear, evidence=evidence)
+        # The split is the ratio of the two scores - the same rule the asset
+        # cards use, so one piece of evidence reads the same on every card.
+        bull_pct, bear_pct = bullish_bearish_from_score(bull, bear)
 
         if not drivers:
             drivers = ["No asset-specific detail in this report"]

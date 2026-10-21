@@ -543,5 +543,6 @@ def to_payload(card: EquityCardResult) -> dict:
     result["display"] = to_display(
         card.score, card.bias, card.confidence,
         tie_break=abs(float(card.raw_score)) < EPS,
+        bull=card.bull, bear=card.bear,
     )
     return result

@@ -191,11 +191,14 @@ def test_context_is_none_when_no_external_evidence():
 
 
 def test_high_importance_news_pushes_the_split():
-    base = _gold_split("Gold rallies as yields fall.")
+    # The base must NOT already be saturated on the side being pushed: the
+    # split is now the RATIO of the two scores, so a base that is 100%
+    # bearish cannot become "more bearish" - it is already at the ceiling.
+    base = _gold_split("Gold gains as the dollar slips and yields fall.")
     ctx = F.context_from_news(
         [_Article(impacts=[_Impact("XAUUSD", "BEARISH", reason="hawkish")])])
     assert ctx.news_count == 1
-    enriched = _gold_split("Gold rallies as yields fall.", ctx)
+    enriched = _gold_split("Gold gains as the dollar slips and yields fall.", ctx)
     assert enriched["bear_pct"] > base["bear_pct"]
     assert enriched["bull_pct"] + enriched["bear_pct"] == 100.0
 
@@ -269,9 +272,11 @@ def test_calendar_expected_event_is_damped_versus_released():
 
 
 def test_calendar_signal_shifts_the_split():
-    base = _gold_split("Gold rallies as yields fall.")
+    # Same rule as the news test: the base must not be saturated on the side
+    # being pushed, or the ratio has no room left to move.
+    base = _gold_split("Gold gains as the dollar slips and yields fall.")
     ctx = F.context_from_calendar([_Sig()])
-    assert _gold_split("Gold rallies as yields fall.", ctx)["bear_pct"] \
+    assert _gold_split("Gold gains as the dollar slips and yields fall.", ctx)["bear_pct"] \
         > base["bear_pct"]
 
 
@@ -426,15 +431,29 @@ def test_no_evidence_returns_exactly_even_split():
     assert F.bullish_bearish_from_score(0, 0) == (50.0, 50.0)
 
 
-def test_weak_evidence_stays_near_even():
-    b, s = F.bullish_bearish_from_score(1, 0, evidence=0.1)
-    assert 50.0 < b < 60.0
+def test_weak_evidence_still_reads_as_a_ratio():
+    """One point of evidence against none is a 100/0 box, and still sums to 100."""
+    b, s = F.bullish_bearish_from_score(1, 0)
+    assert b == 100.0
+    assert s == 0.0
     assert round(b + s, 6) == 100.0
 
 
-def test_conviction_is_capped_so_signal_is_never_absurd():
-    b, s = F.bullish_bearish_from_score(1000, 0, evidence=1.0)
-    assert b <= 50.0 + F.CONVICTION_CAP * 100.0 + 0.1
+def test_split_is_the_ratio_of_the_two_scores():
+    """The split IS the evidence ratio - the same rule the asset cards use."""
+    b, s = F.bullish_bearish_from_score(2.8029, 1.2071)
+    assert b == 69.9
+    assert s == 30.1
+    assert round(b + s, 6) == 100.0
+    # The ratio, not a scaled net lean: 3 vs 7 is 30/70.
+    b, s = F.bullish_bearish_from_score(3, 7)
+    assert (b, s) == (30.0, 70.0)
+
+
+def test_conviction_is_never_absurd_because_it_is_a_ratio():
+    """No cap: a ratio cannot fabricate conviction, it only reports the evidence."""
+    b, s = F.bullish_bearish_from_score(1000, 0)
+    assert b == 100.0
     assert round(b + s, 6) == 100.0
 
 

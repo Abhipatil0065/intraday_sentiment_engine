@@ -576,8 +576,27 @@ function rnd(x){
 }
 function disp(b){
   b=b||{};
-  if(b.display && typeof b.display.pct==='number') return b.display;
-/* Fallback for a payload from a server that predates the display block.
+  if(b.display && (typeof b.display.pct==='number'||b.display.pct===null)) return b.display;
+  /* THE RATIO SPLIT. The server computes the split from the two aggregate
+     totals (bull / bear) - the same pair the card's evidence line prints.
+     This fallback reproduces that rule for a payload that arrived without a
+     display block, so the bar and the boxes can never show a split the
+     evidence line does not support. The badge keeps the engine's verdict and
+     withholds its percentage when that verdict does not own the split - the
+     same rule as display.py. */
+   var tb=+b.bull||0, ts=+b.bear||0, tt=tb+ts;
+   if(tt>0){
+     var bp=Math.round(tb/tt*100), sp=100-bp;
+     var vb=(b.bias||'');
+     if(vb==='BULLISH'||vb==='BEARISH'){
+       var owns=(vb==='BULLISH')?(bp>=sp):(sp>=bp);
+       return {label:vb, pct:owns?(vb==='BULLISH'?bp:sp):null,
+               bull_pct:bp, bear_pct:sp};
+     }
+     var rl=bp>50?'BULLISH':'BEARISH';
+     return {label:rl, pct:rl==='BULLISH'?bp:sp, bull_pct:bp, bear_pct:sp};
+   }
+ /* Fallback for a payload from a server that predates the display block.
       Same rule as display.py: a named side wins, otherwise the side over 50%
       is named. There is no NEUTRAL label and no 50/50 chip - on an exact
       50/50 the display resolves to BULLISH as the directional default, so a
@@ -598,6 +617,16 @@ function disp(b){
   return {label:label,
           pct:label==='BULLISH'?bull:label==='BEARISH'?100-bull:50,
           bull_pct:bull, bear_pct:100-bull};
+}
+/* The verdict chip's text. The percentage is shown only when the engine's
+   verdict owns the split; when a fresh Tier-1 release has flipped the badge
+   against the day's aggregate the server withholds the percentage rather
+   than printing one it cannot support, and the chip shows the verdict alone.
+   The note under the card explains the disagreement. */
+function chipText(d){
+  return (d.pct===null||d.pct===undefined)
+    ? esc(d.label)
+    : esc(d.label)+' '+d.pct+'%';
 }
 function verdictClass(label){
    /* Reuse the CSS classes the page already defines for a verdict chip
@@ -729,8 +758,15 @@ function msplit(b,asset){
   /* Fold this asset's current split into the flip state, then let the DOMINANT
      side carry the timestamp and the extra width. On a tie neither box is
      marked, which is the honest rendering: there is no side to lean on.
-     b.bias_since_utc seeds the clock on a first load / repairs a null one. */
-  var f=trackFlip(asset||(b&&b.asset),dominantSide(d),b&&b.bias_since_utc);
+     b.bias_since_utc seeds the clock on a first load / repairs a null one.
+
+     THE FLIP CLOCK FOLLOWS THE VERDICT, NOT THE SPLIT. The split is now the
+     ratio of the evidence and crosses 50% regularly, so tracking it would
+     stamp a new "Flipped ..." every few minutes. The engine's bias is the
+     published verdict, so that is what the clock tracks; the dominant side
+     of the split is used only when the payload carries no bias. */
+  var side=(b&&b.bias==='BULLISH')?'BULLISH':(b&&b.bias==='BEARISH')?'BEARISH':dominantSide(d);
+  var f=trackFlip(asset||(b&&b.asset),side,b&&b.bias_since_utc);
   var bullLead=(f.side==='BULLISH'), bearLead=(f.side==='BEARISH');
   var bullAt=bullLead?flipTimeLabel(f.at):'';
   var bearAt=bearLead?flipTimeLabel(f.at):'';
@@ -805,7 +841,7 @@ function scopeCard(b, label){
     +'<div class="mrow"><span class="mlabel">SESSIONS</span>'
     +'<span class="msess">'+sessionChain()+'</span></div>'
     +'<div class="mrow"><span class="mlabel">CURRENT</span>'
-    +'<span class="verdict '+verdictClass(d.label)+(isWeak?' weak':'')+'">'+d.label+' '+d.pct+'%</span>'
+    +'<span class="verdict '+verdictClass(d.label)+(isWeak?' weak':'')+'">'+chipText(d)+'</span>'
     +'<span class="conf-badge '+String(b.confidence_label||'LOW').toLowerCase()+'">'
     +(b.stale?'STALE \u00b7 ':'')+(b.confidence_label||'LOW')+'</span>'
     +conflictChip
@@ -871,7 +907,7 @@ function equityCard(){
     +'<div class="mrow"><span class="mlabel">SESSIONS</span>'
     +'<span class="msess">'+sessionChain()+'</span></div>'
     +'<div class="mrow"><span class="mlabel">EQUITY BIAS</span>'
-    +'<span class="verdict '+verdictClass(d.label)+(weak?' weak':'')+'">'+d.label+' '+d.pct+'%</span>'
+    +'<span class="verdict '+verdictClass(d.label)+(weak?' weak':'')+'">'+chipText(d)+'</span>'
     +'</div>'
     +'<div class="msub">region '+esc(region||'n/a')
     +(e.no_data?' &middot; no regional news &middot; carried forward':'')

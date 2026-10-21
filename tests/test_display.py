@@ -235,10 +235,13 @@ def test_html_renders_the_verdict_from_the_display_block():
     """The verdict chip and the split bar must both be present."""
     html = _html()
     assert "function disp(" in html
-    # The chip renders "<label> <n>%", with the label taken from the display
-    # block. Matched loosely because the surrounding JS quotes are escaped.
-    assert re.search(r"d\.label\+' '\+d\.pct\+'", html), (
-        "the verdict chip must render the label and one percentage")
+    # The chip renders "<label> <n>%" - or the label ALONE when the server
+    # withheld the percentage, which is what happens when the engine's verdict
+    # contradicts the day's evidence split (a fresh Tier-1 release against a
+    # strong aggregate). Both cases are handled by one helper.
+    assert "function chipText(" in html
+    chip_js = html.split("function chipText(", 1)[1].split("function verdictClass", 1)[0]
+    assert "d.pct===null" in chip_js and "' '+d.pct+'%'" in chip_js
     # The label is taken from bias, never inferred from the percentage's sign.
     assert "verdictClass(d.label)" in html
     # The split bar is sized from the same block the percentage comes from.
@@ -261,6 +264,24 @@ def test_js_fallback_mirrors_the_python_rule():
     # The label branches on the split, so a plain "NO_BIAS -> NEUTRAL" shortcut
     # (the old rule) must not reappear in any form.
     assert "NO_BIAS" not in disp_js
+
+
+def test_js_fallback_uses_the_ratio_of_the_totals():
+    """
+    The fallback must split the evidence the same way the server does - by the
+    RATIO of the two captured totals, not by the score - and must withhold the
+    badge's percentage exactly like the server when the verdict does not own
+    the split.
+    """
+    html = _html()
+    disp_js = html.split("function disp(", 1)[1].split("function verdictClass", 1)[0]
+    assert "+b.bull||0" in disp_js and "+b.bear||0" in disp_js, (
+        "the fallback must split on the two captured totals")
+    assert "Math.round(tb/tt*100)" in disp_js, (
+        "the fallback must use their ratio")
+    assert "pct:owns?" in disp_js, (
+        "the fallback must withhold the percentage when the verdict "
+        "contradicts the split, exactly as the server does")
 
 
 def test_js_fallback_matches_python_split_arithmetic():
@@ -686,7 +707,11 @@ def test_api_block_still_exposes_score_and_confidence(session):
         assert "display" in block, f"{asset}: display block was not added"
         assert set(block["display"]) == {"label", "pct", "bull_pct", "bear_pct"}
         # The display is derived from the engine's own fields, never replaces.
-        assert block["display"] == to_display(block["score"], block["bias"])
+        # The split is the RATIO of the two captured totals, so the projection
+        # is made with the same numbers the card prints.
+        assert block["display"] == to_display(block["score"], block["bias"],
+                                             bull=block["bull"],
+                                             bear=block["bear"])
         assert block["display"]["label"] in ("BULLISH", "BEARISH", "NEUTRAL")
         assert block["display"]["bull_pct"] + block["display"]["bear_pct"] == 100
 
@@ -717,4 +742,115 @@ def test_api_display_block_agrees_with_the_engine_fields(session):
     from app.main import _block
 
     block = _block(session, "BTCUSD", "MARKET_PREP")
-    assert block["display"] == to_display(block["score"], block["bias"])
+    assert block["display"] == to_display(block["score"], block["bias"],
+                                          bull=block["bull"], bear=block["bear"])
+
+
+# ---------------------------------------------------------------------------
+# 6. The split is the RATIO of the evidence
+# ---------------------------------------------------------------------------
+# THE BUG THIS LOCKS DOWN.
+#
+# The card's evidence line printed "score 39.8 - bull 2.8 - bear 1.2" - a
+# 70/30 bullish split - while the boxes under it published "Bullish 49% /
+# Bearish 51%". The 49/51 was a hard-coded one-point lean (LEAN_BULL_PCT),
+# substituted whenever the engine's badge contradicted the projected split,
+# and it had nothing to do with the evidence the card had just printed.
+#
+# The split is now the ratio of the two captured totals, so the boxes and the
+# line above them are one story.
+
+#: The live gold tick that exposed it: bull 2.8029 / bear 1.2071, day
+#: aggregate +39.8, badge flipped to BEARISH by a fresh Tier-1 release.
+GOLD_BULL = 2.802862321040953
+GOLD_BEAR = 1.2070560615320014
+
+
+def test_split_is_the_ratio_of_the_two_totals():
+    """2.80 bullish weight against 1.21 bearish weight is a 70/30 split."""
+    d = to_display(39.8, "BULLISH", bull=GOLD_BULL, bear=GOLD_BEAR)
+    assert d["bull_pct"] == 70
+    assert d["bear_pct"] == 30
+    assert d["bull_pct"] + d["bear_pct"] == 100
+    assert d["label"] == "BULLISH"
+    assert d["pct"] == 70
+
+
+def test_the_ratio_replaces_the_score_projection():
+    """The score is not the split any more: the evidence totals are."""
+    d = to_display(-80.0, "BEARISH", bull=GOLD_BULL, bear=GOLD_BEAR)
+    assert (d["bull_pct"], d["bear_pct"]) == (70, 30)
+
+
+def test_a_verdict_against_the_aggregate_keeps_the_badge_and_withholds_the_pct():
+    """
+    A fresh Tier-1 release flips the badge while the day's aggregate still
+    leans the other way. The badge keeps the verdict (that call must stay
+    visible), the boxes keep the evidence, and the percentage is withheld -
+    never faked into a 49/51.
+    """
+    d = to_display(39.8, "BEARISH", bull=GOLD_BULL, bear=GOLD_BEAR)
+    assert d["label"] == "BEARISH"
+    assert d["pct"] is None
+    assert (d["bull_pct"], d["bear_pct"]) == (70, 30)
+
+
+def test_no_synthetic_49_51_on_the_ratio_path():
+    """The exact symptom from the bug: bull 2.8 / bear 1.2 published as 49/51."""
+    for bias in ("BULLISH", "BEARISH"):
+        d = to_display(39.8, bias, bull=GOLD_BULL, bear=GOLD_BEAR)
+        assert (d["bull_pct"], d["bear_pct"]) != (49, 51)
+
+
+def test_confidence_does_not_shrink_the_ratio():
+    """The ratio is the evidence; confidence already has its own badge."""
+    strong = to_display(39.8, "BULLISH", confidence=0.9, bull=2.8, bear=1.2)
+    thin = to_display(39.8, "BULLISH", confidence=0.05, bull=2.8, bear=1.2)
+    assert strong["bull_pct"] == thin["bull_pct"] == 70
+    assert strong["bear_pct"] == thin["bear_pct"] == 30
+
+
+def test_missing_totals_fall_back_to_the_score_projection():
+    """A legacy row with no captured totals must still render."""
+    d = to_display(39.8, "BULLISH")
+    assert (d["bull_pct"], d["bear_pct"]) == (70, 30)
+    d = to_display(39.8, "BULLISH", bull=None, bear=None)
+    assert (d["bull_pct"], d["bear_pct"]) == (70, 30)
+
+
+def test_zero_totals_fall_back_to_the_score_projection():
+    """No evidence at all is not a ratio - it is the old projection."""
+    d = to_display(39.8, "BULLISH", bull=0.0, bear=0.0)
+    assert (d["bull_pct"], d["bear_pct"]) == (70, 30)
+
+
+def test_no_bias_stays_neutral_even_with_totals():
+    """An explicit withhold is honoured: no totals can resurrect a verdict."""
+    d = to_display(0.0, "NO_BIAS", bull=2.8, bear=1.2)
+    assert d["label"] == "NEUTRAL"
+    assert (d["bull_pct"], d["bear_pct"], d["pct"]) == (50, 50, 50)
+
+
+def test_ratio_split_always_sums_to_one_hundred():
+    for bull, bear in [(1, 0), (0, 1), (5, 5), (3, 7), (99, 1)]:
+        d = to_display(0.0, "BULLISH", bull=bull, bear=bear)
+        assert d["bull_pct"] + d["bear_pct"] == 100
+
+
+def test_the_card_line_and_the_boxes_agree():
+    """The numbers the card prints must be the numbers the boxes show."""
+    d = to_display(39.8, "BULLISH", bull=GOLD_BULL, bear=GOLD_BEAR)
+    assert d["bull_pct"] == round(100.0 * GOLD_BULL / (GOLD_BULL + GOLD_BEAR))
+    assert d["bear_pct"] == 100 - d["bull_pct"]
+
+
+def test_split_from_totals_rejects_unusable_input():
+    """Missing, NaN and empty totals must fall back, never raise."""
+    from app.analysis.display import split_from_totals
+
+    assert split_from_totals(None, 1.0) is None
+    assert split_from_totals(1.0, None) is None
+    assert split_from_totals(0.0, 0.0) is None
+    assert split_from_totals(float("nan"), 1.0) is None
+    assert split_from_totals(1.0, 1.0) == (50, 50)
+    assert split_from_totals(3.0, 1.0) == (75, 25)
