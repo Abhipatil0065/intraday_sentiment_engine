@@ -11,7 +11,7 @@
   :root{
     --bg:#0b0e14; --panel:#141922; --panel2:#1a2029; --line:#232b3a;
     --txt:#e6edf3; --dim:#8b98a9; --gold:#f0b429; --silver:#c0c8d1;
-    --btc:#f7931a; --bull:#2ea043; --bear:#f85149; --neu:#6e7681;
+    --btc:#f7931a; --oil:#3fb6c8; --bull:#2ea043; --bear:#f85149; --neu:#6e7681;
   }
   *{box-sizing:border-box;margin:0;padding:0}
   body{
@@ -163,6 +163,10 @@
   .mcard.gold{--accent:var(--gold)}
   .mcard.silver{--accent:var(--silver)}
   .mcard.bitcoin{--accent:var(--btc)}
+  /* The OIL card is rendered LAST in the strip, so on the 4-column grid it
+     lands on the second row, in the first column - directly under the GOLD
+     card. */
+  .mcard.oil{--accent:var(--oil)}
   /* The 4th strip card is the session-aware equity card; the accent follows the
      trading session's region so a session switch is visible at a glance. */
   .mcard.equity{--accent:var(--silver)}
@@ -274,6 +278,7 @@
   .asset.gold{--accent:var(--gold)}
   .asset.silver{--accent:var(--silver)}
   .asset.bitcoin{--accent:var(--btc)}
+  .asset.oil{--accent:var(--oil)}
   .ahead{display:flex;align-items:center;gap:14px;padding:11px 15px;
          border-bottom:1px solid var(--line);background:var(--panel2);flex-wrap:wrap}
   .name{font-size:16px;font-weight:700;letter-spacing:1.2px;line-height:1.15}
@@ -997,14 +1002,20 @@ function renderPrepStrip(assets){
   if(!assets||!assets.length){ box.innerHTML=''; return; }
   /* EQUITY is rendered as the 4th session-aware card below rather than as a
      CURRENT card: the CURRENT block aggregates every region's news at once,
-     which is exactly the failure mode the session card replaces. */
-  var strip=(assets||[]).filter(function(a){return a.asset!=='EQUITY';});
+     which is exactly the failure mode the session card replaces.
+
+     OIL is a normal asset card, but it is rendered LAST on purpose: the
+     strip grid is 4 columns, so the fifth card wraps onto the second row in
+     the first column - directly UNDER the GOLD card. */
+  var strip=(assets||[]).filter(function(a){return a.asset!=='EQUITY' && a.asset!=='USOIL';});
+  var oil=(assets||[]).filter(function(a){return a.asset==='USOIL';})[0];
   box.innerHTML='<div class="strip-head">'
     +'<span class="st">CURRENT INTRADAY SENTIMENT &mdash; NEWS-WEIGHTED</span>'
     +'<span class="ss">SESSIONS '+sessionChain()+'</span></div>'
     +'<div class="strip-cards">'+strip.map(function(a){
         return scopeCard(a.current, a.label);
-      }).join('')+equityCard()+'</div>'
+      }).join('')+equityCard()
+      +(oil?scopeCard(oil.current, oil.label):'')+'</div>'
     +'<div class="hr"></div>';
 }
 /* ---- Economic calendar ------------------------------------------------
@@ -1505,7 +1516,7 @@ function renderHeader(d){
 }
 function renderFilters(){
   var opts=[['ALL','ALL'],['HIGH','HIGH IMPORTANCE'],['XAUUSD','GOLD'],
-    ['XAGUSD','SILVER'],['BTCUSD','BITCOIN']];
+    ['XAGUSD','SILVER'],['BTCUSD','BITCOIN'],['USOIL','OIL']];
   document.getElementById('filters').innerHTML=opts.map(function(o){
     return '<button data-f="'+o[0]+'" class="'+(activeFilter===o[0]?'on':'')+'">'
       +o[1]+'</button>';

@@ -182,8 +182,10 @@ def test_build_payload_exposes_current_for_every_asset(tmp_path):
 
     assets = payload["assets"]
     # Step 6 (Option A): EQUITY is no longer in assets[] - it's served via
-    # the top-level "equity" key. Only XAUUSD, XAGUSD, BTCUSD remain.
-    assert {"XAUUSD", "XAGUSD", "BTCUSD"} == {a["asset"] for a in assets}
+    # the top-level "equity" key. The market assets remain, and OIL is a
+    # market asset again.
+    assert {"XAUUSD", "XAGUSD", "BTCUSD", "USOIL"} == {
+        a["asset"] for a in assets}
 
     for entry in assets:
         assert "current" in entry, f"{entry['asset']}: no current block"

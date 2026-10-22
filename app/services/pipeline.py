@@ -382,6 +382,24 @@ def _safe_float(value, default: float = 0.0) -> float:
         return default
 
 
+def _safe_enum(enum_cls, value, default):
+    """
+    Enum coercion that never raises.
+
+    A stored row can carry a string the CURRENT enum no longer accepts - the
+    pre-2026-10 asset_impact rows, for instance, wrote ``strength='STRONG'``
+    while the enum only ever had VERY_HIGH / HIGH / MEDIUM / LOW. ``Enum(...)``
+    raised ValueError on those rows and killed the whole recompute tick, which
+    is exactly the failure the unroutable-asset guard was written to stop. The
+    row is degraded to ``default`` instead: one stale row must never be able
+    to take the engine down.
+    """
+    try:
+        return enum_cls(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _llm_priority_indices(
     items: list[tuple[str, float | None, str | None]],
     known_guids: set | None = None,
@@ -1771,9 +1789,15 @@ def _recompute_sentiment(session, stats: IngestStats):
             signal = build_signal(
                 asset=asset_enum,
                 title=row.title,
-                direction=Direction(impact.direction),
-                strength=ImpactStrength(impact.strength),
-                importance=EconomicImportance(row.importance),
+                # A legacy row can carry a string the current enum no longer
+                # accepts (e.g. strength='STRONG'). Degrade it instead of
+                # raising - one stale row must never kill the tick.
+                direction=_safe_enum(Direction, impact.direction,
+                                     Direction.NEUTRAL),
+                strength=_safe_enum(ImpactStrength, impact.strength,
+                                    ImpactStrength.MEDIUM),
+                importance=_safe_enum(EconomicImportance, row.importance,
+                                      EconomicImportance.MEDIUM),
                 published_at=row.published_at_utc,
                 relevance=impact.relevance,
                 persistence=impact.persistence,

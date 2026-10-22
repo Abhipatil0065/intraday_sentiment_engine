@@ -68,6 +68,11 @@ DEFAULT_SYMBOL_MAP: dict[str, str] = {
     "XAUUSD": "OANDA:XAUUSD",
     "XAGUSD": "OANDA:XAGUSD",
     "BTCUSD": "BITSTAMP:BTCUSD",
+    # Crude oil (WTI). Measured live on 2026-10-22: the TVC:USOIL query
+    # returns the oil chart's own stories ("Oil Gains on Saudi Oil Field
+    # Attack", "Oil Wavers Below $98 as Supply Recovers"), so the oil card
+    # gets a real per-chart feed and not just the general oil headlines.
+    "USOIL": "TVC:USOIL",
 }
 
 # Equity session symbol mapping
@@ -397,6 +402,12 @@ class TradingViewAPISource:
 
     kind = "tradingview_api"
 
+    #: Items each CHART query gets. The fetch budget is split evenly across
+    #: the queried charts, so the TOTAL is ``PER_CHART_ITEMS * len(symbols)``.
+    #: The per-chart share is fixed on purpose: adding the oil chart must not
+    #: take items away from the gold / silver / bitcoin charts.
+    PER_CHART_ITEMS = 10
+
     def __init__(self, spec=None):
         self.name = spec.name if spec else "TradingView API News"
         self.quality = spec.quality if spec else "TIER_1_PRIMARY"
@@ -426,7 +437,8 @@ class TradingViewAPISource:
             symbols = map_internal_to_tv(settings.supported_assets)
             log.info("TradingView API: fetching for symbols=%s", symbols)
 
-        items = fetch_tradingview_news_api(symbols, self.max_items)
+        items = fetch_tradingview_news_api(
+            symbols, self.PER_CHART_ITEMS * len(symbols))
         articles = []
         for item in items:
             origins = item.get("origin_symbols") or []

@@ -435,11 +435,11 @@ def test_pipeline_raw_score_matches_the_engine_verdict(tmp_path):
             .filter_by(scope="CURRENT").all()
         }
         # Equity snapshots are no longer written (equity is served by the
-        # session-aware card), so CURRENT scope holds only the three market
-        # assets and never EQUITY.
+        # session-aware card), so CURRENT scope holds the market assets and
+        # never EQUITY. OIL is a market asset again, so it is written too.
         assert "EQUITY" not in stored
-        assert {"XAUUSD", "XAGUSD", "BTCUSD"} == set(stored)
-        assert len(stored) == 3
+        assert {"XAUUSD", "XAGUSD", "BTCUSD", "USOIL"} == set(stored)
+        assert len(stored) == 4
 
         # Recompute the same verdict from the same inputs and compare.
         for asset, row in stored.items():

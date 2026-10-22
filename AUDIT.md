@@ -196,3 +196,65 @@ with read-only access and a --db argument.
 ### One-line backup command
   Copy-Item data/intraday_sentiment.db backups/intraday_sentiment_$(Get-Date -Format yyyyMMdd_HHmmss).db
 
+## Oct 22 2026 - the OIL card is back (crude, WTI), rendered under GOLD
+
+Reverses the Oct 6 removal (commit 31bf524). Crude oil is a first-class asset
+again: it gets its own snapshot, its own bias history, its own transmission
+column and its own card. The Oil/Energy NEWS plumbing from Oct 6 was kept and
+is now reachable from a card again.
+
+### Asset identity
+- `Asset.OIL = "USOIL"` (app/models/enums.py). The symbol is "USOIL", not
+  "OIL", so the pre-Oct-6 legacy rows carry the same string.
+- The card renders LAST in the strip on purpose: the strip grid is 4 columns,
+  so the fifth card wraps to row 2, column 1 - directly UNDER the GOLD card.
+  Verified in a real browser: GOLD x=68 y=108, OIL x=68 y=906.
+- Accent `#3fb6c8` (--oil), restored in the frontend.
+
+### Routing (app/analysis/asset_relevance.py)
+- RELEVANCE: an `Asset.OIL` column restored on every row (the Oct 6 values:
+  OIL_ENERGY 1.00, COMMODITY_SUPPLY_DEMAND 0.95, GEOPOLITICS 0.88, ...).
+- DIRECT_MENTION: an OIL entry is MANDATORY - `DIRECT_MENTION[asset]` is
+  indexed directly, so an enum member without an entry raises KeyError on the
+  next article. It deliberately has NO bare "oil" token, because
+  contains_phrase() is whole-word and "oil" IS a whole word inside "olive
+  oil" / "palm oil" / "cooking oil".
+- OIL_FALSE_FRIENDS + `_is_oil_false_friend()`: a cooking/olive-oil story is
+  dropped from the crude card (relevance 0.0). Scoped to OIL on purpose: the
+  shared OIL_ENERGY category keywords contain the bare word "oil" and always
+  did, and tightening them would change what reaches gold/silver/bitcoin.
+
+### Transmission (app/config/transmission_map.json)
+- A `USOIL` key on all 75 event types. An ABSENT key degrades silently to
+  NEUTRAL (transmission_map.py:_coerce), so a missing entry would have shown
+  an empty card with no error.
+- Crude's own logic: OIL_SUPPLY_TIGHTNESS +1/1.1 and OIL_SUPPLY_GLUT -1/1.1
+  are the top drivers; GEOPOLITICAL_RISK is BULLISH oil (+1.00) because crude
+  carries a supply risk premium - the opposite of gold's safe-haven read;
+  the USD channel is oil's dominant macro channel (STRONG_USD -1/0.70).
+- `DRIVER_RANKINGS["OIL"]` added in app/config.py.
+
+### Chart feed
+- TradingView symbol map: `USOIL -> TVC:USOIL` (measured live: the query
+  returns the oil chart's own stories). `.env` ASSETS now includes USOIL.
+- `chart_scope.CHART_OF_SYMBOL` maps TVC:USOIL / NYMEX:CL1! / MCX:CRUDEOIL1! /
+  TVC:UKOIL / ICEUS:CC1! to Asset.OIL.
+- The per-chart fetch budget is now PER_CHART_ITEMS (10) x symbols instead of
+  a fixed 30, so adding the oil chart does not take items away from gold,
+  silver or bitcoin.
+
+### Robustness fix found on the way
+- `pipeline._recompute_sentiment` coerced `ImpactStrength(impact.strength)`
+  directly. Legacy rows carry `strength='STRONG'`, which the enum never had,
+  so a routable legacy row raised ValueError and killed the tick. Now
+  `_safe_enum()` degrades an unknown enum string to a default instead.
+
+### Verification
+- 1788 tests pass (1 deselected). tests/test_usoil_recompute.py was rewritten:
+  the unroutable path is now exercised with 'XPTUSD' (a symbol that is still
+  not an asset), and the oil rows are asserted to SURVIVE the purge.
+- Live payload carries the card: `USOIL  bias=BULLISH score=48.7 n=6
+  signals=22 stale=False`, with real oil drivers ("Iraq seeks to hire tankers
+  to transport fuel oil beyond Hormuz", "Canadian Dollar gathers strength on
+  elevated oil prices").
+

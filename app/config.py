@@ -401,7 +401,11 @@ class Settings(BaseSettings):
     # Item 2: S&P 500 as a first-class asset. EQUITY is iterated by the pipeline
     # like the other three, persisted to sentiment_snapshot/bias_snapshots, and
     # served from its own card - it is no longer a proxy for BITCOIN.
-    assets: str = "XAUUSD,XAGUSD,BTCUSD,EQUITY"
+    #
+    # USOIL is crude oil (WTI). It is a first-class asset again: it gets its
+    # own snapshot, its own bias history and its own card. It is listed here
+    # so the TradingView per-chart news feed also queries the oil chart.
+    assets: str = "XAUUSD,XAGUSD,BTCUSD,EQUITY,USOIL"
 
     # ---------------- session profiles (Item 3) ----------------
     # Per-asset session multiplier profile. BTCUSD is "flat" by default: it
@@ -1001,17 +1005,20 @@ EVENT_HALF_LIFE_OVERRIDE: dict[str, float] = {
 
 # Per-asset decay multipliers applied ON TOP of the tier half-life
 # (half_life *= ASSET_DECAY_MULTIPLIER[asset]). Decay is about TIME, and the
-# four instruments have genuinely different clocks:
+# instruments have genuinely different clocks:
 #   GOLD / SILVER: 22h/day with a daily break; the 1.0 baseline matches the
 #                  tier table above.
 #   BITCOIN:       24/7 - no overnight reset, so a 03:00 UTC headline still
 #                  matters at the London open. Longer half-life (+25%).
+#   OIL:           crude trades ~23h/day with a daily break, like the metals,
+#                  so it keeps the 1.0 baseline.
 #   EQUITY:       REMOVED (Step 6 Option A). The equity card handles its own
 #                 decay via its own session-aware logic.
 ASSET_DECAY_MULTIPLIER = {
     "GOLD": 1.0,
     "SILVER": 1.0,
     "BITCOIN": 1.25,
+    "OIL": 1.0,
 }
 
 # Hard cap on article age, independent of the window. Reads from the
@@ -1227,6 +1234,67 @@ DRIVER_RANKINGS: dict[str, dict[str, float]] = {
         "COMMODITY_SUPPLY": 0.10,
         "OIL_SUPPLY_TIGHTNESS": 0.10,
         "OIL_SUPPLY_GLUT": 0.05,
+        "GENERAL_MACRO": 0.30,
+    },
+    # OIL (crude, WTI): its OWN supply mechanisms first - a crude draw, an
+    # OPEC+ cut or a Hormuz closure is the single most direct thing that can
+    # move the oil price. Then geopolitics (oil carries a supply risk premium,
+    # so escalation is BULLISH oil - the opposite of gold's safe-haven read),
+    # then the demand/industrial cycle (China is the largest crude importer),
+    # then the USD/rate path, which is oil's dominant macro channel because
+    # crude is priced in dollars.
+    "OIL": {
+        # --- oil's own supply mechanisms: the top drivers ---
+        "OIL_SUPPLY_TIGHTNESS": 1.00,
+        "OIL_SUPPLY_GLUT": 1.00,
+        "COMMODITY_SUPPLY": 0.95,
+        # --- geopolitics: supply risk premium ---
+        "GEOPOLITICAL_RISK": 1.00,       # escalation = bullish oil
+        "GEOPOLITICAL_DEESCALATION": 1.00,   # de-escalation = bearish oil
+        # --- demand / industrial cycle ---
+        "INDUSTRIAL_DEMAND": 0.85,
+        "CHINA_DEMAND": 0.80,
+        "SILVER_CHINA_DEMAND": 0.70,
+        "SILVER_INDUSTRIAL_DEMAND": 0.55,
+        # --- USD and the rate path (oil's dominant macro channel) ---
+        "STRONG_USD": 0.75,
+        "WEAK_USD": 0.75,
+        "HAWKISH_POLICY": 0.70,
+        "DOVISH_POLICY": 0.70,
+        "RECESSION_CUT": 0.65,
+        "HOT_INFLATION": 0.60,
+        "COOL_INFLATION": 0.55,
+        "RISING_YIELDS": 0.50,
+        "FALLING_YIELDS": 0.50,
+        "STRONG_JOBS": 0.50,
+        "WEAK_JOBS": 0.50,
+        "RATE_REPRICING": 0.50,
+        "REAL_YIELDS_RISING": 0.45,
+        "REAL_YIELDS_FALLING": 0.45,
+        # --- risk regime (oil is a growth / risk proxy) ---
+        "RISK_OFF": 0.70,
+        "RISK_ON": 0.65,
+        "BANKING_STRESS": 0.65,
+        "VIX_SPIKE": 0.55,
+        "VIX_COMPRESSION": 0.50,
+        "STOCK_RALLY": 0.45,
+        "STOCK_PLUNGE": 0.55,
+        # --- liquidity ---
+        "LIQUIDITY_EASING": 0.45,
+        "LIQUIDITY_TIGHTENING": 0.45,
+        # --- equities read-through ---
+        "EARNINGS_BEAT": 0.25,
+        "EARNINGS_MISS": 0.30,
+        "GUIDANCE_RAISED": 0.25,
+        "GUIDANCE_CUT": 0.30,
+        "INDEX_FLOW": 0.25,
+        "CORP_EARNINGS_SEASON": 0.20,
+        # --- no path to crude ---
+        "GOLD_ETF_FLOW": 0.05,
+        "BTC_ETF_FLOW": 0.05,
+        "CRYPTO_REGULATION": 0.05,
+        "CRYPTO_LIQUIDATION": 0.05,
+        "CRYPTO_HACK": 0.05,
         "GENERAL_MACRO": 0.30,
     },
 }

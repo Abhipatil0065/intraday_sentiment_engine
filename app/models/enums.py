@@ -15,6 +15,10 @@ class Asset(str, Enum):
     # "EQUITY" is the symbol in the DB/payload so the card keeps its own
     # identity separate from the three metal/crypto instruments.
     EQUITY = "EQUITY"
+    # Crude oil (WTI) is a first-class asset again. "USOIL" is the symbol in
+    # the DB/payload - deliberately the same string the pre-2026-10 legacy rows
+    # carry, so the card inherits that history instead of starting blank.
+    OIL = "USOIL"
 
     @property
     def label(self) -> str:
@@ -23,6 +27,7 @@ class Asset(str, Enum):
             Asset.SILVER: "Silver",
             Asset.BITCOIN: "Bitcoin",
             Asset.EQUITY: "S&P 500",
+            Asset.OIL: "Oil",
         }[self]
 
     @classmethod

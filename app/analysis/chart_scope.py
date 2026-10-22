@@ -95,16 +95,29 @@ CHART_OF_SYMBOL: dict[str, Asset] = {
     "CRYPTO:BTCUSD": Asset.BITCOIN,
     "COINBASE:BTCEUR": Asset.BITCOIN,
     "COINBASE:BTCGBP": Asset.BITCOIN,
+    # --- crude oil ---
+    # TVC:USOIL is the symbol the project QUERIES for the oil chart (see
+    # app/ingestion/tradingview_api.py DEFAULT_SYMBOL_MAP). The others are
+    # the aliases TradingView tags oil stories with, measured live on
+    # 2026-10-22: NYMEX:CL1! (WTI futures), MCX:CRUDEOIL1! and TVC:UKOIL /
+    # ICEUS:CC1! (Brent).
+    "TVC:USOIL": Asset.OIL,
+    "NYMEX:CL1!": Asset.OIL,
+    "MCX:CRUDEOIL1!": Asset.OIL,
+    "TVC:UKOIL": Asset.OIL,
+    "ICEUS:CC1!": Asset.OIL,
 }
 
 # The order a strict single-owner assignment walks. Gold first because it is
 # the deepest market in this engine, then silver (its closest pair), then
-# bitcoin, then the equity proxy.
+# bitcoin, then the equity proxy. Oil comes last: it shares the most stories
+# with the metals, so it must not take one away from them.
 SINGLE_OWNER_ORDER: tuple[Asset, ...] = (
     Asset.GOLD,
     Asset.SILVER,
     Asset.BITCOIN,
     Asset.EQUITY,
+    Asset.OIL,
 )
 
 

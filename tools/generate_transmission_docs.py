@@ -19,12 +19,13 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 OUT = REPO / "docs" / "TRANSMISSION_MAP.md"
-ASSETS = ("XAUUSD", "XAGUSD", "BTCUSD", "EQUITY")
+ASSETS = ("XAUUSD", "XAGUSD", "BTCUSD", "EQUITY", "USOIL")
 ASSET_LABELS = {
     "XAUUSD": "Gold",
     "XAGUSD": "Silver",
     "BTCUSD": "Bitcoin",
     "EQUITY": "Equity (S&P 500 proxy)",
+    "USOIL": "Crude oil (WTI)",
 }
 
 
@@ -144,10 +145,11 @@ def main() -> int:
     w("")
     w("## Deliberate design decisions")
     w("")
-    w("- **`GEOPOLITICAL_RISK` is bullish for gold (+1.20), bearish for "
-      "bitcoin (-0.35) and bearish for equity (-0.30).** The per-asset split "
-      "is intentional: a conflict is a safe-haven bid for metals and a "
-      "risk-off shock for the other two.")
+    w("- **`GEOPOLITICAL_RISK` is bullish for gold (+1.20), bullish for crude "
+      "oil (+1.00), bearish for bitcoin (-0.35) and bearish for equity "
+      "(-0.30).** The per-asset split is intentional: a conflict is a "
+      "safe-haven bid for the metals, a supply-risk-premium bid for crude, "
+      "and a risk-off shock for the other two.")
     w("- **`CRYPTO_REGULATION` is signed bearish for BTCUSD** `[-1, 0.80]` "
       "(Step 4a). It used to be `[0, 1.00]` — directionless *and* the largest "
       "magnitude in the map, which is the worst combination: every "

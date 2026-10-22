@@ -12,7 +12,7 @@ from app.main import _block
 def main():
     init_db()
     with session_scope() as s:
-        for asset in ("XAUUSD", "XAGUSD", "BTCUSD"):
+        for asset in ("XAUUSD", "XAGUSD", "BTCUSD", "USOIL"):
             b = _block(s, asset, "MARKET_PREP")
             bull, bear = b["bull_drivers"], b["bear_drivers"]
             print("=" * 74)
