@@ -518,6 +518,20 @@ def _block(session, asset: str, scope: str) -> dict:
     }
 
 
+def _tv_symbols_of(row: NewsArticle) -> list[str]:
+    """The story's own TradingView tags (stored as a JSON list)."""
+    import json as _json
+
+    raw = getattr(row, "tv_symbols", "") or ""
+    if not raw:
+        return []
+    try:
+        value = _json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    return value if isinstance(value, list) else []
+
+
 def _news_feed(session, limit: int | None = None,
                offset: int = 0) -> tuple[list[dict], int]:
     """
@@ -578,6 +592,11 @@ def _news_feed(session, limit: int | None = None,
             "analysis_mode": row.analysis_mode,
             "analysis_note": row.analysis_note,
             "is_today": row.is_today,
+            # The cards whose TradingView chart listed this story. Empty for
+            # every source without a chart. "XAUUSD" / "XAUUSD,XAGUSD" for a
+            # story on one or two charts.
+            "chart_scope": row.chart_scope or "",
+            "tv_symbols": _tv_symbols_of(row),
             "is_update": row.is_updated_article,
             "event_key": event.event_key if event else None,
             "event_article_count": event.article_count if event else 1,

@@ -1198,6 +1198,7 @@ function renderFeed(items){
       +'<span class="tag">Verification: '+esc(it.verification)+'</span>'
       +'<span class="tag">Relevance: '+n1(it.relevance_score)+'</span>'
       +'<span class="tag">Mode: '+esc(it.analysis_mode)+'</span>'
+      +(it.chart_scope?('<span class="tag">Chart: '+esc(it.chart_scope)+'</span>'):'')
       +(it.event_article_count>1?('<span class="tag">'+it.event_article_count
         +' headlines merged</span>'):'')
       +(it.is_update?'<span class="tag VERY_HIGH">UPDATE</span>':'')+'</div>'

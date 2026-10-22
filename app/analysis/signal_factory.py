@@ -72,6 +72,7 @@ def build_signal(
     metal_character: str | None = None,
     speaker_tier: float = 1.0,
     age_reference_utc: datetime | None = None,
+    chart_scope: str = "",
 ) -> object:
     """
     Build one correctly-populated ``WeightedSignal``.
@@ -117,6 +118,8 @@ def build_signal(
         # Overnight admission: age an off-window headline from the moment the
         # engine judged it, not from the publication the laptop slept through.
         age_reference_utc=age_reference_utc,
+        # The chart that listed this story ("" for a story with no chart).
+        chart_scope=chart_scope,
     )
 
 
@@ -167,7 +170,15 @@ def build_bleed_signal(primary: WeightedSignal) -> WeightedSignal | None:
     Returns None when the primary signal is not eligible (wrong asset, wrong
     category, below the relevance floor, or below HIGH strength) - the caller
     can unconditionally append the result and let the None do the filtering.
+
+    CHART-SCOPED STORIES NEVER BLEED. A story listed on the gold chart is the
+    gold card's news; copying it onto the silver card would put gold chart
+    news on the silver card, which is exactly what the chart scope exists to
+    prevent. A story listed on BOTH charts already reaches both cards on its
+    own (its own impact rows exist for both), so it loses nothing here.
     """
+    if primary.chart_scope:
+        return None
     if primary.asset not in BLEED_PAIR:
         return None
     if primary.category not in BLEED_CATEGORIES:
@@ -209,4 +220,8 @@ def build_bleed_signal(primary: WeightedSignal) -> WeightedSignal | None:
         # The bleed must age with its primary: an overnight macro headline
         # admitted this morning bleeds to the pair with the same freshness.
         age_reference_utc=primary.age_reference_utc,
+        # A bleed copy is only ever built for an unscoped story, so the scope
+        # travels as empty - but it is carried explicitly so the field can
+        # never be lost by a future change.
+        chart_scope=primary.chart_scope,
     )

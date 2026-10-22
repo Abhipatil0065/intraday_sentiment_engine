@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import json
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -20,6 +21,7 @@ from pathlib import Path
 from sqlalchemy import and_, delete, exists, func, or_, select
 
 from app.analysis import llm_client, release_surprise
+from app.analysis.chart_scope import scope_label
 from app.analysis.economic_impact import (
     CalendarEvent,
     CalendarSignal,
@@ -1236,6 +1238,18 @@ async def _ingest_article(art: RawArticle, session, stats: IngestStats,
         llm_ok = False
         skip_reason = "batch_cap"
 
+    # --- CHART SCOPE ---
+    # A story listed on the gold chart is the gold card's news, and the gold
+    # card's news only. The scope is resolved at the fetch layer (the chart
+    # queries that returned this story) and applied HERE, before the fate
+    # decision and before any impact row is written - this is the single
+    # choke point where an article's target cards are decided.
+    chart_scope = _chart_scope_for(art)
+    if chart_scope:
+        from app.analysis.news_classifier import apply_chart_scope
+
+        analysis = apply_chart_scope(analysis, chart_scope, art.title, art.body)
+
     # --- ONE-SHOT FATE: keep in Section B, or delete and suppress ---
     # Decided BEFORE the outcome bucket is chosen, so the buckets stay
     # mutually exclusive: a dropped article is counted in exactly one of them
@@ -1243,7 +1257,8 @@ async def _ingest_article(art: RawArticle, session, stats: IngestStats,
     # Runs before any event/impact row is created, so a dropped article leaves
     # no cluster behind. Exempt: the FinancialJuice session reports (Section A)
     # are the prep/wrap boxes, not news, and the policy does not apply.
-    if not is_fj and not is_section_b_verdict(analysis, llm_used=llm_ok):
+    if not is_fj and not is_section_b_verdict(
+            analysis, llm_used=llm_ok, chart_scoped=bool(chart_scope)):
         _drop_low_impact_article(session, row, analysis, stats)
         return None
 
@@ -1273,6 +1288,11 @@ async def _ingest_article(art: RawArticle, session, stats: IngestStats,
     row.analysis_mode = analysis.mode
     row.analysis_note = analysis.note
     row.llm_used = llm_ok
+    # The chart that listed this story, and the story's own TradingView tags.
+    # Both are audit fields: the CARDS this story reached are the impact rows
+    # written below, and they can only be the scoped ones.
+    row.chart_scope = scope_label(chart_scope)
+    row.tv_symbols = json.dumps(list(getattr(art, "symbols", None) or []))
 
     session.flush()
 
@@ -1332,6 +1352,31 @@ async def _ingest_article(art: RawArticle, session, stats: IngestStats,
 
     stats.new_today += 1
     return row
+
+
+def _chart_scope_for(art: RawArticle) -> list[Asset]:
+    """
+    The cards whose CHART listed this story.
+
+    Empty for every source without a chart - the RSS feeds, FinancialJuice,
+    Kitco and the rest - and then the classifier's routing decides the cards
+    exactly as before. Only the TradingView feed carries a chart.
+
+    The scope was resolved at the fetch layer (the chart queries that
+    returned the story), so a story listed on two charts arrives with two
+    cards and reaches both.
+    """
+    if not settings.chart_scope_isolation:
+        return []
+    out: list[Asset] = []
+    for value in (getattr(art, "chart_assets", None) or []):
+        try:
+            asset = Asset(str(value).strip().upper())
+        except ValueError:
+            continue
+        if asset not in out:
+            out.append(asset)
+    return out
 
 
 def _last_signal_age_min(signals, now: datetime) -> float | None:
@@ -1758,6 +1803,11 @@ def _recompute_sentiment(session, stats: IngestStats):
                 speaker_tier=getattr(impact, "speaker_tier", 1.0),
                 # Overnight admission freshness (None for live rows).
                 age_reference_utc=age_reference_utc,
+                # The chart that listed this story ("XAUUSD", "XAUUSD,XAGUSD",
+                # ...). Empty for a story with no chart. Carried so the
+                # cross-asset bleed can leave a chart-scoped story on its own
+                # card: gold chart news must not bleed onto the silver card.
+                chart_scope=row.chart_scope or "",
             )
             signals.append(signal)
             _weight_targets[id(signal)] = impacts_by_asset.get(signal.asset, impact)

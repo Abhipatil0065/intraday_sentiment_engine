@@ -76,6 +76,15 @@ def test_non_equities_category_never_counts():
 def test_empty_region_returns_neutral_card():
     # A headline that matches neither ASIA keywords nor global keywords ->
     # no signals for ASIA -> neutral carry-forward card.
+    #
+    # The carry-forward history is process-wide (sentiment_engine._LAST_BIAS),
+    # and an earlier test file can have published an ASIA verdict for it. The
+    # card would then carry THAT forward - a stale-but-real bias instead of
+    # the documented NO_BIAS - which is a property of the process, not of this
+    # card. Clear it so the test asserts what it means to assert.
+    from app.analysis.sentiment_engine import clear_bias_history
+
+    clear_bias_history()
     us_only = [_eq_signal("Apple beats earnings estimates as revenue surges")]
     card = build_equity_card(us_only, now=NOW, session=SessionName.ASIA)
     assert card.no_data is True

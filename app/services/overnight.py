@@ -510,6 +510,13 @@ class ClassificationOutcome:
         }
 
 
+def _chart_scope_of(article: NewsArticle) -> list:
+    """The cards whose chart listed this row (empty for a non-chart row)."""
+    from app.analysis.chart_scope import scope_for_article
+
+    return scope_for_article(article)
+
+
 def _apply_analysis(article: NewsArticle, analysis) -> None:
     """Write a fresh LLM verdict onto a stored article row.
 
@@ -637,6 +644,16 @@ async def classify_articles(session, articles: list[NewsArticle], *,
             outcome.errors.append(f"{article.id}: {type(exc).__name__}: {exc}")
             continue
 
+        # CHART SCOPE. A row that a TradingView chart listed keeps that
+        # scope when the brief re-judges it: the brief must not move a gold
+        # chart story onto the silver card, exactly like the live path.
+        chart_scope = _chart_scope_of(article)
+        if chart_scope and llm_ok:
+            from app.analysis.news_classifier import apply_chart_scope
+
+            analysis = apply_chart_scope(
+                analysis, chart_scope, article.title or "", article.body or "")
+
         if llm_ok:
             outcome.llm_judged += 1
             # ONE-SHOT POLICY: the same fate rule the live ingest path applies.
@@ -647,7 +664,8 @@ async def classify_articles(session, articles: list[NewsArticle], *,
             from app.analysis.fj_sessions import is_financial_juice
             from app.analysis.news_classifier import is_section_b_verdict
 
-            keep = is_section_b_verdict(analysis, llm_used=True) or is_financial_juice(
+            keep = is_section_b_verdict(analysis, llm_used=True,
+                                        chart_scoped=bool(chart_scope)) or is_financial_juice(
                 article.source or "")
             if keep:
                 if not dry_run:

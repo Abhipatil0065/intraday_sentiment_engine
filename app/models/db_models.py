@@ -56,6 +56,15 @@ class NewsArticle(Base):
     analysis_note: Mapped[str] = mapped_column(Text, default="")
     llm_used: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
+    # CHART SCOPE: the cards whose chart listed this story ("XAUUSD" /
+    # "XAUUSD,XAGUSD"). Empty for every source that has no chart, and then
+    # the classifier's routing decides the cards exactly as before. See
+    # app/analysis/chart_scope.py.
+    chart_scope: Mapped[str] = mapped_column(String(64), default="", index=True)
+    # The story's own TradingView tags (relatedSymbols) as a JSON list. Audit
+    # only - the routing key is chart_scope above.
+    tv_symbols: Mapped[str] = mapped_column(Text, default="")
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     impacts: Mapped[list[AssetImpact]] = relationship(

@@ -170,10 +170,24 @@ STRENGTH_GATE = frozenset({ImpactStrength.VERY_HIGH, ImpactStrength.HIGH})
 
 
 def _passes_impact_gate(s: WeightedSignal) -> bool:
-    """False when a signal's impact band may not reach any card."""
+    """False when a signal's impact band may not reach any card.
+
+    CHART-SCOPED STORIES. A story listed on a TradingView chart is that
+    card's news by the chart's own judgement, so a MEDIUM-strength reading
+    of it still counts - at the MEDIUM weight (0.45) the strength table
+    already defines - instead of being dropped. Without this, most chart
+    news would land on the right card with exactly zero weight, which makes
+    the scope invisible on the card it was isolated onto.
+    """
     if not settings.only_high_impact_counts:
         return True
-    return s.strength in STRENGTH_GATE
+    if s.strength in STRENGTH_GATE:
+        return True
+    if (s.chart_scope
+            and settings.chart_scope_medium_counts
+            and s.strength is ImpactStrength.MEDIUM):
+        return True
+    return False
 
 
 QUALITY_MULT = {
@@ -622,6 +636,11 @@ class WeightedSignal:
     # keeps publication-time ageing exactly as before. Display, burst and
     # delta-60m logic still reads ``published_at``.
     age_reference_utc: datetime | None = None
+    # The chart that listed this story ("XAUUSD", "XAUUSD,XAGUSD", ...).
+    # Empty for a story with no chart (every non-TradingView source). A
+    # chart-scoped signal stays on its own card: it is never copied onto
+    # another card by the cross-asset bleed.
+    chart_scope: str = ""
 
     # filled by compute()
     recency: float = 0.0

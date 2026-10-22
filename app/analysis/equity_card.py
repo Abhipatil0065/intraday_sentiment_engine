@@ -292,17 +292,41 @@ def region_signals(signals: Sequence[WeightedSignal],
     Session-specific keywords give full weight (1.0); global-macro keywords
     give partial weight (GLOBAL_MACRO_WEIGHT = 0.65) so global evidence
     reaches every session without drowning out session-specific news.
+
+    EQUITY-SCOPED SIGNALS ARE ALREADY ON THE EQUITY CARD. A story listed on
+    the equity chart (the TradingView equity feed fetches the session's own
+    tickers) arrives with an EQUITY impact row and a chart-scoped EQUITY
+    signal. It bypasses both the category filter and the region keyword
+    filter: the feed already chose the session, and the classifier's category
+    for a single-stock headline can legitimately be OTHER. Every other signal
+    - including an unscoped EQUITY signal - keeps the old path exactly.
     """
     keywords = equity_keywords(session)
     if not keywords and not GLOBAL_MACRO_KEYWORDS:
         return []
     out = []
     for s in signals:
-        if s.category not in EQUITY_CATEGORIES:
-            continue
-        match_weight = _matches_region(s.title, keywords)
-        if match_weight <= 0.0:
-            continue
+        scoped = bool(s.chart_scope)
+        equity_scoped = s.asset is Asset.EQUITY and scoped
+        if equity_scoped:
+            # Chart-scoped equity story: the feed already chose the session
+            # (the TradingView equity feed queries the session's own
+            # tickers), and the classifier's category for a single-stock
+            # headline can legitimately be OTHER - so both filters are
+            # bypassed for it.
+            match_weight = 1.0
+        else:
+            if s.category not in EQUITY_CATEGORIES:
+                continue
+            if scoped:
+                # A story on a metal or crypto chart belongs to THAT card
+                # only. Re-tagging it into the equity card would put gold
+                # chart news on the equity card, which is exactly what the
+                # chart scope forbids.
+                continue
+            match_weight = _matches_region(s.title, keywords)
+            if match_weight <= 0.0:
+                continue
         # Apply equity card's own relevance, scaled by session match weight.
         # Preserve 0.0 for suppressed signals (relevance 0.0 stays 0.0).
         equity_rel = _equity_relevance(s.category)
@@ -334,6 +358,9 @@ def region_signals(signals: Sequence[WeightedSignal],
             # the signal it copies, so an off-window headline admitted this
             # morning is not aged out of the equity card.
             age_reference_utc=getattr(s, "age_reference_utc", None),
+            # The chart that listed the story, so an equity-scoped copy keeps
+            # the scope of the row it came from.
+            chart_scope=getattr(s, "chart_scope", ""),
         ))
     return out
 
@@ -434,7 +461,9 @@ def build_equity_card(all_signals: Sequence[WeightedSignal],
             reason=s.reason, transmission=s.transmission,
             report_kind=s.report_kind, mode=s.mode,
             surprise_weight=s.surprise_weight,
-            age_reference_utc=getattr(s, "age_reference_utc", None)))
+            age_reference_utc=getattr(s, "age_reference_utc", None),
+            # Keep the chart scope of the row the proxy came from.
+            chart_scope=getattr(s, "chart_scope", "")))
     # One story, one vote: drop the per-asset copies of the same headline
     # BEFORE scoring, otherwise a macro story that routed to gold, silver and
     # bitcoin at ingest is counted (and displayed) once per impact row.

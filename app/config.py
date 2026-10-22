@@ -172,6 +172,28 @@ class Settings(BaseSettings):
     # those too would empty the feed exactly when the model is unavailable.
     only_llm_verdict_may_drop: bool = True
 
+    # ---------------- chart scope (per-chart card isolation) ----------------
+    # TradingView serves a PER-SYMBOL news feed: the stories listed on the
+    # gold chart, the silver chart, the bitcoin chart. CHART_SCOPE_ISOLATION
+    # makes that feed decide WHICH CARD a story may touch: a story listed on
+    # the gold chart reaches the gold card and no other card, one listed on
+    # two charts reaches both cards. Sources without a chart (every non-
+    # TradingView feed) keep the classifier's routing exactly as before.
+    # See app/analysis/chart_scope.py for the measured tag data behind this.
+    chart_scope_isolation: bool = Field(
+        default=True, validation_alias="CHART_SCOPE_ISOLATION")
+    # Strict one-owner mode: the first match in GOLD -> SILVER -> BITCOIN ->
+    # EQUITY wins and the other cards get nothing. OFF by default - a story
+    # on two charts feeding both cards is TradingView's own semantics.
+    chart_scope_single_owner: bool = Field(
+        default=False, validation_alias="CHART_SCOPE_SINGLE_OWNER")
+    # A chart-scoped story is on that chart BY TRADINGVIEW'S OWN TAGGING, so
+    # a MEDIUM-strength reading of it still counts (at the MEDIUM weight)
+    # instead of being dropped by the HIGH-only impact gate - otherwise most
+    # chart news would land on the right card with zero weight.
+    chart_scope_medium_counts: bool = Field(
+        default=True, validation_alias="CHART_SCOPE_MEDIUM_COUNTS")
+
     # ---------------- rolling news window (item 3) ----------------
     # Replaces the "same market-timezone calendar date" gate. A rolling window
     # admits the overnight US wrap by construction, which is why the old

@@ -21,6 +21,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from app.config import settings
+from app.analysis.chart_scope import chart_assets_for_symbols
 from app.ingestion.base import RawArticle
 from app.market.session_detector import SessionName, equity_session
 
@@ -57,10 +58,16 @@ _staleness: dict[str, int] = {}  # symbol -> consecutive empty count
 
 # --- Symbol mappings (shared with legacy Apify source, now consolidated here) ---
 # Configurable symbol mapping from internal symbols to TradingView exchange-qualified symbols
+#
+# BITCOIN: BITSTAMP:BTCUSD is the symbol TradingView actually TAGS bitcoin
+# stories with - measured 2026-10-22, 29 of the 30 items returned by that
+# query carry the tag. The old value, BINANCE:BTCUSD, carried it on NONE of
+# them (0/30): the API answered the query with loosely related stories, so
+# the bitcoin feed was never bitcoin-tagged at all.
 DEFAULT_SYMBOL_MAP: dict[str, str] = {
     "XAUUSD": "OANDA:XAUUSD",
     "XAGUSD": "OANDA:XAGUSD",
-    "BTCUSD": "BINANCE:BTCUSD",
+    "BTCUSD": "BITSTAMP:BTCUSD",
 }
 
 # Equity session symbol mapping
@@ -225,8 +232,16 @@ def _map_item(item: dict) -> dict:
             item["published"], tz=timezone.utc).isoformat()
             if item.get("published") else None,
         "source": item.get("provider", {}).get("name", "TradingView"),
+        # The story's OWN TradingView tags (relatedSymbols). Kept for the
+        # audit trail and the feed badge - they are NOT the routing key:
+        # TradingView cross-tags freely (16 of the 30 stories on the gold
+        # chart also carry a silver-futures tag), so routing by tag would
+        # push half the gold feed onto the silver card. The routing key is
+        # ``origin_symbols`` below - the charts that actually LISTED the
+        # story.
         "symbols": [rs["symbol"] for rs in item.get("relatedSymbols", [])
                     if rs.get("symbol")],
+        "origin_symbols": [],
         "is_flash": item.get("urgency", 0) >= 2,
     }
 
@@ -249,7 +264,15 @@ def fetch_tradingview_news_api(symbols: list[str], max_items: int = 30) -> list[
 
     Returns:
         List of mapped news items with keys:
-        news_id, title, url, published_at, source, symbols, is_flash
+        news_id, title, url, published_at, source, symbols, origin_symbols,
+        is_flash
+
+    ORIGIN SYMBOLS. ``origin_symbols`` lists every chart query that returned
+    the story. A story found by both the gold and the silver query is listed
+    on BOTH charts, so it belongs to both cards (TradingView's own
+    semantics). The duplicate is therefore MERGED into the first copy's
+    origin list rather than dropped - dropping it would lose the fact that
+    the story is on the silver chart too.
     """
     session = _get_session()
     headers = {
@@ -262,8 +285,25 @@ def fetch_tradingview_news_api(symbols: list[str], max_items: int = 30) -> list[
     }
 
     all_items: list[dict] = []
-    seen_ids: set[str] = set()
+    # news_id -> the mapped item, so a story returned by several chart
+    # queries keeps every origin instead of being silently dropped.
+    by_id: dict[str, dict] = {}
     per_symbol = max(1, max_items // max(1, len(symbols)))
+
+    def _take(item: dict, origin: str) -> None:
+        """Add a story, or merge its origin when it is already known."""
+        news_id = item.get("id")
+        if not news_id:
+            return
+        existing = by_id.get(news_id)
+        if existing is not None:
+            if origin not in existing["origin_symbols"]:
+                existing["origin_symbols"].append(origin)
+            return
+        mapped = _map_item(item)
+        mapped["origin_symbols"] = [origin]
+        by_id[news_id] = mapped
+        all_items.append(mapped)
 
     for symbol in symbols:
         if len(all_items) >= max_items:
@@ -275,12 +315,10 @@ def fetch_tradingview_news_api(symbols: list[str], max_items: int = 30) -> list[
             for item in cached:
                 if taken_for_symbol >= per_symbol:
                     break
-                news_id = item.get("id")
-                if not news_id or news_id in seen_ids:
-                    continue
-                seen_ids.add(news_id)
-                all_items.append(_map_item(item))
-                taken_for_symbol += 1
+                before = len(all_items)
+                _take(item, symbol)
+                if len(all_items) > before:
+                    taken_for_symbol += 1
             continue
 
         # Enforce rate limit before making request
@@ -330,12 +368,10 @@ def fetch_tradingview_news_api(symbols: list[str], max_items: int = 30) -> list[
             for item in items:
                 if taken_for_symbol >= per_symbol:
                     break
-                news_id = item.get("id")
-                if not news_id or news_id in seen_ids:
-                    continue
-                seen_ids.add(news_id)
-                all_items.append(_map_item(item))
-                taken_for_symbol += 1
+                before = len(all_items)
+                _take(item, symbol)
+                if len(all_items) > before:
+                    taken_for_symbol += 1
 
         except requests.RequestException as exc:
             log.warning("TradingView API request failed for %s: %s", symbol, exc)
@@ -370,7 +406,16 @@ class TradingViewAPISource:
         self._is_equity = spec and "equity" in spec.name.lower() if spec else False
 
     async def fetch(self) -> list[RawArticle]:
-        """Fetch and convert to RawArticle objects."""
+        """Fetch and convert to RawArticle objects.
+
+        CHART SCOPE. Every symbol queried here is a CHART, and the stories a
+        chart query returns are the stories listed on that chart. The origin
+        symbols of each story are therefore carried into the article as
+        ``chart_assets`` - the set of cards that story may touch. A story
+        returned by both the gold and the silver query is on both charts and
+        reaches both cards; a story only the gold query returned reaches the
+        gold card alone.
+        """
         # Determine symbols based on source type
         if self._is_equity:
             session = get_current_session()
@@ -384,6 +429,8 @@ class TradingViewAPISource:
         items = fetch_tradingview_news_api(symbols, self.max_items)
         articles = []
         for item in items:
+            origins = item.get("origin_symbols") or []
+            chart_assets = chart_assets_for_symbols(origins, equity=self._is_equity)
             # Use news_id as GUID for deduplication
             article = RawArticle(
                 guid=item["news_id"],
@@ -394,6 +441,8 @@ class TradingViewAPISource:
                 body="",  # API doesn't provide full body
                 summary=item["title"][:300],
                 published_raw=item["published_at"],
+                symbols=list(item.get("symbols") or []),
+                chart_assets=[a.value for a in chart_assets],
             ).ensure_guid()
             articles.append(article)
         return articles

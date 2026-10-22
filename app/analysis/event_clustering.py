@@ -371,6 +371,14 @@ def _collapse_members_unkeyed(members: list) -> list:
             report_kind=best.report_kind,
             mode=best.mode,
             surprise_weight=best.surprise_weight,
+            # The representative must keep the FIELDS that decide how the
+            # story is weighted and where it is allowed to land. Dropping
+            # chart_scope here would strip a chart-scoped story of its
+            # isolation (the MEDIUM-strength path in the impact gate reads
+            # it), and dropping age_reference_utc would age an overnight
+            # admitted headline from its publication time again.
+            chart_scope=getattr(best, "chart_scope", ""),
+            age_reference_utc=getattr(best, "age_reference_utc", None),
         )
         collapsed.append(new_signal)
 

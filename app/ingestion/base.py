@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from app.logging_conf import get_logger
@@ -30,6 +30,13 @@ class RawArticle:
     summary: str = ""
     published_raw: str | None = None
     updated_raw: str | None = None
+    # The story's own TradingView tags (relatedSymbols). Audit only.
+    symbols: list[str] = field(default_factory=list)
+    # The cards whose CHART listed this story (asset values: XAUUSD,
+    # XAGUSD, BTCUSD, EQUITY). Empty for every source without a chart, and
+    # then the classifier's routing decides the cards exactly as before.
+    # See app/analysis/chart_scope.py.
+    chart_assets: list[str] = field(default_factory=list)
 
     def compute_guid(self) -> str:
         key = (self.url or self.title).strip().lower()

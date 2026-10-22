@@ -388,7 +388,11 @@ def test_symbol_mapping():
     # Test default mapping
     internal = ["XAUUSD", "XAGUSD", "BTCUSD"]
     mapped = map_internal_to_tv(internal)
-    assert mapped == ["OANDA:XAUUSD", "OANDA:XAGUSD", "BINANCE:BTCUSD"]
+    # BITSTAMP:BTCUSD is the symbol TradingView actually TAGS bitcoin stories
+    # with: measured against the live API on 2026-10-22, 29 of the 30 items
+    # returned by that query carry the tag. BINANCE:BTCUSD carried it on NONE
+    # of them (0/30), so the bitcoin feed was never bitcoin-tagged.
+    assert mapped == ["OANDA:XAUUSD", "OANDA:XAGUSD", "BITSTAMP:BTCUSD"]
 
     # Test with override via environment
     os.environ["TRADINGVIEW_SYMBOL_MAP"] = "XAUUSD=FX_IDC:XAUUSD,BTCUSD=BITSTAMP:BTCUSD"

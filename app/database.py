@@ -469,6 +469,43 @@ def _add_missing_price_point_table() -> None:
         log.warning("price_point table migration skipped: %s", exc)
 
 
+def _add_missing_news_article_chart_columns() -> None:
+    """
+    Add the chart-scope columns to ``news_article`` when absent.
+
+    ``chart_scope`` holds the cards whose TradingView chart listed the story
+    ("XAUUSD" / "XAUUSD,XAGUSD"); ``tv_symbols`` holds the story's own
+    TradingView tags as a JSON list (audit only). Both are additive: an old
+    row simply has an empty scope, which means "not a chart story" and keeps
+    the classifier's routing.
+
+    Same idempotent PRAGMA-then-ALTER pattern as the migrations above.
+    """
+    from sqlalchemy import text
+
+    add_columns = {
+        "chart_scope": "VARCHAR(64) DEFAULT ''",
+        "tv_symbols": "TEXT DEFAULT ''",
+    }
+    try:
+        with engine.begin() as conn:
+            present = {
+                row[1] for row in conn.execute(
+                    text("PRAGMA table_info(news_article)"))
+            }
+            if not present:
+                return  # table absent on a brand-new database
+            for column, ddl in add_columns.items():
+                if column not in present:
+                    conn.execute(text(
+                        f"ALTER TABLE news_article ADD COLUMN {column} {ddl}"))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_news_article_chart_scope "
+                "ON news_article(chart_scope)"))
+    except Exception as exc:  # noqa: BLE001 - never block startup
+        log.warning("news_article chart-scope migration skipped: %s", exc)
+
+
 def init_db() -> None:
     """Create tables if they do not exist.
 
@@ -485,6 +522,7 @@ def init_db() -> None:
     _add_missing_dropped_article_table()
     _add_missing_settings_table()
     _add_missing_price_point_table()
+    _add_missing_news_article_chart_columns()
     log.info("Database ready: %s", _redact(settings.resolved_database_url()))
 
 

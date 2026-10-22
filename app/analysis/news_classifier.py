@@ -134,7 +134,8 @@ HIGH_STRENGTH = (ImpactStrength.HIGH, ImpactStrength.VERY_HIGH)
 
 
 def is_section_b_verdict(analysis: ArticleAnalysis, *,
-                         llm_used: bool = True) -> bool:
+                         llm_used: bool = True,
+                         chart_scoped: bool = False) -> bool:
     """
     True when a classified article may stay in the Section B news feed.
 
@@ -153,10 +154,17 @@ def is_section_b_verdict(analysis: ArticleAnalysis, *,
     did not actually judge (heuristic fallback), because such a row can never
     reach a card anyway and deleting it would only empty the feed on a day the
     model is unavailable.
+
+    ``chart_scoped`` is the fourth: a story listed on a TradingView chart is
+    that card's news by definition, so the one-shot delete must not remove it
+    before it could ever reach the card it belongs to. See
+    ``app/analysis/chart_scope.py``.
     """
     from app.config import settings
 
     if not settings.drop_low_impact_articles:
+        return True
+    if chart_scoped and getattr(analysis, "assets", None):
         return True
     if settings.only_llm_verdict_may_drop and not llm_used:
         return True
@@ -356,11 +364,123 @@ def heuristic_analyze(title: str, body: str = "") -> ArticleAnalysis:
     else:
         result.note = "Deterministic heuristic classification (no LLM key configured)."
     return result
+
+
+# ==========================================================================
+# CHART SCOPE (per-chart card isolation)
+# ==========================================================================
+# A story listed on the gold chart is the gold card's news; the classifier
+# alone must not decide that, and it must not decide that it is ALSO the
+# silver card's news. These helpers restrict a verdict to the cards whose
+# chart listed the story, and - when the classifier said nothing about one of
+# those cards - build that card's verdict deterministically.
+#
+# The synthesis reuses the HEURISTIC engine's per-asset maths exactly
+# (transmission map for the direction, the category matrix for the relevance,
+# the cue magnitude for the strength), so a chart-scoped row that the model
+# did not name is treated no differently from one the model did.
+CHART_RELEVANCE_FLOOR = 0.35
+
+
+def synthesize_asset_analysis(
+    title: str,
+    body: str,
+    category: NewsCategory,
+    importance: EconomicImportance,
+    asset: Asset,
+) -> AssetAnalysis:
+    """
+    Build one asset's verdict for a chart-scoped story.
+
+    Mirrors the per-asset block of ``heuristic_analyze``: the transmission map
+    owns the direction, the category matrix owns the relevance, the cue
+    magnitude owns the strength. The relevance floor is applied because the
+    CHART asserts the relevance - TradingView listed this story on this
+    asset's chart, which is a stronger statement than the category matrix can
+    make on its own.
+    """
+    from app.analysis.cue_rules import detect_direction
+    from app.analysis.transmission_map import measure_cue_magnitude, resolve
+
+    text = f"{title} {body}".strip()
+    cue = measure_cue_magnitude(text)
+    resolved = resolve(text, category, cue)
+    impact = resolved[asset]
+    direction = impact.direction
+
+    if asset is Asset.EQUITY:
+        # The equity card has its own direction column: "stocks rise" is
+        # bullish for equities even though "rise" is a metal-bearish cue.
+        equity_direction = detect_direction(text, equity=True)
+        if equity_direction not in (Direction.NEUTRAL, Direction.MIXED):
+            direction = equity_direction
+
+    rel = max(relevance_for(category, asset, text), CHART_RELEVANCE_FLOOR)
+    strength = _strength_from(cue, rel, importance)
+    persistence = _persistence_from(category)
+    char = detect_metal_character(text.lower())
+    return AssetAnalysis(
+        asset=asset,
+        direction=direction,
+        strength=strength,
+        relevance=rel,
+        persistence=persistence,
+        reason=_build_reason(asset, category, direction, text),
+        transmission=_transmission_for(asset, direction),
+        metal_character=char if asset is Asset.SILVER else None,
+        speaker_tier=detect_speaker_tier(text.lower()),
+    )
+
+
+def apply_chart_scope(
+    analysis: ArticleAnalysis,
+    scope: list[Asset],
+    title: str,
+    body: str = "",
+) -> ArticleAnalysis:
+    """
+    Restrict a verdict to the cards whose chart listed the story.
+
+    MULTI-OWNER: a story on two charts (gold AND silver) keeps a verdict for
+    both cards - that is TradingView's own semantics, and both cards see the
+    story because both charts list it.
+
+    For every scoped card the classifier said nothing about, one is built
+    deterministically (see ``synthesize_asset_analysis``). Without that, a
+    story the model rated as "no material impact" - or one it attributed to
+    another asset - would reach NO card at all, and the gold chart's own news
+    would never move the gold card.
+
+    Returns the same analysis object, mutated in place.
+    """
+    ordered: list[Asset] = []
+    for asset in scope or []:
+        if asset not in ordered:
+            ordered.append(asset)
+    if not ordered:
+        return analysis
+
+    kept = [a for a in (analysis.assets or []) if a.asset in ordered]
+    covered = {a.asset for a in kept}
+    for asset in ordered:
+        if asset in covered:
+            continue
+        kept.append(synthesize_asset_analysis(
+            title, body, analysis.category, analysis.importance, asset))
+
+    analysis.assets = kept
+    analysis.relevance_score = max(
+        (a.relevance for a in kept), default=analysis.relevance_score)
+    scope_text = ",".join(a.value for a in ordered)
+    analysis.note = f"{analysis.note} | chart scope: {scope_text}".strip()
+    return analysis
+
+
 # ==========================================================================
 # LLM engine (any OpenAI-compatible provider)
 # ==========================================================================
 SYSTEM_PROMPT = """You are an intraday market microstructure analyst specialising in \
-XAUUSD (gold), XAGUSD (silver) and BTCUSD (bitcoin).
+XAUUSD (gold), XAGUSD (silver), BTCUSD (bitcoin) and EQUITY (the equity card).
 
 You receive a financial news headline and body published TODAY.
 
@@ -379,10 +499,14 @@ whether the item drives PRECIOUS demand, INDUSTRIAL demand, BOTH, or NEITHER.
 6. BITCOIN: judge the actual regime. Do not automatically call it risk-on or \
 risk-off. Consider monetary policy, real yields, USD, liquidity, equities/Nasdaq, \
 spot bitcoin ETF flows, regulation, stablecoin liquidity, liquidations, on-chain.
-7. Only intraday / day-trading relevance for TODAY. Ignore long-term, monthly \
+7. EQUITY is the equity tape: single-stock moves, earnings, guidance, index \
+levels, sector news, equity-market risk appetite. Judge equities on their own \
+channel - "stocks fall" is BEARISH for equities even when it is BULLISH for \
+gold as a safe haven.
+8. Only intraday / day-trading relevance for TODAY. Ignore long-term, monthly \
 or yearly implications.
-8. If the item is an unconfirmed rumour, mark verification UNVERIFIED.
-9. Never invent numbers, prices or data not present in the text.
+9. If the item is an unconfirmed rumour, mark verification UNVERIFIED.
+10. Never invent numbers, prices or data not present in the text.
 
 Return ONLY a JSON object with this exact schema:
 {
@@ -399,7 +523,7 @@ Return ONLY a JSON object with this exact schema:
   "relevance_score": 0.0-1.0,
   "assets": [
     {
-      "asset": "XAUUSD|XAGUSD|BTCUSD",
+      "asset": "XAUUSD|XAGUSD|BTCUSD|EQUITY",
       "direction": "BULLISH|BEARISH|NEUTRAL|MIXED",
       "magnitude": 0.0-1.0,
       "horizon": "intraday|session|multi_day",
@@ -413,9 +537,10 @@ Return ONLY a JSON object with this exact schema:
 
 "assets" rules - read carefully:
 - Include an entry ONLY for assets this item genuinely affects intraday.
-- If the item has NO material effect on gold, silver or bitcoin (e.g. a
-  routine corporate filing, a sports result, an isolated local story),
-  return an EMPTY array: "assets": []. That is a correct and expected answer.
+- If the item has NO material effect on gold, silver, bitcoin or the equity \
+tape (e.g. a routine corporate filing, a sports result, an isolated local \
+story), return an EMPTY array: "assets": []. That is a correct and expected \
+answer.
 - Never force an entry just to fill the array. Never list an asset twice.
 - At most 3 entries, ordered by relevance descending.
 - "magnitude" is YOUR conviction for that asset (0.0-1.0), not a probability.
