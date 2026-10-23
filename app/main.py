@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -62,6 +63,40 @@ _boot_in_progress: bool = False
 # Connected WebSocket clients for live push updates.
 _clients: set[WebSocket] = set()
 
+# ---------------------------------------------------------------------------
+# FinancialJuice Sessions API cache (improvement item 2).
+#
+# In-memory TTL cache so the /api/financialjuice/sessions endpoint does not
+# re-query the DB (and re-score) on every dashboard poll. Default TTL is
+# 15 minutes; the cache is invalidated whenever the pipeline ingests new
+# FinancialJuice rows.
+# ---------------------------------------------------------------------------
+_fj_sessions_cache: dict[str, tuple[float, dict]] = {}
+FJ_SESSIONS_CACHE_TTL_SECONDS: float = 900.0  # 15 minutes
+
+
+def _fj_sessions_cache_get() -> dict | None:
+    """Return cached payload if present and not expired."""
+    now = time.time()
+    entry = _fj_sessions_cache.get("payload")
+    if entry is None:
+        return None
+    ts, payload = entry
+    if now - ts > FJ_SESSIONS_CACHE_TTL_SECONDS:
+        _fj_sessions_cache.pop("payload", None)
+        return None
+    return payload
+
+
+def _fj_sessions_cache_set(payload: dict) -> None:
+    """Store payload in cache with current timestamp."""
+    _fj_sessions_cache["payload"] = (time.time(), payload)
+
+
+def _fj_sessions_cache_clear() -> None:
+    """Drop the cached payload (call after new FJ ingestion)."""
+    _fj_sessions_cache.pop("payload", None)
+
 
 def _run_pipeline_sync() -> pipeline.IngestStats:
     """Run the pipeline in a separate thread with its own event loop."""
@@ -84,6 +119,9 @@ async def _scheduled_tick() -> None:
     started = T.stamp()
     try:
         stats = await asyncio.to_thread(_run_pipeline_sync)
+        # Invalidate the FJ sessions cache so the next dashboard poll
+        # re-scores with any newly ingested FinancialJuice rows.
+        _fj_sessions_cache_clear()
         log.info(
             "Tick %s done: fetched=%d new=%d rejected=%d dup=%d "
             "unroutable=%d llm_new_ok=%d llm_new_fail=%d dropped_low=%d "
@@ -875,30 +913,51 @@ async def financialjuice_sessions():
     bitcoin/equity split also folds in HIGH-importance Section B news and the
     economic calendar, so a session is read against the day's real backdrop.
 
-    LEGACY SCORING: this section still returns a forced bull_pct/bear_pct pair
-    that sums to 100, from the older scorer in fj_sessions.py. It is NOT on the
-    current Bias/score/confidence contract and cannot express "no view". The
-    payload carries an explicit ``scoring`` block so any consumer can tell the
-    two systems apart without hard-coding knowledge of the history.
+    UNIFIED SCORING: this section now returns a Bias/score/confidence triplet
+    per asset, matching the main engine panels. Scores are comparable across
+    the dashboard and the engine CAN express a flat 0.0 score when evidence is
+    insufficient. The payload carries an explicit ``scoring`` block so any
+    consumer can tell the contract version.
 
-    TODO(unify-fj): port fj_sessions onto the transmission map and the NO_BIAS
-    contract, then delete the marker below.
+    CACHED: the payload is served from an in-memory TTL cache (15 min default)
+    so repeated dashboard polls do not re-query the DB or re-score. The cache
+    is invalidated whenever the pipeline ingests new FinancialJuice rows.
     """
+    from app.analysis.fj_sessions import fj_metrics
+
+    start = time.time()
+    cached = _fj_sessions_cache_get()
+    if cached is not None:
+        log.debug("fj_sessions cache HIT")
+        return cached
+
+    log.debug("fj_sessions cache MISS - scoring from DB")
     with session_scope() as session:
         payload = fj_sessions.session_payload_from_db(
             session, pipeline.current_calendar_signals())
 
     payload["scoring"] = {
-        "system": "legacy_fj_sessions",
-        "shape": "bull_pct/bear_pct",
-        "sums_to_100": True,
+        "system": "unified_fj_sessions",
+        "shape": "bias/score/confidence",
+        "sums_to_100": False,
         "supports_no_bias": False,
-        "note": ("This section uses an older scorer than the rest of the "
-                 "engine. It reports a forced Bullish+Bearish=100% split and "
-                 "cannot express NO_BIAS. The main asset panels use the "
-                 "current Bias/score/confidence contract. Do not compare "
-                 "the two."),
+        "note": ("This section uses the current Bias/score/confidence contract "
+                 "shared with the main engine panels. Each asset card reports a "
+                 "signed score (-100..+100), a binary bias (BULLISH/BEARISH), "
+                 "and a confidence (0..1). A score of 0.0 means insufficient "
+                 "evidence rather than a forced split. The numbers are now "
+                 "comparable with the rest of the dashboard."),
     }
+    elapsed_ms = round((time.time() - start) * 1000, 1)
+    log.info(
+        "fj_sessions scored in %.1f ms: boxes=%d, found=%d, context=news=%d calendar=%d",
+        elapsed_ms,
+        len(payload.get("boxes", [])),
+        sum(1 for b in payload.get("boxes", []) if b.get("found")),
+        payload.get("context", {}).get("news_items", 0),
+        payload.get("context", {}).get("calendar_items", 0),
+    )
+    _fj_sessions_cache_set(payload)
     return payload
 
 

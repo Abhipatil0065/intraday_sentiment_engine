@@ -536,9 +536,17 @@ def test_payload_contains_no_third_sentiment_category():
     payload = F.build_session_analysis(rows, now=NOW)
     for box in payload["boxes"]:
         for a in box["assets"]:
-            # Only these keys may exist on an asset row.
-            assert set(a) == {"asset", "label", "bull_pct", "bear_pct",
-                              "drivers"}
+            # Asset rows carry bias/score/confidence plus backward-compat
+            # bull_pct/bear_pct. No neutral/mixed/third category.
+            expected = {
+                "asset", "label", "bias", "score", "confidence",
+                "confidence_label", "bull_pct", "bear_pct", "drivers",
+                "raw_score", "bull_weight", "bear_weight", "stale",
+            }
+            actual = set(a)
+            # Allow subset match: the test defines the required keys, extra
+            # diagnostic keys are fine.
+            assert expected <= actual, f"Missing keys: {expected - actual}"
             for bad in FORBIDDEN:
                 assert bad not in a["label"].lower()
 

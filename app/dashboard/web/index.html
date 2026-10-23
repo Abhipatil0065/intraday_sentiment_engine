@@ -1283,18 +1283,26 @@ async function loadMore(){
 /* One asset card per box, in the backend's fixed order: GOLD, SILVER,
    BITCOIN, then EQUITY MARKETS as the fourth card beside bitcoin. */
 function fjAsset(a){
-  var bull=+a.bull_pct||0, bear=+a.bear_pct||0;
+  var score=+a.score||0, conf=+a.confidence||0;
+  var bias=(a.bias||'BEARISH').toUpperCase();
+  var bullPct=Math.round(50+score/2);
+  var bearPct=100-bullPct;
+  var confLabel=(a.confidence_label||'LOW').toUpperCase();
+  var confCls=confLabel==='LOW'?'low':(confLabel==='MEDIUM'?'med':'high');
   var dv=(a.drivers&&a.drivers.length)?a.drivers.slice(0,3).join(' \u00b7 '):'';
+  var scoreCls=score>=0?'bull':'bear';
   return '<div class="fja">'
     +'<div class="an">'+esc(a.label)+' <span style="color:var(--dim)">'
       +esc(a.asset)+'</span></div>'
-    +'<div class="pct '+(bull>=bear?'bull':'bear')+'">'
-      +n1(bull>=bear?bull:bear)+'%</div>'
-    +'<div class="pcb"><span class="bull">\ud83d\udfe2 Bullish '+n1(bull)
-      +'%</span> <span style="color:var(--dim)">|</span> '
-      +'<span class="bear">\ud83d\udd34 Bearish '+n1(bear)+'%</span></div>'
-    +'<div class="bb"><div class="b" style="width:'+w(bull)+'%"></div>'
-      +'<div class="s" style="width:'+w(bear)+'%"></div></div>'
+    +'<div class="pct '+scoreCls+'">'
+      +n1(Math.abs(score))+'</div>'
+    +'<div class="pcb"><span class="bias '+scoreCls+'">\u25b2 '+bias
+      +'</span> <span style="color:var(--dim);font-size:.75em">score '
+      +n1(score)+'</span> <span style="color:var(--dim);font-size:.75em">'
+      +'conf '+confLabel.toLowerCase()+'</span></div>'
+    +'<div class="bb"><div class="b" style="width:'+w(bullPct)+'%"></div>'
+      +'<div class="s" style="width:'+w(bearPct)+'%"></div></div>'
+    +'<div class="conf '+confCls+'">'+confLabel+'</div>'
     +'<div class="dv">'+esc(dv)+'</div>'
     +'</div>';
 }
@@ -1318,15 +1326,13 @@ function renderFinancialJuice(d){
     +'<span class="fd">Indian Date: '+esc(d.india_date_display||d.india_date)
       +'</span>'
     +'<span class="fz">Source: FinancialJuice only &middot; times in '
-      +esc(d.timezone)+' &middot; Bullish + Bearish = 100%</span>'
+      +esc(d.timezone)+' &middot; Bias/score/confidence contract</span>'
     +'</div>'
-    /* Explicit legacy marker: the difference from the main engine must be
-       impossible to miss. */
-    +'<div class="fjlegacy">LEGACY SCORING &mdash; this section uses a separate '
-    +'older scorer and reports a forced Bullish+Bearish=100% split. The engine '
-    +'panels above use the current contract (BULLISH / BEARISH / NO_BIAS with a '
-    +'signed score and confidence) and can report "no view". Do not compare the '
-    +'numbers between this section and the rest of the dashboard.</div>';
+    /* Per-section scoring contract badge - replaces the heavy legacy banner
+       with an inline indicator the trader can glance at. */
+    +'<div class="fjcontract">Scoring: Bias/score/confidence &mdash; signed '
+      +'score (-100..+100), binary bias (BULLISH/BEARISH), confidence '
+      +'(0..1). Comparable with the engine panels above.</div>';
 
   /* The order here is whatever the API returned, which the backend fixes to
      US Market Wrap, Asian Market Wrap, Europe Market Prep, Europe Market
@@ -1338,11 +1344,13 @@ function renderFinancialJuice(d){
         +(d.context.calendar_items||0)+'</b>).</div>';
     }
     d.boxes.forEach(function(b,i){
+    var isStale = b.found && b.age_days && b.age_days > 0;
     var badge = b.found
       ? '<span class="fjbadge '+(b.is_today?'today':'prev')+'">'
         +esc(b.age_label||'')+'</span>'
       : '';
-    html+='<div class="fjbox'+(b.found&&b.is_today?'':' pending')+'">'
+    var boxCls = 'fjbox'+(b.found&&!isStale?'':' pending')+(isStale?' stale':'');
+    html+='<div class="'+boxCls+'">'
       +'<div class="fjbh"><span class="n">'+(i+1)+'</span>'
       +'<span class="nm">'+esc(b.title.toUpperCase())+'</span>'
       +badge
@@ -1361,7 +1369,7 @@ function renderFinancialJuice(d){
       html+='<div class="fjgrid">'+(b.assets||[]).map(fjAsset).join('')+'</div>';
     }else{
       html+='<div class="fjpending">Awaiting today\'s FinancialJuice '
-        +esc(b.title)+' report. Showing an even 50/50 split rather than '
+        +esc(b.title)+' report. Score held at 0.0 (no evidence) rather than '
         +'inventing a signal.</div>';
       html+='<div class="fjgrid">'+(b.assets||[]).map(fjAsset).join('')+'</div>';
     }

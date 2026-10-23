@@ -713,6 +713,23 @@ class Settings(BaseSettings):
     # When a release publishes both m/m and y/y, keep one row per asset.
     calendar_dedupe_mom_yoy: bool = True
 
+    # ---------------- FinancialJuice session analysis ----------------
+    # Ordered list of session keys rendered in the five FJ boxes. Edit to add
+    # or remove session types (e.g. "CRYPTO_SESSION_PREP") without code
+    # changes. Must match keys in SESSION_SIGNATURES in fj_sessions.py.
+    fj_session_order: str = (
+        "US_MARKET_WRAP,ASIAN_MARKET_WRAP,EUROPE_MARKET_PREP,"
+        "EUROPE_MARKET_WRAP,US_SESSION_PREP"
+    )
+    # Asset symbols shown in each FJ box, in render order.
+    fj_assets: str = "XAUUSD,XAGUSD,BTCUSD,EQUITY"
+    # Per-session lookback in Indian days. US Market Wrap may show yesterday's
+    # report; all others are today-only.
+    fj_session_lookback_days: str = (
+        "US_MARKET_WRAP=1,ASIAN_MARKET_WRAP=0,EUROPE_MARKET_PREP=0,"
+        "EUROPE_MARKET_WRAP=0,US_SESSION_PREP=0"
+    )
+
     # Earnings mega-cap / unnamed multipliers (Item 6).
     # Applied in _signal_weight() when event type is an earnings type.
     # Mega-cap names get 2x weight; unnamed/small-cap get 0.3x.
