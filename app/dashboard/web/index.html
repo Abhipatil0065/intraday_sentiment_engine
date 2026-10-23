@@ -1285,8 +1285,12 @@ async function loadMore(){
 function fjAsset(a){
   var score=+a.score||0, conf=+a.confidence||0;
   var bias=(a.bias||'BEARISH').toUpperCase();
-  var bullPct=Math.round(50+score/2);
-  var bearPct=100-bullPct;
+  /* Backward-compatible Bullish/Bearish % from the backend (bull_pct/bear_pct)
+     fall back to score-derived values. These are the numbers traders expect
+     to see on each asset card. */
+  var bullPct=+a.bull_pct||Math.round(50+score/2);
+  var bearPct=+a.bear_pct||Math.round(50-score/2);
+  bearPct=100-bullPct;  // keep the pair summing to exactly 100
   var confLabel=(a.confidence_label||'LOW').toUpperCase();
   var confCls=confLabel==='LOW'?'low':(confLabel==='MEDIUM'?'med':'high');
   var dv=(a.drivers&&a.drivers.length)?a.drivers.slice(0,3).join(' \u00b7 '):'';
@@ -1297,9 +1301,11 @@ function fjAsset(a){
     +'<div class="pct '+scoreCls+'">'
       +n1(Math.abs(score))+'</div>'
     +'<div class="pcb"><span class="bias '+scoreCls+'">\u25b2 '+bias
-      +'</span> <span style="color:var(--dim);font-size:.75em">score '
-      +n1(score)+'</span> <span style="color:var(--dim);font-size:.75em">'
-      +'conf '+confLabel.toLowerCase()+'</span></div>'
+      +'</span> <span class="bull">\ud83d\udfe2 Bullish '+n1(bullPct)+'%</span>'
+      +' <span style="color:var(--dim)">|</span> '
+      +'<span class="bear">\ud83d\udd34 Bearish '+n1(bearPct)+'%</span>'
+      +' <span style="color:var(--dim);font-size:.75em">score '
+      +n1(score)+' conf '+confLabel.toLowerCase()+'</span></div>'
     +'<div class="bb"><div class="b" style="width:'+w(bullPct)+'%"></div>'
       +'<div class="s" style="width:'+w(bearPct)+'%"></div></div>'
     +'<div class="conf '+confCls+'">'+confLabel+'</div>'
