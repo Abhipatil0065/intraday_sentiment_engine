@@ -164,14 +164,35 @@ def foreign_policy_scope(text: str) -> bool:
     return bool(_FOREIGN_RE.search(lowered)) and not _US_RE.search(lowered)
 
 
+# Allowed central banks (only these may reach cards as CB events)
+ALLOWED_CENTRAL_BANKS = (
+    "federal reserve", "fed", "fomc", "powell",
+    "bank of england", "boe", "bailey",
+    "people's bank of china", "pboc",
+    "bank of japan", "boj", "ueda",
+    "european central bank", "ecb", "lagarde",
+)
+
+
+def names_allowed_central_bank(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(tok in lowered for tok in ALLOWED_CENTRAL_BANKS)
+
+
 def policy_event_scale(event_type: str, text: str) -> float:
     """How strongly one detected event reaches the asset, for POLICY events.
 
-    1.0 for every mechanism and for the US central bank; ``FOREIGN_CB_POLICY_SCALE``
-    for a central-bank stance that belongs to somebody else.
+    1.0 for every mechanism and for the US central bank; 0.3 for a foreign
+    central bank not in the allowed list (Fed/BoE/PBoC/BoJ/ECB); 0.30 only
+    as a fallback when scope is unavailable.
     """
     if event_type not in POLICY_EVENT_TYPES:
         return 1.0
     if foreign_policy_scope(text):
-        return FOREIGN_CB_POLICY_SCALE
+        try:
+            if names_allowed_central_bank(text):
+                return 1.0
+        except Exception:
+            pass
+        return 0.3
     return 1.0

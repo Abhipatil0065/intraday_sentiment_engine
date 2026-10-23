@@ -123,7 +123,6 @@ class ArticleAnalysis:
     assets: list[AssetAnalysis] = field(default_factory=list)
 
 
-# ==========================================================================
 # ONE-SHOT POLICY: may this verdict stay in the Section B feed?
 # ==========================================================================
 # The two impact bands that earn storage. Everything below them is noise: it
@@ -135,7 +134,8 @@ HIGH_STRENGTH = (ImpactStrength.HIGH, ImpactStrength.VERY_HIGH)
 
 def is_section_b_verdict(analysis: ArticleAnalysis, *,
                          llm_used: bool = True,
-                         chart_scoped: bool = False) -> bool:
+                         chart_scoped: bool = False,
+                         title: str = "") -> bool:
     """
     True when a classified article may stay in the Section B news feed.
 
@@ -159,8 +159,19 @@ def is_section_b_verdict(analysis: ArticleAnalysis, *,
     that card's news by definition, so the one-shot delete must not remove it
     before it could ever reach the card it belongs to. See
     ``app/analysis/chart_scope.py``.
+
+    NEWS SCOPE (new): a macro print or central-bank event from a non-whitelisted
+    region/bank is dropped at ingest.
     """
     from app.config import settings
+    if getattr(settings, "news_scope_enabled", False) and getattr(settings, "news_scope_drop_out_of_region", False):
+        try:
+            from app.analysis import region_scope
+            ok, _ = region_scope.in_scope(title or "", analysis.report_kind, analysis.category)
+            if not ok:
+                return False
+        except Exception:
+            pass
 
     if not settings.drop_low_impact_articles:
         return True

@@ -1276,7 +1276,8 @@ async def _ingest_article(art: RawArticle, session, stats: IngestStats,
     # no cluster behind. Exempt: the FinancialJuice session reports (Section A)
     # are the prep/wrap boxes, not news, and the policy does not apply.
     if not is_fj and not is_section_b_verdict(
-            analysis, llm_used=llm_ok, chart_scoped=bool(chart_scope)):
+            analysis, llm_used=llm_ok, chart_scoped=bool(chart_scope),
+            title=art.title):
         _drop_low_impact_article(session, row, analysis, stats)
         return None
 

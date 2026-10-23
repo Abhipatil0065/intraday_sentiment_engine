@@ -171,6 +171,17 @@ class Settings(BaseSettings):
     # card anyway - only_high_impact_counts already excludes it - so deleting
     # those too would empty the feed exactly when the model is unavailable.
     only_llm_verdict_may_drop: bool = True
+    # ---------------- news scope (region whitelist for macro/CB events) ----------------
+    # Only macro data prints and central-bank events from USA/UK/China/Japan/EU
+    # reach the cards. Geopolitics/risk/crypto/oil/etc. keep their normal path.
+    news_scope_enabled: bool = Field(
+        default=True, validation_alias="NEWS_SCOPE_ENABLED")
+    # Drop out-of-scope macro prints at ingest (keeps Section B feed clean).
+    news_scope_drop_out_of_region: bool = Field(
+        default=True, validation_alias="NEWS_SCOPE_DROP_OUT_OF_REGION")
+    # Strict: only macro/calendar/CB categories may reach cards (off by default).
+    news_scope_macro_only: bool = Field(
+        default=False, validation_alias="NEWS_SCOPE_MACRO_ONLY")
 
     # ---------------- chart scope (per-chart card isolation) ----------------
     # TradingView serves a PER-SYMBOL news feed: the stories listed on the

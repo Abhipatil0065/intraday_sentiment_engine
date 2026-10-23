@@ -859,7 +859,14 @@ function mnote(cls,title,items,limit){
     : '<ul>'+list.slice(0,limit).map(function(x){
         var t=(typeof x==='string')?x:(x.title||'');
         var c=(typeof x==='string')?null:(+x.contribution||0);
-        return '<li>'+(c===null?'':(c>=0?'<b>+'+c.toFixed(3)+'</b> ':'<b>'+c.toFixed(3)+'</b> '))+esc(t)+'</li>';
+        return '<li>'+(c===null?'':(function(){
+          var dir=(typeof x==='string')?'':(x.direction||'');
+          var s=(+c)||0;
+          if(dir==='BEARISH'){s=-Math.abs(s);}
+          if(dir==='BULLISH'){s=Math.abs(s);}
+          if(s>=0){return '<b>+'+s.toFixed(3)+'</b> ';}
+          return '<b>'+s.toFixed(3)+'</b> ';
+        })())+esc(t)+'</li>';
       }).join('')
       +(extra?('<li>+' +extra+' more</li>'):'')+'</ul>';
   return '<div class="note '+cls+'"><h4>'+title+'</h4>'+body+'</div>';

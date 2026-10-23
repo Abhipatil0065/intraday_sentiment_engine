@@ -371,5 +371,44 @@
     "top_drivers": 3,
     "stale_minutes": 30,
     "max_events_per_asset": 0
+  },
+
+  "news_scope": {
+    "_readme": [
+      "NEWS-PATH mirror of the calendar region whitelist. A macro print or a",
+      "central-bank event may reach a card only from these regions/banks.",
+      "Set enabled false to disable."
+    ],
+    "enabled": true,
+    "allowed_regions": ["USA", "EUR", "CNY", "JPY", "GBP"],
+    "allowed_countries": {
+      "USA": ["us", "u.s.", "usa", "united states", "america", "american",
+              "federal reserve", "fed", "fomc", "powell", "wall street", "usd",
+              "nonfarm", "nfp", "payroll"],
+      "EUR": ["eurozone", "euro area", "ecb", "lagarde", "euro", "germany",
+              "german", "france", "french", "italy", "italian", "spain",
+              "spanish", "netherlands", "dutch", "belgium", "austria", "ireland",
+              "portugal", "greece", "finland", "estonia", "latvia", "lithuania",
+              "luxembourg", "slovenia", "slovakia", "cyprus", "malta", "iceland"],
+      "CNY": ["china", "chinese", "beijing", "pboc", "yuan", "renminbi", "shanghai", "cny"],
+      "JPY": ["japan", "japanese", "boj", "bank of japan", "yen", "nikkei", "jpy"],
+      "GBP": ["uk", "u.k.", "britain", "british", "england", "english", "boe",
+              "bank of england", "sterling", "ftse", "gbp"]
+    },
+    "allowed_central_banks": [
+      "federal reserve", "fed", "fomc", "powell",
+      "bank of england", "boe", "bailey",
+      "people's bank of china", "pboc",
+      "bank of japan", "boj", "ueda",
+      "european central bank", "ecb", "lagarde"
+    ],
+    "blocked_countries": [
+      "mexico", "mexican", "mex", "canada", "canadian", "cad",
+      "australia", "australian", "new zealand", "nz", "turkey", "turkish",
+      "switzerland", "swiss", "norway", "swedish", "sweden", "denmark", "brazil", "india",
+      "south korea", "korean", "russia", "russian", "south africa", "saudi",
+      "israel", "argentina", "chile", "colombia", "peru", "indonesia",
+      "thailand", "vietnam", "philippines", "malaysia", "singapore", "hong kong"
+    ]
   }
 }

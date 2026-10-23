@@ -182,12 +182,21 @@ def _passes_impact_gate(s: WeightedSignal) -> bool:
     if not settings.only_high_impact_counts:
         return True
     if s.strength in STRENGTH_GATE:
-        return True
-    if (s.chart_scope
-            and settings.chart_scope_medium_counts
-            and s.strength is ImpactStrength.MEDIUM):
-        return True
-    return False
+        pass
+    elif not (s.chart_scope
+              and settings.chart_scope_medium_counts
+              and s.strength is ImpactStrength.MEDIUM):
+        return False
+    # REGION SCOPE: macro prints and central-bank events only from USA/UK/China/Japan/EU
+    if getattr(settings, "news_scope_enabled", False):
+        try:
+            from app.analysis import region_scope
+            ok, _ = region_scope.in_scope(s.title, s.report_kind, s.category)
+            if not ok:
+                return False
+        except Exception:
+            pass
+    return True
 
 
 QUALITY_MULT = {
@@ -924,7 +933,7 @@ def _signal_weight(s: WeightedSignal, now: datetime | None) -> float:
         now = now.replace(tzinfo=timezone.utc)
 
     from app.analysis.cue_rules import detect_verification
-    from app.analysis.policy_scope import policy_event_scale
+    from app.analysis.policy_scope import policy_event_scale, POLICY_EVENT_TYPES
     from app.analysis.release_surprise import MAX_SURPRISE_WEIGHT
     from app.analysis.transmission_map import detect_event_types, transmission
     from app.config import (
@@ -1040,14 +1049,25 @@ def _signal_weight(s: WeightedSignal, now: datetime | None) -> float:
                 # the word "hawkish" alone gave any central bank the top
                 # driver slot on the gold card.
                 max_m = 0.0
+                max_m_event = None
                 for et in nonzero:
                     entry = transmission(et, s.asset)
                     # entry.sign != 0 guaranteed by filter
                     magnitude = entry.magnitude * policy_event_scale(et.value, s.title)
                     if magnitude > max_m:
                         max_m = magnitude
+                        max_m_event = et
                 if max_m > 0:
-                    asset_sensitivity = min(1.0, max(0.3, max_m))
+                    # For foreign central-bank policy events, use a lower floor
+                    # to allow deeper collapse. The normal 0.3 floor is for
+                    # "no opinion" on unknown mechanisms; foreign CB stance
+                    # is a known weak channel and should be allowed to collapse.
+                    floor = 0.3
+                    if (max_m_event is not None
+                            and max_m_event.value in POLICY_EVENT_TYPES
+                            and foreign_policy_scope(s.title)):
+                        floor = 0.05
+                    asset_sensitivity = min(1.0, max(floor, max_m))
                 else:
                     # All nonzero events have zero magnitude? Should not happen if magnitude >0 for sign!=0, but just in case.
                     asset_sensitivity = 1.0
