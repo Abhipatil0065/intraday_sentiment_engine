@@ -1295,19 +1295,34 @@ function fjAsset(a){
   var confCls=confLabel==='LOW'?'low':(confLabel==='MEDIUM'?'med':'high');
   var dv=(a.drivers&&a.drivers.length)?a.drivers.slice(0,3).join(' \u00b7 '):'';
   var scoreCls=score>=0?'bull':'bear';
+  /* ONE NUMBER ONLY: a bullish report prints the bullish percentage, a bearish
+     report prints the bearish one. The opposite side is never printed on the
+     card, so the reader sees the call the report actually took, not a split
+     it did not make. A flat tie (score 0, no evidence) prints neither side. */
+  var showBull = bias === 'BULLISH' && score > 0;
+  var showBear = bias === 'BEARISH' && score < 0;
+  var pctHtml = '';
+  if (showBull) {
+    pctHtml = '<span class="bull">\ud83d\udfe2 Bullish '+n1(bullPct)+'%</span>';
+  } else if (showBear) {
+    pctHtml = '<span class="bear">\ud83d\udd34 Bearish '+n1(bearPct)+'%</span>';
+  }
+  var barHtml = '';
+  if (showBull) {
+    barHtml = '<div class="b" style="width:'+w(bullPct)+'%"></div>';
+  } else if (showBear) {
+    barHtml = '<div class="s" style="width:'+w(bearPct)+'%"></div>';
+  }
   return '<div class="fja">'
     +'<div class="an">'+esc(a.label)+' <span style="color:var(--dim)">'
-      +esc(a.asset)+'</span></div>'
+    +esc(a.asset)+'</span></div>'
     +'<div class="pct '+scoreCls+'">'
-      +n1(Math.abs(score))+'</div>'
+    +n1(Math.abs(score))+'</div>'
     +'<div class="pcb"><span class="bias '+scoreCls+'">\u25b2 '+bias
-      +'</span> <span class="bull">\ud83d\udfe2 Bullish '+n1(bullPct)+'%</span>'
-      +' <span style="color:var(--dim)">|</span> '
-      +'<span class="bear">\ud83d\udd34 Bearish '+n1(bearPct)+'%</span>'
-      +' <span style="color:var(--dim);font-size:.75em">score '
-      +n1(score)+' conf '+confLabel.toLowerCase()+'</span></div>'
-    +'<div class="bb"><div class="b" style="width:'+w(bullPct)+'%"></div>'
-      +'<div class="s" style="width:'+w(bearPct)+'%"></div></div>'
+    +'</span> '+pctHtml
+    +' <span style="color:var(--dim);font-size:.75em">score '
+    +n1(score)+' conf '+confLabel.toLowerCase()+'</span></div>'
+    +'<div class="bb">'+barHtml+'</div>'
     +'<div class="conf '+confCls+'">'+confLabel+'</div>'
     +'<div class="dv">'+esc(dv)+'</div>'
     +'</div>';
