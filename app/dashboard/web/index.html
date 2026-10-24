@@ -336,10 +336,23 @@
   .calh{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .calt{font-size:11.5px;font-weight:700;color:var(--txt)}
   .calm{font-size:10px;color:var(--dim);letter-spacing:.3px}
-   .cali.high{background:#d9534f;color:#fff;border-color:#d9534f;font-weight:bold}
-   .cali.medium{background:#f0ad4e;color:#000;border-color:#f0ad4e;font-weight:bold}
-   .cali.low{background:var(--panel2);color:var(--dim)}
-   .calimp{font-size:8px;color:var(--dim);padding:1px 4px;border:1px dotted var(--line);border-radius:3px;text-transform:uppercase;letter-spacing:.5px}
+   /* Calendar impact / importance buttons - pill style, matching the top
+      status strip (LLM: LIVE, Pipeline: RUNNING, ...). Clicking one filters
+      the calendar to that importance band. */
+   .calbtn{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;
+           border-radius:20px;font-weight:700;letter-spacing:.4px;
+           white-space:nowrap;border:1px solid transparent;font-size:8px;
+           cursor:pointer;text-transform:uppercase}
+   .calbtn.high{background:rgba(248,81,73,.15);border-color:rgba(248,81,73,.45);
+                color:#fca5a5}
+   .calbtn.medium{background:rgba(240,180,41,.15);border-color:rgba(240,180,41,.45);
+                  color:#f0ad4e}
+   .calbtn.low{background:rgba(156,163,175,.15);border-color:rgba(156,163,175,.45);
+               color:#d1d5db}
+   .calbtn.holiday{background:rgba(110,118,129,.15);border-color:rgba(110,118,129,.45);
+                   color:#6e7681}
+   .calbtn:hover:not([disabled]){border-color:var(--dim);color:var(--txt)}
+   .calbtn:disabled{opacity:.55;cursor:default}
    .cal-affects{font-size:8px;color:var(--dim);padding:1px 4px;border:1px solid var(--line);border-radius:3px;letter-spacing:.5px;text-transform:uppercase}
    .calfilters{display:flex;gap:6px;margin-bottom:8px}
    .calfilters button{font-size:10px;padding:3px 10px;border:1px solid var(--line);background:var(--panel2);color:var(--dim);border-radius:3px;cursor:pointer;font-weight:600;letter-spacing:.5px}
@@ -1059,9 +1072,9 @@ function calRow(e){
     }catch(_){ until=' at '+when; }
   }
   var impactClass = String(e.impact || '').toLowerCase();
-  var impactBadge = '<span class="cali ' + impactClass + '">' + esc(e.impact || '') + '</span>';
+  var impactBadge = '<button type="button" class="calbtn ' + impactClass + '" data-cal-type="impact" data-cal-value="' + esc(String(e.impact || '')) + '">' + esc(String(e.impact || '').toUpperCase()) + '</button>';
   var importanceBadge = (e.importance && String(e.importance).toLowerCase() !== String(e.impact || '').toLowerCase())
-    ? '<span class="calimp">' + esc(e.importance) + ' imp.</span>'
+    ? '<button type="button" class="calbtn ' + String(e.importance).toLowerCase() + '" data-cal-type="importance" data-cal-value="' + esc(String(e.importance)) + '">' + esc(String(e.importance)) + ' IMP</button>'
     : '';
   var affectsTag = (e.affects && e.affects.length)
     ? '<span class="cal-affects">' + e.affects.map(esc).join(' · ') + '</span>'
@@ -1101,6 +1114,8 @@ function calendarBlock(rows){
   var filters = '<div class="calfilters">'
     + '<button data-cal-filter="all">ALL</button>'
     + '<button data-cal-filter="high" class="active">HIGH</button>'
+    + '<button data-cal-filter="medium">MEDIUM</button>'
+    + '<button data-cal-filter="low">LOW</button>'
     + '<button data-cal-filter="next2h">NEXT 2H</button>'
     + '</div>';
   if(!rows||!rows.length){
@@ -1925,7 +1940,27 @@ async function labelBias(asset,outcome){
 
 document.addEventListener('click', function(ev){
   var btn = ev.target.closest('[data-cal-filter]');
-  if (!btn) return;
+  if (!btn) {
+    /* Clicking an importance button inside a calendar row (HIGH / MEDIUM / LOW
+       / VERY_HIGH) filters the calendar to that band, the same way the filter
+       pills above the calendar do. */
+    var calBtn = ev.target.closest('[data-cal-type]');
+    if (calBtn) {
+      var val = String(calBtn.getAttribute('data-cal-value') || '').toUpperCase();
+      var filter = (val === 'HIGH' || val === 'VERY_HIGH') ? 'high'
+        : (val === 'MEDIUM') ? 'medium'
+        : (val === 'LOW') ? 'low' : 'all';
+      var target = document.querySelector('[data-cal-filter="' + filter + '"]');
+      if (target) {
+        document.querySelectorAll('[data-cal-filter]').forEach(function(b){
+          b.classList.toggle('active', b === target);
+        });
+        applyCalendarFilter(filter);
+      }
+      return;
+    }
+    return;
+  }
   var filter = btn.dataset.calFilter;
   document.querySelectorAll('[data-cal-filter]').forEach(function(b){
     b.classList.toggle('active', b === btn);
@@ -1940,10 +1975,16 @@ function applyCalendarFilter(filter){
   var now = Date.now();
   rows.forEach(function(row){
     var show = true;
-    if (filter === 'high') {
-      var impact = (row.dataset.impact || '').toLowerCase();
-      var importance = (row.dataset.importance || '').toLowerCase();
-      show = impact === 'high' || importance === 'high';
+    var impact = (row.dataset.impact || '').toLowerCase();
+    var importance = (row.dataset.importance || '').toLowerCase();
+    if (filter === 'all') {
+      show = true;
+    } else if (filter === 'high') {
+      show = impact === 'high' || importance === 'high' || importance === 'very_high';
+    } else if (filter === 'medium') {
+      show = impact === 'medium' || importance === 'medium';
+    } else if (filter === 'low') {
+      show = impact === 'low' || importance === 'low';
     } else if (filter === 'next2h') {
       var when = parseInt(row.dataset.when || '0', 10);
       show = when > now && (when - now) < 2 * 60 * 60 * 1000;
