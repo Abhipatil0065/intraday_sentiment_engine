@@ -233,6 +233,27 @@ def is_paused() -> bool:
     return _engine_paused
 
 
+def set_boot_in_progress(boot: bool) -> None:
+    """Mirror the boot-sequence state into the pipeline module.
+
+    The API owns the boot sequence; the pipeline owns the freshness rule.
+    Mirroring the flag here lets ``compute_stale`` tell "the engine is
+    intentionally busy booting (prime tick + overnight catch-up)" apart
+    from "the engine died", which is the difference between a transient
+    boot window and a genuine STALE fault. During boot the scheduler is
+    paused so no scheduled tick can complete, so ``last_successful_tick``
+    is not refreshed - reporting STALE during that intentional window
+    would be a false alarm.
+    """
+    global _boot_in_progress
+    _boot_in_progress = bool(boot)
+
+
+def is_boot_in_progress() -> bool:
+    """True while the engine's boot sequence (prime tick + catch-up) is running."""
+    return _boot_in_progress
+
+
 def _heartbeat_age_seconds(last_poll_ok: str | None) -> float | None:
     """Seconds since the pipeline last heartbeated, or None if unknown."""
     if not last_poll_ok:
@@ -271,6 +292,7 @@ _tick_generation: int = 0
 # engine is NOT a stale engine: the dashboard shows the PAUSED banner, so the
 # freshness check must not also raise the red STALE banner over it.
 _engine_paused: bool = False
+_boot_in_progress: bool = False
 _last_regime = None  # RegimeAssessment from the most recent recompute
 # Economic-calendar signals from the most recent fetch, shared with the API.
 _calendar_signals: list[CalendarSignal] = []
@@ -755,6 +777,14 @@ def compute_stale(
     ``parse_error`` (stale) or ``None`` (healthy).
     """
     if _engine_paused:
+        return False, None
+
+    # The boot sequence (prime tick + overnight catch-up) is intentional
+    # work, not a failure. The scheduler is paused during it so no
+    # scheduled tick can complete and refresh ``last_successful_tick``;
+    # reporting STALE here would be a false alarm that clears on its own
+    # once boot finishes and the next tick runs.
+    if _boot_in_progress:
         return False, None
 
     state = runtime_state()

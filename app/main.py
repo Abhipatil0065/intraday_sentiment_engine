@@ -209,6 +209,7 @@ async def _boot_sequence() -> None:
     """
     global _boot_in_progress
     _boot_in_progress = True
+    pipeline.set_boot_in_progress(True)
     try:
         await _scheduled_tick()
         if settings.morning_brief_on_boot and not _engine_paused:
@@ -220,6 +221,7 @@ async def _boot_sequence() -> None:
         log.warning("Boot sequence failed: %s", exc)
     finally:
         _boot_in_progress = False
+        pipeline.set_boot_in_progress(False)
         _apply_pause_to_scheduler()
 
 
