@@ -1699,7 +1699,7 @@ function renderRegionalBias(rb){
       var c=+r.contribution||0;
       return '<span>'+esc(r.code)+' <b>'+(c>=0?'+':'')+n1(c)+'</b></span>';
     }).join('');
-    var mfoot=foot?'<div class="mfoot">'+foot+'</div>':'';
+    var mfoot=foot?'<div class="mfoot"><span style="color:var(--dim);font-size:9px;letter-spacing:1px;margin-right:8px">REGION CONTRIBUTION</span>'+foot+'</div>':'';
     var mscore='<div class="mscore">raw <b>'+(score>=0?'+':'')+n1(score)+'</b></div>';
     var risk='';
     if(a.event_risk&&a.event_risk.active){
