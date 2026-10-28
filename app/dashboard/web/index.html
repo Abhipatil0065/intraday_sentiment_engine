@@ -529,12 +529,16 @@
        font-variant-numeric:tabular-nums}
   .rba .bpct .side.bull .fig{color:var(--bull)}
   .rba .bpct .side.bear .fig{color:var(--bear)}
-  /* drivers */
-  .rba .mdrv{margin-top:6px}
+  /* drivers - split bullish / bearish */
+  .rba .mdrv{margin-top:6px;display:flex;flex-direction:column;gap:5px}
   .rba .mdrv .note{background:var(--panel2);border:1px solid var(--line);border-radius:7px;
        padding:8px 11px}
   .rba .mdrv .note h4{font-size:9.5px;letter-spacing:1.5px;color:var(--dim);font-weight:700;
        margin-bottom:5px}
+  .rba .mdrv .note.bull{border-color:rgba(46,160,67,.55)}
+  .rba .mdrv .note.bear{border-color:rgba(248,81,73,.55)}
+  .rba .mdrv .note h4.bull{color:var(--bull)}
+  .rba .mdrv .note h4.bear{color:var(--bear)}
   .rba .mdrv .note ul{list-style:none;display:flex;flex-direction:column;gap:4px}
   .rba .mdrv .note li{font-size:10.5px;line-height:1.4;color:var(--dim);
        padding-left:8px;border-left:2px solid var(--line)}
@@ -1651,14 +1655,21 @@ function renderRegionalBias(rb){
       +'<div class="side bear">'
       +'<span class="cap">BEARISH</span>'
       +'<span class="fig">'+bear.toFixed(0)+'%</span></div></div>';
-    var drivers=(a.top_drivers||[]).map(function(d){
+    var bullDrivers=(a.top_drivers||[]).filter(function(d){return +d.contribution>=0;});
+    var bearDrivers=(a.top_drivers||[]).filter(function(d){return +d.contribution<0;});
+    var bullList=bullDrivers.map(function(d){
       var c=+d.contribution||0;
-      return '<li>'+(c>=0?('<b>+'+n1(c)+'</b> '):('<b>'+n1(c)+'</b> '))
-        +esc(d.title)+' <span class="reg">'+esc(d.region_code)+'</span></li>';
+      return '<li><b>+'+n1(c)+'</b> '+esc(d.title)+' <span class="reg">'+esc(d.region_code)+'</span></li>';
+    }).join('');
+    var bearList=bearDrivers.map(function(d){
+      var c=+d.contribution||0;
+      return '<li><b>'+n1(c)+'</b> '+esc(d.title)+' <span class="reg">'+esc(d.region_code)+'</span></li>';
     }).join('');
     var drv='<div class="mdrv">'
-      +(drivers?'<div class="note"><h4>TOP DRIVERS</h4><ul>'+drivers+'</ul></div>'
-        :'<div class="note"><h4>TOP DRIVERS</h4><div class="none">No scored release.</div></div>')
+      +'<div class="note bull"><h4 class="bull">BULLISH DRIVERS</h4>'
+      +(bullList?'<ul>'+bullList+'</ul>':'<div class="none">None.</div>')+'</div>'
+      +'<div class="note bear"><h4 class="bear">BEARISH DRIVERS</h4>'
+      +(bearList?'<ul>'+bearList+'</ul>':'<div class="none">None.</div>')+'</div>'
       +'</div>';
     var foot=(a.region_breakdown||[]).map(function(r){
       var c=+r.contribution||0;
