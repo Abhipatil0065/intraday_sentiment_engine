@@ -890,7 +890,13 @@ function msplit(b,asset){
      of the split is used only when the payload carries no bias. */
   var side=(b&&b.bias==='BULLISH')?'BULLISH':(b&&b.bias==='BEARISH')?'BEARISH':dominantSide(d);
   var f=trackFlip(asset||(b&&b.asset),side,b&&b.bias_since_utc);
-  var bullLead=(f.side==='BULLISH'), bearLead=(f.side==='BEARISH');
+  /* The BIGGER box (`lead`) follows the DOMINANT side of the SPLIT - whichever
+     percentage is over 50% - never the badge. A card whose bias was held or
+     flipped against the day's aggregate must not paint the losing side's box
+     larger just because the badge names it. The flip clock (`f`) still tracks
+     the verdict internally; only the box width follows the evidence split. */
+  var ds=dominantSide(d);
+  var bullLead=(ds==='BULLISH'), bearLead=(ds==='BEARISH');
   var bullAt=bullLead?flipTimeLabel(f.at):'';
   var bearAt=bearLead?flipTimeLabel(f.at):'';
   return '<div class="bpct">'
