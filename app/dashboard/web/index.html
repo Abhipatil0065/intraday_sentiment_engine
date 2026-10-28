@@ -531,7 +531,8 @@
   .rba .bpct .side.bear .fig{color:var(--bear)}
   /* drivers - split bullish / bearish, each under its own side box */
   .rba .sidepair{display:flex;gap:10px;margin-top:8px}
-  .rba .sidecol{flex:1;display:flex;flex-direction:column;gap:6px}
+  .rba .sidecol{flex:1;display:flex;flex-direction:column;gap:6px;transition:flex-grow .35s ease}
+  .rba .sidecol.lead{flex-grow:1.45}
   .rba .bpct-side{display:flex;flex-direction:column;align-items:center;gap:2px;
        padding:7px 6px;border-radius:8px;border:1px solid transparent;background:var(--panel2)}
   .rba .bpct-side.bull{border-color:rgba(46,160,67,.55);background:rgba(46,160,67,.14)}
@@ -1667,6 +1668,8 @@ function renderRegionalBias(rb){
       +'<span class="be" style="width:'+bear.toFixed(1)+'%"></span></div>';
     var bullDrivers=(a.top_drivers||[]).filter(function(d){return +d.contribution>=0;});
     var bearDrivers=(a.top_drivers||[]).filter(function(d){return +d.contribution<0;});
+    var bullLead=bull>=bear?' lead':'';
+    var bearLead=bear>bull?' lead':'';
     var bullList=bullDrivers.map(function(d){
       var c=+d.contribution||0;
       return '<li><b>+'+n1(c)+'</b> '+esc(d.title)+' <span class="reg">'+esc(d.region_code)+'</span></li>';
@@ -1676,13 +1679,13 @@ function renderRegionalBias(rb){
       return '<li><b>'+n1(c)+'</b> '+esc(d.title)+' <span class="reg">'+esc(d.region_code)+'</span></li>';
     }).join('');
     var sidepair='<div class="sidepair">'
-      +'<div class="sidecol bull">'
+      +'<div class="sidecol bull'+bullLead+'">'
       +'<div class="bpct-side bull"><span class="cap">BULLISH</span>'
       +'<span class="fig">'+bull.toFixed(0)+'%</span></div>'
       +'<div class="drivers bull"><h4>BULLISH DRIVERS</h4>'
       +(bullList?'<ul>'+bullList+'</ul>':'<div class="none">None.</div>')+'</div>'
       +'</div>'
-      +'<div class="sidecol bear">'
+      +'<div class="sidecol bear'+bearLead+'">'
       +'<div class="bpct-side bear"><span class="cap">BEARISH</span>'
       +'<span class="fig">'+bear.toFixed(0)+'%</span></div>'
       +'<div class="drivers bear"><h4>BEARISH DRIVERS</h4>'
