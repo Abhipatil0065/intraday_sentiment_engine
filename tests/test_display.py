@@ -269,9 +269,9 @@ def test_js_fallback_mirrors_the_python_rule():
 def test_js_fallback_uses_the_ratio_of_the_totals():
     """
     The fallback must split the evidence the same way the server does - by the
-    RATIO of the two captured totals, not by the score - and must withhold the
-    badge's percentage exactly like the server when the verdict does not own
-    the split.
+    RATIO of the two captured totals - and must follow the dominant side of the
+    split for the label (so a held badge against a flipped aggregate shows the
+    side that actually leads), exactly as the server does.
     """
     html = _html()
     disp_js = html.split("function disp(", 1)[1].split("function verdictClass", 1)[0]
@@ -279,9 +279,11 @@ def test_js_fallback_uses_the_ratio_of_the_totals():
         "the fallback must split on the two captured totals")
     assert "Math.round(tb/tt*100)" in disp_js, (
         "the fallback must use their ratio")
-    assert "pct:owns?" in disp_js, (
-        "the fallback must withhold the percentage when the verdict "
-        "contradicts the split, exactly as the server does")
+    assert "Math.max(bp,sp)" in disp_js, (
+        "the fallback must print the dominant side's percentage")
+    assert "bp>sp?'BULLISH':'BEARISH'" in disp_js, (
+        "the fallback must switch the label to the dominant side when the "
+        "badge contradicts the split")
 
 
 def test_js_fallback_matches_python_split_arithmetic():
@@ -782,16 +784,16 @@ def test_the_ratio_replaces_the_score_projection():
     assert (d["bull_pct"], d["bear_pct"]) == (70, 30)
 
 
-def test_a_verdict_against_the_aggregate_keeps_the_badge_and_withholds_the_pct():
+def test_a_verdict_against_the_aggregate_follows_the_split():
     """
     A fresh Tier-1 release flips the badge while the day's aggregate still
-    leans the other way. The badge keeps the verdict (that call must stay
-    visible), the boxes keep the evidence, and the percentage is withheld -
-    never faked into a 49/51.
+    leans the other way. The verdict now follows the dominant side of the
+    split so the chip matches the boxes; the percentage is never withheld
+    or faked into a 49/51.
     """
     d = to_display(39.8, "BEARISH", bull=GOLD_BULL, bear=GOLD_BEAR)
-    assert d["label"] == "BEARISH"
-    assert d["pct"] is None
+    assert d["label"] == "BULLISH"
+    assert d["pct"] == 70
     assert (d["bull_pct"], d["bear_pct"]) == (70, 30)
 
 

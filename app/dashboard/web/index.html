@@ -712,11 +712,15 @@ function disp(b){
    if(tt>0){
      var bp=Math.round(tb/tt*100), sp=100-bp;
      var vb=(b.bias||'');
-     if(vb==='BULLISH'||vb==='BEARISH'){
-       var owns=(vb==='BULLISH')?(bp>=sp):(sp>=bp);
-       return {label:vb, pct:owns?(vb==='BULLISH'?bp:sp):null,
-               bull_pct:bp, bear_pct:sp};
-     }
+      if(vb==='BULLISH'||vb==='BEARISH'){
+        var owns=(vb==='BULLISH')?(bp>=sp):(sp>=bp);
+        /* The verdict now follows the evidence split: when the badge does not
+           own the split (e.g. a held bias against a flipped aggregate), the
+           label switches to the dominant side so the chip matches the boxes. */
+        return {label:owns?vb:(bp>sp?'BULLISH':'BEARISH'),
+                pct:Math.max(bp,sp),
+                bull_pct:bp, bear_pct:sp};
+      }
      var rl=bp>50?'BULLISH':'BEARISH';
      return {label:rl, pct:rl==='BULLISH'?bp:sp, bull_pct:bp, bear_pct:sp};
    }

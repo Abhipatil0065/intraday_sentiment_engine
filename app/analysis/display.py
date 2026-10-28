@@ -261,8 +261,8 @@ def to_display(score: float, bias, confidence: float | None = None,
                 "bear_pct": bear_pct,
             }
         return {
-            "label": name,
-            "pct": None,
+            "label": BULLISH if bull_pct > bear_pct else BEARISH,
+            "pct": max(bull_pct, bear_pct),
             "bull_pct": bull_pct,
             "bear_pct": bear_pct,
         }
