@@ -35,7 +35,9 @@
         "consumer confidence", "umich sentiment", "umich",
         "university of michigan", "university michigan",
         "treasury", "yield", "10-year", "2-year", "30-year",
-        "speaks", "speech", "testimony", "press conference", "remarks"
+        "speaks", "speech", "testimony", "press conference", "remarks",
+        "crude", "oil", "eia", "api", "opec", "petroleum", "inventory",
+        "rig count", "gasoline", "distillate"
       ],
       "exclude_keywords": [
         "bid-to-cover", "high yield", "bill", "bond", "tips", "auction"
@@ -291,24 +293,24 @@
       "Signed multiplier per scenario and asset, from -1 to +1.",
       "The sign says how a scenario of that kind reaches the asset.",
       "USA hawkish (hot CPI, strong NFP, hawkish Fed) is a stronger dollar:",
-      "gold/silver/bitcoin down, equities down (mild).",
-      "A hawkish ECB or BOE weakens the dollar: gold/silver up, equities down.",
-      "A hawkish BOJ is yen strength and carry-trade unwind risk: bitcoin and",
-      "equities down, gold up. Strong China data is silver-positive.",
-      "Assets: XAUUSD (gold), XAGUSD (silver), BTCUSD (bitcoin), EQUITY (equities)."
+      "gold/silver/bitcoin down, equities down (mild), oil down (USD-priced).",
+      "A hawkish ECB or BOE weakens the dollar: gold/silver up, oil up (mild).",
+      "A hawkish BOJ is yen strength and carry-trade unwind risk: oil down.",
+      "Strong China data is oil-demand positive (silver and oil most sensitive).",
+      "Assets: XAUUSD (gold), XAGUSD (silver), BTCUSD (bitcoin), EQUITY (equities), USOIL (crude oil)."
     ],
-    "USD_HAWKISH":    {"XAUUSD": -0.90, "XAGUSD": -0.85, "BTCUSD": -0.80, "EQUITY": -0.30},
-    "USD_DOVISH":     {"XAUUSD":  0.90, "XAGUSD":  0.85, "BTCUSD":  0.80, "EQUITY":  0.40},
-    "ECB_HAWKISH":    {"XAUUSD":  0.50, "XAGUSD":  0.45, "BTCUSD":  0.20, "EQUITY": -0.25},
-    "ECB_DOVISH":     {"XAUUSD": -0.50, "XAGUSD": -0.45, "BTCUSD": -0.20, "EQUITY":  0.25},
-    "BOE_HAWKISH":    {"XAUUSD":  0.45, "XAGUSD":  0.40, "BTCUSD":  0.15, "EQUITY": -0.20},
-    "BOE_DOVISH":     {"XAUUSD": -0.45, "XAGUSD": -0.40, "BTCUSD": -0.15, "EQUITY":  0.20},
-    "BOJ_HAWKISH":    {"XAUUSD":  0.40, "XAGUSD":  0.35, "BTCUSD": -0.60, "EQUITY": -0.50},
-    "BOJ_DOVISH":     {"XAUUSD": -0.40, "XAGUSD": -0.35, "BTCUSD":  0.50, "EQUITY":  0.40},
-    "CHINA_STRONG":   {"XAUUSD":  0.30, "XAGUSD":  0.70, "BTCUSD":  0.30, "EQUITY":  0.60},
-    "CHINA_WEAK":     {"XAUUSD":  0.25, "XAGUSD": -0.60, "BTCUSD": -0.20, "EQUITY": -0.60},
-    "PBOC_EASING":    {"XAUUSD":  0.35, "XAGUSD":  0.60, "BTCUSD":  0.45, "EQUITY":  0.65},
-    "PBOC_TIGHTENING":{"XAUUSD": -0.30, "XAGUSD": -0.50, "BTCUSD": -0.35, "EQUITY": -0.55}
+    "USD_HAWKISH":    {"XAUUSD": -0.90, "XAGUSD": -0.85, "BTCUSD": -0.80, "EQUITY": -0.30, "USOIL": -0.60},
+    "USD_DOVISH":     {"XAUUSD":  0.90, "XAGUSD":  0.85, "BTCUSD":  0.80, "EQUITY":  0.40, "USOIL":  0.60},
+    "ECB_HAWKISH":    {"XAUUSD":  0.50, "XAGUSD":  0.45, "BTCUSD":  0.20, "EQUITY": -0.25, "USOIL":  0.30},
+    "ECB_DOVISH":     {"XAUUSD": -0.50, "XAGUSD": -0.45, "BTCUSD": -0.20, "EQUITY":  0.25, "USOIL": -0.30},
+    "BOE_HAWKISH":    {"XAUUSD":  0.45, "XAGUSD":  0.40, "BTCUSD":  0.15, "EQUITY": -0.20, "USOIL":  0.25},
+    "BOE_DOVISH":     {"XAUUSD": -0.45, "XAGUSD": -0.40, "BTCUSD": -0.15, "EQUITY":  0.20, "USOIL": -0.25},
+    "BOJ_HAWKISH":    {"XAUUSD":  0.40, "XAGUSD":  0.35, "BTCUSD": -0.60, "EQUITY": -0.50, "USOIL": -0.40},
+    "BOJ_DOVISH":     {"XAUUSD": -0.40, "XAGUSD": -0.35, "BTCUSD":  0.50, "EQUITY":  0.40, "USOIL":  0.40},
+    "CHINA_STRONG":   {"XAUUSD":  0.30, "XAGUSD":  0.70, "BTCUSD":  0.30, "EQUITY":  0.60, "USOIL":  0.70},
+    "CHINA_WEAK":     {"XAUUSD":  0.25, "XAGUSD": -0.60, "BTCUSD": -0.20, "EQUITY": -0.60, "USOIL": -0.60},
+    "PBOC_EASING":    {"XAUUSD":  0.35, "XAGUSD":  0.60, "BTCUSD":  0.45, "EQUITY":  0.65, "USOIL":  0.50},
+    "PBOC_TIGHTENING":{"XAUUSD": -0.30, "XAGUSD": -0.50, "BTCUSD": -0.35, "EQUITY": -0.55, "USOIL": -0.45}
   },
 
   "dedupe": {
