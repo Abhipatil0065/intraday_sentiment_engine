@@ -535,9 +535,9 @@ def test_the_payload_carries_scores_regions_and_upcoming_events():
          _event("FOMC Rate Decision", "USD", when=NOW + timedelta(hours=3))],
         now=NOW)
     payload = to_payload(result)
-    assert len(payload["assets"]) == 4
+    assert len(payload["assets"]) == 5
     assert [a["asset"] for a in payload["assets"]] == [
-        "XAUUSD", "XAGUSD", "BTCUSD", "EQUITY"]
+        "XAUUSD", "XAGUSD", "BTCUSD", "EQUITY", "USOIL"]
     assert payload["upcoming"][0]["countdown"].startswith("in ")
     assert payload["display_timezone"]
     assert payload["generated_at_utc"].endswith("+00:00")
@@ -581,7 +581,7 @@ def test_the_panel_payload_is_well_formed_even_without_calendar_data():
 
     payload = pipeline.regional_bias_payload()
     assert [a["asset"] for a in payload["assets"]] == [
-        "XAUUSD", "XAGUSD", "BTCUSD", "EQUITY"]
+        "XAUUSD", "XAGUSD", "BTCUSD", "EQUITY", "USOIL"]
     assert payload["upcoming"] == []
     assert payload["error"] == ""
     assert "stale_reason" in payload
@@ -632,6 +632,6 @@ def test_the_dashboard_endpoint_carries_the_regional_bias_section():
     assert "regional_bias" in body
     panel = body["regional_bias"]
     assert [a["asset"] for a in panel["assets"]] == [
-        "XAUUSD", "XAGUSD", "BTCUSD", "EQUITY"]
+        "XAUUSD", "XAGUSD", "BTCUSD", "EQUITY", "USOIL"]
     assert "upcoming" in panel
     assert "last_updated_local" in panel

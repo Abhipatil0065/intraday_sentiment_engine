@@ -79,10 +79,10 @@ from app.models.enums import Asset
 
 log = get_logger(__name__)
 
-#: The four instruments this engine scores. The brief's "global equities" is
-#: the engine's existing EQUITY card.
+#: The five instruments this engine scores. The brief's "global equities" is
+#: the engine's existing EQUITY card; OIL is WTI crude.
 PANEL_ASSETS: tuple[Asset, ...] = (
-    Asset.GOLD, Asset.SILVER, Asset.BITCOIN, Asset.EQUITY,
+    Asset.GOLD, Asset.SILVER, Asset.BITCOIN, Asset.EQUITY, Asset.OIL,
 )
 
 #: Panel labels. Asset.EQUITY is labelled "S&P 500" everywhere else in the
@@ -92,6 +92,7 @@ PANEL_LABELS: dict[Asset, str] = {
     Asset.SILVER: "SILVER",
     Asset.BITCOIN: "BITCOIN",
     Asset.EQUITY: "EQUITIES",
+    Asset.OIL: "OIL",
 }
 
 DEFAULT_LABEL_NAMES = {
