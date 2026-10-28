@@ -529,19 +529,30 @@
        font-variant-numeric:tabular-nums}
   .rba .bpct .side.bull .fig{color:var(--bull)}
   .rba .bpct .side.bear .fig{color:var(--bear)}
-  /* drivers - split bullish / bearish */
-  .rba .mdrv{margin-top:6px;display:flex;flex-direction:column;gap:5px}
-  .rba .mdrv .note{background:var(--panel2);border:1px solid var(--line);border-radius:7px;
-       padding:8px 11px}
-  .rba .mdrv .note h4{font-size:9.5px;letter-spacing:1.5px;color:var(--dim);font-weight:700;
-       margin-bottom:5px}
-  .rba .mdrv .note.bull{border-color:rgba(46,160,67,.55)}
-  .rba .mdrv .note.bear{border-color:rgba(248,81,73,.55)}
-  .rba .mdrv .note h4.bull{color:var(--bull)}
-  .rba .mdrv .note h4.bear{color:var(--bear)}
-  .rba .mdrv .note ul{list-style:none;display:flex;flex-direction:column;gap:4px}
-  .rba .mdrv .note li{font-size:10.5px;line-height:1.4;color:var(--dim);
+  /* drivers - split bullish / bearish, each under its own side box */
+  .rba .sidepair{display:flex;gap:10px;margin-top:8px}
+  .rba .sidecol{flex:1;display:flex;flex-direction:column;gap:6px}
+  .rba .bpct-side{display:flex;flex-direction:column;align-items:center;gap:2px;
+       padding:7px 6px;border-radius:8px;border:1px solid transparent;background:var(--panel2)}
+  .rba .bpct-side.bull{border-color:rgba(46,160,67,.55);background:rgba(46,160,67,.14)}
+  .rba .bpct-side.bear{border-color:rgba(248,81,73,.55);background:rgba(248,81,73,.14)}
+  .rba .bpct-side .cap{font-size:9px;letter-spacing:1.2px;color:var(--dim)}
+  .rba .bpct-side .fig{font-size:18px;font-weight:700;line-height:1.1;
+       font-variant-numeric:tabular-nums}
+  .rba .bpct-side.bull .fig{color:var(--bull)}
+  .rba .bpct-side.bear .fig{color:var(--bear)}
+  .rba .drivers{display:flex;flex-direction:column;gap:4px}
+  .rba .drivers h4{font-size:9.5px;letter-spacing:1.5px;font-weight:700;
+       margin:0 0 4px}
+  .rba .drivers.bull h4{color:var(--bull)}
+  .rba .drivers.bear h4{color:var(--bear)}
+  .rba .drivers ul{list-style:none;margin:0;padding:0;display:flex;
+       flex-direction:column;gap:4px}
+  .rba .drivers li{font-size:10.5px;line-height:1.4;color:var(--dim);
        padding-left:8px;border-left:2px solid var(--line)}
+  .rba .drivers.bull li{border-left-color:var(--bull)}
+  .rba .drivers.bear li{border-left-color:var(--bear)}
+  .rba .drivers .none{font-size:10px;color:var(--dim);font-style:italic}
   .rba .mfoot{display:flex;flex-wrap:wrap;gap:12px;margin-top:8px;
        font-size:10px;color:var(--dim)}
   .rba .mfoot b{color:var(--txt)}
@@ -1648,13 +1659,6 @@ function renderRegionalBias(rb){
     var bar='<div class="bar">'
       +'<span class="bu" style="width:'+bull.toFixed(1)+'%"></span>'
       +'<span class="be" style="width:'+bear.toFixed(1)+'%"></span></div>';
-    var boxes='<div class="bpct">'
-      +'<div class="side bull">'
-      +'<span class="cap">BULLISH</span>'
-      +'<span class="fig">'+bull.toFixed(0)+'%</span></div>'
-      +'<div class="side bear">'
-      +'<span class="cap">BEARISH</span>'
-      +'<span class="fig">'+bear.toFixed(0)+'%</span></div></div>';
     var bullDrivers=(a.top_drivers||[]).filter(function(d){return +d.contribution>=0;});
     var bearDrivers=(a.top_drivers||[]).filter(function(d){return +d.contribution<0;});
     var bullList=bullDrivers.map(function(d){
@@ -1665,12 +1669,19 @@ function renderRegionalBias(rb){
       var c=+d.contribution||0;
       return '<li><b>'+n1(c)+'</b> '+esc(d.title)+' <span class="reg">'+esc(d.region_code)+'</span></li>';
     }).join('');
-    var drv='<div class="mdrv">'
-      +'<div class="note bull"><h4 class="bull">BULLISH DRIVERS</h4>'
+    var sidepair='<div class="sidepair">'
+      +'<div class="sidecol bull">'
+      +'<div class="bpct-side bull"><span class="cap">BULLISH</span>'
+      +'<span class="fig">'+bull.toFixed(0)+'%</span></div>'
+      +'<div class="drivers bull"><h4>BULLISH DRIVERS</h4>'
       +(bullList?'<ul>'+bullList+'</ul>':'<div class="none">None.</div>')+'</div>'
-      +'<div class="note bear"><h4 class="bear">BEARISH DRIVERS</h4>'
+      +'</div>'
+      +'<div class="sidecol bear">'
+      +'<div class="bpct-side bear"><span class="cap">BEARISH</span>'
+      +'<span class="fig">'+bear.toFixed(0)+'%</span></div>'
+      +'<div class="drivers bear"><h4>BEARISH DRIVERS</h4>'
       +(bearList?'<ul>'+bearList+'</ul>':'<div class="none">None.</div>')+'</div>'
-      +'</div>';
+      +'</div></div>';
     var foot=(a.region_breakdown||[]).map(function(r){
       var c=+r.contribution||0;
       return '<span>'+esc(r.code)+' <b>'+(c>=0?'+':'')+n1(c)+'</b></span>';
@@ -1690,7 +1701,7 @@ function renderRegionalBias(rb){
       +'<span class="verdict '+dir+'">'+esc(a.bias||'Neutral')+'</span></div>'
       +'<div class="msub">scheduled calendar releases &middot; '
       +(rb.regions||[]).length+' regions</div>'
-      +bar+boxes+drv+mscore+mfoot+risk
+      +bar+sidepair+mscore+mfoot+risk
       +'</div>';
   }).join('');
 
