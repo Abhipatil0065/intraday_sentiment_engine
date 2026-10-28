@@ -483,40 +483,66 @@
   .rbhead .fz{font-size:10.5px;color:var(--dim)}
   .rbgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;grid-auto-rows:1fr}
   .rba{background:var(--panel);border:1px solid var(--line);border-radius:10px;
-       padding:16px 18px;display:flex;flex-direction:column;gap:8px;min-height:250px}
-  .rba.gold{border-top:3px solid var(--gold)}
-  .rba.silver{border-top:3px solid var(--silver)}
-  .rba.bitcoin{border-top:3px solid var(--btc)}
-  .rba.equity{border-top:3px solid var(--accent)}
-  .rba.oil{border-top:3px solid var(--oil)}
-  .rba .an{font-size:14px;letter-spacing:1.6px;color:var(--dim);font-weight:700}
-  .rba .sc{font-size:25px;font-weight:700;line-height:1.05;
-           font-variant-numeric:tabular-nums}
-  .rba .bl{font-size:10.5px;font-weight:700;letter-spacing:1px}
-  .rba .sc.pos,.rba .bl.pos{color:var(--bull)}
-  .rba .sc.neg,.rba .bl.neg{color:var(--bear)}
-  .rba .sc.neu,.rba .bl.neu{color:var(--neu)}
-  /* Centred diverging bar: the fill grows LEFT or RIGHT from the midpoint. */
-  .rbbar{position:relative;display:block;height:8px;border-radius:5px;
-         background:#1b2130;overflow:hidden}
-  .rbbar::after{content:'';position:absolute;left:50%;top:0;bottom:0;width:1px;
-                background:var(--line)}
-  .rbbar i{position:absolute;top:0;bottom:0;height:100%;display:block}
-  .rbbar i.pos{left:50%;background:var(--bull)}
-  .rbbar i.neg{right:50%;background:var(--bear)}
-  .rba h5{font-size:9px;letter-spacing:1.2px;color:var(--dim);font-weight:700;
-          margin:3px 0 0}
-  .rba ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;
-          gap:4px}
-  .rba li{font-size:10px;color:var(--dim);line-height:1.35;padding-left:7px;
-          border-left:2px solid var(--line)}
-  .rba li.pos{border-left-color:var(--bull);color:var(--txt)}
-  .rba li.neg{border-left-color:var(--bear);color:var(--txt)}
-  .rbreg{display:flex;flex-wrap:wrap;gap:5px}
-  .rbreg span{font-size:9px;padding:1px 6px;border:1px solid var(--line);
-              border-radius:3px;color:var(--dim);font-variant-numeric:tabular-nums}
-  .rbreg span.pos{color:var(--bull);border-color:rgba(46,160,67,.45)}
-  .rbreg span.neg{color:var(--bear);border-color:rgba(248,81,73,.45)}
+       border-left:5px solid var(--accent);padding:16px 18px;cursor:pointer;
+       display:flex;flex-direction:column;gap:10px;transition:background .12s;
+       min-width:0;min-height:300px}
+  .rba:hover{background:var(--panel2);border-color:var(--dim);
+             border-left-color:var(--accent)}
+  .rba.gold{--accent:var(--gold)}
+  .rba.silver{--accent:var(--silver)}
+  .rba.bitcoin{--accent:var(--btc)}
+  .rba.equity{--accent:var(--accent)}
+  .rba.oil{--accent:var(--oil)}
+  .rba .mtop{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+  .rba .mname{font-size:20px;font-weight:700;letter-spacing:1.2px;line-height:1.1}
+  .rba .msym{font-size:11px;color:var(--dim);letter-spacing:1px}
+  .rba .mrow{display:flex;align-items:center;gap:11px;flex-wrap:wrap;font-size:14px}
+  .rba .mlabel{font-size:11px;letter-spacing:1.4px;color:var(--dim)}
+  .rba .msub{font-size:11px;color:var(--dim);letter-spacing:.4px;margin-top:-4px}
+  .rba .verdict{font-size:10px;font-weight:700;letter-spacing:1px;border:1px solid var(--line);
+       border-radius:5px;padding:3px 9px;white-space:nowrap}
+  .rba .verdict.BULLISH,.rba .verdict.Strong Bullish,.rba .verdict.Bullish
+  {color:var(--bull);border-color:var(--bull)}
+  .rba .verdict.BEARISH,.rba .verdict.Strong Bearish,.rba .verdict.Bearish
+  {color:var(--bear);border-color:var(--bear)}
+  .rba .verdict.NEUTRAL{color:var(--dim);border-color:var(--dim)}
+  /* stacked bull/bear bar, same as the top cards */
+  .rba .bar{height:15px;border-radius:8px;display:flex;overflow:hidden;
+            background:#1b2130;position:static}
+  .rba .bar::after{display:none}
+  .rba .bar .bu{position:static;display:block;height:100%;flex:0 0 auto;
+                background:var(--bull)}
+  .rba .bar .be{position:static;display:block;height:100%;flex:1 1 auto;
+                background:var(--bear)}
+  /* two-sided percentage boxes under the bar */
+  .rba .bpct{display:flex;justify-content:space-between;align-items:stretch;
+       gap:10px;margin-top:8px}
+  .rba .bpct .side{flex:1 1 0;display:flex;flex-direction:column;
+       align-items:center;gap:2px;padding:7px 6px;border-radius:8px;
+       border:1px solid transparent;background:var(--panel2)}
+  .rba .bpct .side.bull{border-color:rgba(46,160,67,.55);
+       background:rgba(46,160,67,.14)}
+  .rba .bpct .side.bear{border-color:rgba(248,81,73,.55);
+       background:rgba(248,81,73,.14)}
+  .rba .bpct .cap{font-size:9px;letter-spacing:1.2px;color:var(--dim)}
+  .rba .bpct .fig{font-size:18px;font-weight:700;line-height:1.1;
+       font-variant-numeric:tabular-nums}
+  .rba .bpct .side.bull .fig{color:var(--bull)}
+  .rba .bpct .side.bear .fig{color:var(--bear)}
+  /* drivers */
+  .rba .mdrv{margin-top:6px}
+  .rba .mdrv .note{background:var(--panel2);border:1px solid var(--line);border-radius:7px;
+       padding:8px 11px}
+  .rba .mdrv .note h4{font-size:9.5px;letter-spacing:1.5px;color:var(--dim);font-weight:700;
+       margin-bottom:5px}
+  .rba .mdrv .note ul{list-style:none;display:flex;flex-direction:column;gap:4px}
+  .rba .mdrv .note li{font-size:10.5px;line-height:1.4;color:var(--dim);
+       padding-left:8px;border-left:2px solid var(--line)}
+  .rba .mfoot{display:flex;flex-wrap:wrap;gap:12px;margin-top:8px;
+       font-size:10px;color:var(--dim)}
+  .rba .mfoot b{color:var(--txt)}
+  .rba .mscore{font-size:10px;color:var(--dim);margin-top:6px;font-family:monospace}
+  .rba .risk-note{color:#e8a33d;font-size:10px;margin-top:4px;font-style:italic}
   .rbrisk{font-size:9.5px;color:var(--gold);border:1px dashed rgba(240,180,41,.5);
           border-radius:5px;padding:4px 7px;line-height:1.35;margin-top:2px}
   .rbup{background:var(--panel);border:1px solid var(--line);border-radius:10px;
@@ -1611,32 +1637,49 @@ function renderRegionalBias(rb){
   }
 
   var cards=(rb.assets||[]).map(function(a){
-    var dir=rbDir(a.bias);
     var score=+a.score||0;
-    var pct=Math.min(50,Math.abs(score)/2);
-    var bar='<div class="rbbar"><i class="'+(score>=0?'pos':'neg')
-      +'" style="width:'+pct.toFixed(1)+'%"></i></div>';
+    var bull=Math.max(0,Math.min(100,50+score/2));
+    var bear=100-bull;
+    var dir=score>=0?'bull':'bear';
+    var bar='<div class="bar">'
+      +'<span class="bu" style="width:'+bull.toFixed(1)+'%"></span>'
+      +'<span class="be" style="width:'+bear.toFixed(1)+'%"></span></div>';
+    var boxes='<div class="bpct">'
+      +'<div class="side bull">'
+      +'<span class="cap">BULLISH</span>'
+      +'<span class="fig">'+bull.toFixed(0)+'%</span></div>'
+      +'<div class="side bear">'
+      +'<span class="cap">BEARISH</span>'
+      +'<span class="fig">'+bear.toFixed(0)+'%</span></div></div>';
     var drivers=(a.top_drivers||[]).map(function(d){
       var c=+d.contribution||0;
-      return '<li class="'+(c>=0?'pos':'neg')+'">'+esc(d.title)
-        +' <b>'+(c>=0?'+':'')+n1(c)+'</b> &middot; '+esc(d.region_code)
-        +' &middot; '+esc(d.when_local||'')+'</li>';
+      return '<li>'+(c>=0?('<b>+'+n1(c)+'</b> '):('<b>'+n1(c)+'</b> '))
+        +esc(d.title)+' <span class="reg">'+esc(d.region_code)+'</span></li>';
     }).join('');
-    var regs=(a.region_breakdown||[]).map(function(r){
+    var drv='<div class="mdrv">'
+      +(drivers?'<div class="note"><h4>TOP DRIVERS</h4><ul>'+drivers+'</ul></div>'
+        :'<div class="note"><h4>TOP DRIVERS</h4><div class="none">No scored release.</div></div>')
+      +'</div>';
+    var foot=(a.region_breakdown||[]).map(function(r){
       var c=+r.contribution||0;
-      return '<span class="'+(c>=0?'pos':'neg')+'">'+esc(r.code)+' '
-        +(c>=0?'+':'')+n1(c)+'</span>';
+      return '<span>'+esc(r.code)+' <b>'+(c>=0?'+':'')+n1(c)+'</b></span>';
     }).join('');
-    return '<div class="rba '+esc(String(a.label||'').toLowerCase())+'">'
-      +'<span class="an">'+esc(a.label||'')+'</span>'
-      +'<span class="sc '+dir+'">'+(score>=0?'+':'')+n1(score)+'</span>'
-      +'<span class="bl '+dir+'">'+esc(a.bias||'Neutral')+'</span>'
-      +bar
-      +'<h5>TOP DRIVERS</h5><ul>'+(drivers||'<li>no scored release</li>')+'</ul>'
-      +'<h5>REGION CONTRIBUTION</h5><div class="rbreg">'
-      +(regs||'<span>none</span>')+'</div>'
-      +(a.event_risk&&a.event_risk.active
-          ?'<div class="rbrisk">&#9888; '+esc(a.event_risk.note)+'</div>':'')
+    var mfoot=foot?'<div class="mfoot">'+foot+'</div>':'';
+    var mscore='<div class="mscore">raw <b>'+(score>=0?'+':'')+n1(score)+'</b></div>';
+    var risk='';
+    if(a.event_risk&&a.event_risk.active){
+      risk='<div class="risk-note">&#9888; '+esc(a.event_risk.note)+'</div>';
+    }
+    var sym=a.asset||'';
+    return '<div class="rba '+esc(String(a.label||'').toLowerCase())+'"'
+      +' title="'+esc(String(a.label||'').toUpperCase())+' regional macro bias">'
+      +'<div class="mtop"><span class="mname">'+esc(a.label||'')+'</span>'
+      +'<span class="msym">'+esc(sym)+'</span></div>'
+      +'<div class="mrow"><span class="mlabel">REGIONAL BIAS</span>'
+      +'<span class="verdict '+dir+'">'+esc(a.bias||'Neutral')+'</span></div>'
+      +'<div class="msub">scheduled calendar releases &middot; '
+      +(rb.regions||[]).length+' regions</div>'
+      +bar+boxes+drv+mscore+mfoot+risk
       +'</div>';
   }).join('');
 
