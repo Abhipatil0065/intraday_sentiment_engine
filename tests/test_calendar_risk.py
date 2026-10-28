@@ -28,8 +28,8 @@ def test_cpi_surprise_is_measured_in_sigma():
 
 
 def test_payroll_surprise_is_measured_in_sigma():
-    # Payroll std is 120k: a 120k miss is one sigma, same as the CPI case.
-    z = standardised_surprise(actual=240, forecast=120, title="Nonfarm Payrolls")
+    # Payroll std is 75k: a 75k miss is one sigma, same as the CPI case.
+    z = standardised_surprise(actual=195, forecast=120, title="Nonfarm Payrolls")
     assert abs(z - 1.0) < 0.01
 
 

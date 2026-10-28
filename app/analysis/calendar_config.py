@@ -55,6 +55,11 @@ log = get_logger(__name__)
 #: The one config file for the region whitelist AND the bias engine.
 CONFIG_FILE = Path(__file__).resolve().parent.parent / "config" / "calendar_bias.json"
 
+#: Manual mtime-keyed cache: {path_str: (mtime_ns, CalendarBiasConfig)}
+#: Editing calendar_bias.json invalidates the entry on the next poll so tuning
+#: takes effect without restarting the engine.
+_load_cache: dict[str, tuple[int, CalendarBiasConfig]] = {}
+
 
 class CalendarConfigError(RuntimeError):
     """The calendar config file is missing, unreadable or malformed."""
@@ -373,9 +378,19 @@ def _load_impact_overrides(raw: dict) -> tuple[ImpactOverride, ...]:
     return tuple(rules)
 
 
-@lru_cache(maxsize=4)
 def _load_cached(path: str) -> CalendarBiasConfig:
     target = Path(path)
+    key = str(target)
+    try:
+        mtime = target.stat().st_mtime_ns
+    except OSError as exc:
+        raise CalendarConfigError(
+            f"calendar config unreadable at {target}: {exc}") from exc
+
+    cached = _load_cache.get(key)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+
     try:
         raw = json.loads(target.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -404,7 +419,7 @@ def _load_cached(path: str) -> CalendarBiasConfig:
     log.info("Calendar config loaded from %s: %d region(s) - %s", target,
              len(regions), ", ".join(r.code for r in regions))
 
-    return CalendarBiasConfig(
+    config = CalendarBiasConfig(
         regions=regions,
         impact_min=str(impact.get("min_impact") or "Medium"),
         impact_weights={
@@ -455,6 +470,8 @@ def _load_cached(path: str) -> CalendarBiasConfig:
         stale_minutes=int(_as_float(dashboard.get("stale_minutes"), 30)),
         max_events_per_asset=int(_as_float(dashboard.get("max_events_per_asset"), 0)),
     )
+    _load_cache[key] = (mtime, config)
+    return config
 
 
 def load_calendar_config(path: Path | str | None = None) -> CalendarBiasConfig:
@@ -470,7 +487,7 @@ def load_calendar_config(path: Path | str | None = None) -> CalendarBiasConfig:
 
 def clear_config_cache() -> None:
     """Drop the cached config so a test can edit the file and reload it."""
-    _load_cached.cache_clear()
+    _load_cache.clear()
 
 
 # --------------------------------------------------------------------------

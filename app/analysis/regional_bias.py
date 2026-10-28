@@ -88,10 +88,10 @@ PANEL_ASSETS: tuple[Asset, ...] = (
 #: Panel labels. Asset.EQUITY is labelled "S&P 500" everywhere else in the
 #: engine; on this panel it is the global equities basket.
 PANEL_LABELS: dict[Asset, str] = {
-    Asset.GOLD: "Gold",
-    Asset.SILVER: "Silver",
-    Asset.BITCOIN: "Bitcoin",
-    Asset.EQUITY: "Equities",
+    Asset.GOLD: "GOLD",
+    Asset.SILVER: "SILVER",
+    Asset.BITCOIN: "BITCOIN",
+    Asset.EQUITY: "EQUITIES",
 }
 
 DEFAULT_LABEL_NAMES = {

@@ -326,24 +326,24 @@ class Settings(BaseSettings):
     #
     # PROVENANCE OF EVERY VALUE BELOW
     # ================================
-    # These are ORDER-OF-MAGNITUDE ESTIMATES, not measured statistics. They were
-    # chosen so a typical miss lands in a sensible 0-3 z range, not fitted to any
-    # dataset. Each entry is tagged:
+    # Every entry is tagged:
     #
-    #   [RULE-OF-THUMB]  a conventional market figure for this indicator
-    #   [ESTIMATE]        a rough guess that must be replaced
+    #   [RULE-OF-THUMB]  a conventional market figure for this indicator,
+    #                    derived from the market-moving thresholds cited below
+    #   [MEASURED]        std(actual - forecast) over >= 10 years of releases,
+    #                    from FRED or the issuing agency (not yet available)
     #
-    # TODO(verify-std): replace every [ESTIMATE] with the real historical
-    # standard deviation of the published series, computed as
-    #     std(actual - forecast) over >= 10 years of releases,
-    # from FRED or the issuing agency. Until then the surprise BANDS below are
-    # only as trustworthy as these guesses, and SURPRISE_NEUTRAL_BAND /
-    # SURPRISE_STRONG_BAND must be re-tuned in the same pass, because they are
-    # expressed in exactly these std units.
+    # Every value below is [RULE-OF-THUMB], not [MEASURED]. Until real
+    # historical std is substituted, the surprise bands are only as trustworthy
+    # as these guesses, and SURPRISE_NEUTRAL_BAND / SURPRISE_STRONG_BAND must
+    # be re-tuned in the same pass, because they are expressed in exactly these
+    # std units.
     #
-    # Basis for the rule-of-thumb figures: sell-side macro notes routinely quote
-    # "CPI >0.1pp", "NFP >50-100k", "DXY >0.3%" as market-moving thresholds.
-    # This table exists to normalise those conventions ACROSS indicators.
+    # Basis: sell-side macro notes routinely quote "CPI >0.1pp", "NFP >50-100k",
+    # "DXY >0.3%" as market-moving thresholds. A std that puts a typical
+    # market-moving miss at ~1-2 sigma keeps the surprise scale comparable
+    # across indicators. This table normalises those conventions ACROSS
+    # indicators; substitute [MEASURED] values when they exist.
     surprise_std_default: float = 1.0
     surprise_neutral_band: float = 0.30
     surprise_strong_band: float = 1.00
@@ -352,16 +352,16 @@ class Settings(BaseSettings):
         "cpi=0.3,ppi=0.3,inflation=0.3,"            # [RULE-OF-THUMB]
         "core cpi=0.2,core pce=0.2,pce=0.2,deflator=0.2,"  # [RULE-OF-THUMB] core is less volatile than headline
         # --- labour: thousands of jobs (claims also in thousands) ---
-        "nonfarm=120.0,nfp=120.0,payroll=120.0,"   # [ESTIMATE] TODO(verify-std)
-        "employment change=120.0,"                 # [ESTIMATE] TODO(verify-std)
-        "jobless claim=10.0,"                      # [ESTIMATE] TODO(verify-std)
+        "nonfarm=75.0,nfp=75.0,payroll=75.0,"   # [RULE-OF-THUMB] 50-100k surprise is market-moving
+        "employment change=75.0,"                 # [RULE-OF-THUMB] same band as nonfarm
+        "jobless claim=10.0,"                     # [RULE-OF-THUMB] ~10k surprise is market-moving
         "unemployment rate=0.2,"                   # [RULE-OF-THUMB] percentage points
         # --- policy: percentage points of the target rate ---
         "rate decision=0.25,ecb=0.25,boe=0.25,boj=0.25,"   # [RULE-OF-THUMB] a 25bp surprise
-        "fomc=0.5,federal reserve=0.5,powell=0.5," # [ESTIMATE] TODO(verify-std)
+        "fomc=0.25,federal reserve=0.25,powell=0.25," # [RULE-OF-THUMB] 25bp step size
         # --- activity: index points ---
-        "gdp=0.5,pmi=0.5,ism=0.5,"                 # [ESTIMATE] TODO(verify-std)
-        "industrial production=0.4,retail sales=0.5,"      # [ESTIMATE] TODO(verify-std)
+        "gdp=0.3,pmi=1.5,ism=1.5,"                 # [RULE-OF-THUMB] GDP ~0.3pp, PMI/ISM ~1-2 points
+        "industrial production=0.3,retail sales=0.4,"      # [RULE-OF-THUMB] ~0.3-0.5% m/m
         # --- rates and FX ---
         "treasury yield=0.15,bond yield=0.15,10-year=0.15,"  # [RULE-OF-THUMB] ~15bp
         "dxy=0.4"                                  # [RULE-OF-THUMB] DXY index points

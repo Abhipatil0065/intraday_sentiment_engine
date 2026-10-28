@@ -137,9 +137,9 @@ def test_one_release_cannot_swamp_the_panel_with_an_oversized_miss():
     """The std table is a rule of thumb, so the surprise is capped."""
     cfg = _cfg()
     assert cfg.surprise_max_sigma == 3.0
-    # A 2.1 point PMI miss against a 0.5 std is 4.2 sigma before the cap.
+    # ISM std is 1.5: a 5.0 point miss is 3.3 sigma before the cap -> 3.0.
     z, _pct, _source = surprise_for(
-        _event("ISM Manufacturing PMI", "USD", actual=52.1, forecast=50.0),
+        _event("ISM Manufacturing PMI", "USD", actual=55.0, forecast=50.0),
         cfg)
     assert abs(z - 3.0) < 0.001
 
