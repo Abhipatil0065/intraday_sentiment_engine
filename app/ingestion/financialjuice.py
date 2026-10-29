@@ -78,6 +78,20 @@ _MONTHS = {
     "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
 }
 
+#: Text markers that mean Cloudflare served a challenge/block page rather than
+#: the real Financial Juice app. Any of these is a FAILED poll - never a solve
+#: attempt. Mirrors the markers used by app.ingestion.fj_calendar.
+CHALLENGE_MARKERS = (
+    "just a moment",
+    "cf-browser-verification",
+    "checking your browser",
+    "verify you are human",
+    "enable javascript and cookies",
+    "attention required",
+    "access denied",
+    "cf-challenge",
+)
+
 # Financial Juice renders publication time inside each news item as
 # "15:56 Oct 01" (24h clock, month + day). Verified against the live DOM.
 _FJ_TIME = re.compile(
@@ -316,7 +330,19 @@ class FinancialJuiceSource:
     async def _render_and_scroll(self, ctx):
         """Render the homepage, scroll the feed, return the resulting HTML."""
         page = await ctx.new_page()
-        await page.goto(self.url, timeout=45000, wait_until="domcontentloaded")
+        await page.goto(self.url, timeout=20000, wait_until="domcontentloaded")
+        # Cloudflare may serve a challenge/block page to headless Chromium even
+        # when the site loads fine in a normal browser. Detect it immediately
+        # rather than scrolling a challenge shell and timing out later.
+        try:
+            content = await page.content()
+        except Exception:
+            content = ""
+        lower = content.lower()
+        if any(marker in lower for marker in CHALLENGE_MARKERS):
+            raise RuntimeError(
+                "Financial Juice: Cloudflare challenge/block page served to "
+                "headless Chromium - not a solveable condition")
         try:
             await page.wait_for_load_state("networkidle", timeout=self.wait_ms)
         except Exception:  # networkidle often never settles on SPAs
