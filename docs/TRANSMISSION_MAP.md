@@ -1,6 +1,6 @@
 # Transmission map reference
 
-_Generated 2026-10-28 05:38 UTC by `tools/generate_transmission_docs.py`. Do not edit by hand._
+_Generated 2026-10-28 07:46 UTC by `tools/generate_transmission_docs.py`. Do not edit by hand._
 
 **Note:** The JSON map contains **75 event types**. This table shows the **73** that participate in detection via `EVENT_SIGNALS`. The two excluded are `GENERAL_MACRO` (used only as a category fallback for unclassified headlines) and `GOLD_ETF_FLOW` (removed in Step 4c in favor of its `_IN`/`_OUT` variants, which carry their own sign).
 
