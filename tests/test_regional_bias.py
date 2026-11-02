@@ -459,6 +459,128 @@ def test_the_top_drivers_are_the_largest_contributions():
 
 
 # --------------------------------------------------------------------------
+# Day trading: session-aware region weighting
+# --------------------------------------------------------------------------
+def test_session_multiplier_scales_region_weight_in_us_session():
+    """NOW = 2026-10-22 12:00 UTC = 08:00 ET = US session."""
+    cfg = _cfg()
+    assert cfg.session_relevance("USA", "us") == 1.00
+    assert cfg.session_relevance("EUR", "us") == 0.85
+    assert cfg.session_relevance("CNY", "us") == 0.70
+    assert cfg.session_relevance("JPY", "us") == 0.70
+    assert cfg.session_relevance("GBP", "us") == 0.85
+    # A session with no configured multiplier keeps the old weight (1.0).
+    assert cfg.session_relevance("USA", "unknown_session") == 1.0
+
+
+def test_cny_counts_more_in_asia_than_in_us():
+    cfg = _cfg()
+    assert cfg.session_relevance("CNY", "asia") == 1.00
+    assert cfg.session_relevance("CNY", "us") == 0.70
+    assert cfg.session_relevance("CNY", "asia") > cfg.session_relevance("CNY", "us")
+
+
+def test_session_weight_flows_into_contribution():
+    """Same hot CPI miss, same session: USA contributes more than EUR."""
+    us = abs(_contribution("CPI y/y", "USD", Asset.GOLD,
+                           actual=3.5, forecast=3.2))
+    eu = abs(_contribution("CPI y/y", "EUR", Asset.GOLD,
+                           actual=3.5, forecast=3.2))
+    # USA effective weight 1.0*1.0=1.0; EUR 0.6*0.85=0.51 in the US session.
+    assert us > eu * 1.5
+
+
+# --------------------------------------------------------------------------
+# Day trading: fresh-signal recency boost
+# --------------------------------------------------------------------------
+def test_fresh_signal_boost_applies_inside_the_windows():
+    cfg = _cfg()
+    assert cfg.fresh_signal_boost(5.0) == 1.20
+    assert cfg.fresh_signal_boost(10.0) == 1.20
+    assert cfg.fresh_signal_boost(20.0) == 1.10
+    assert cfg.fresh_signal_boost(30.0) == 1.10
+    assert cfg.fresh_signal_boost(45.0) == 1.0
+
+
+def test_fresh_signal_boost_flows_into_contribution():
+    """Both prints are inside the full-weight window (decay == 1.0), so the
+    only difference is the fresh-signal recency boost."""
+    fresh = abs(_contribution("CPI y/y", "USD", Asset.GOLD,
+                              when=NOW - timedelta(minutes=5),
+                              actual=3.5, forecast=3.2))
+    later = abs(_contribution("CPI y/y", "USD", Asset.GOLD,
+                              when=NOW - timedelta(minutes=40),
+                              actual=3.5, forecast=3.2))
+    assert fresh > later
+
+
+# --------------------------------------------------------------------------
+# Day trading: half-life decay (opt-in mode)
+# --------------------------------------------------------------------------
+def test_half_life_decay_fades_faster_than_linear():
+    """The config ships linear decay (half_life_hours == 0). When an operator
+    switches on a half-life, prints fade within the session instead of over
+    two days."""
+    import dataclasses
+
+    cfg = _cfg()
+    assert cfg.decay_half_life_hours == 0.0
+    linear = time_decay(NOW - timedelta(hours=6), NOW, cfg)
+
+    patched = dataclasses.replace(
+        cfg, decay_half_life_hours=1.5, decay_to_zero_hours=12)
+    half = time_decay(NOW - timedelta(hours=6), NOW, patched)
+    assert 0.0 < half < linear < 1.0
+
+
+def test_half_life_decay_still_hits_zero_at_the_horizon():
+    import dataclasses
+
+    cfg = _cfg()
+    patched = dataclasses.replace(
+        cfg, decay_half_life_hours=1.5, decay_to_zero_hours=6)
+    assert time_decay(NOW - timedelta(hours=6), NOW, patched) == 0.0
+    assert time_decay(NOW - timedelta(hours=5), NOW, patched) > 0.0
+
+
+# --------------------------------------------------------------------------
+# Day trading: confidence
+# --------------------------------------------------------------------------
+def test_confidence_is_zero_with_no_contributions():
+    result = compute_regional_bias([], now=NOW)
+    assert result.asset(Asset.GOLD).confidence == 0.0
+
+
+def test_confidence_is_bounded_and_grows_with_mass_and_breadth():
+    one = compute_regional_bias(
+        [_event("CPI y/y", "USD", actual=3.5, forecast=3.2)], now=NOW)
+    conf_one = one.asset(Asset.GOLD).confidence
+
+    many = compute_regional_bias(
+        [_event("CPI y/y", "USD", actual=3.5, forecast=3.2),
+         _event("ECB Rate Decision", "EUR", actual=2.25, forecast=2.0),
+         _event("BOJ Policy Rate", "JPY", actual=0.5, forecast=0.25)],
+        now=NOW)
+    conf_many = many.asset(Asset.GOLD).confidence
+
+    assert 0.0 < conf_one <= 1.0
+    assert 0.0 < conf_many <= 1.0
+    assert conf_many > conf_one
+
+
+def test_payload_carries_confidence_and_session():
+    from app.analysis.regional_bias import to_payload
+
+    result = compute_regional_bias(
+        [_event("CPI y/y", "USD", actual=3.5, forecast=3.2)], now=NOW)
+    payload = to_payload(result)
+    assert payload["session"] == "us"
+    for asset in payload["assets"]:
+        assert "confidence" in asset
+        assert 0.0 <= asset["confidence"] <= 1.0
+
+
+# --------------------------------------------------------------------------
 # Event risk
 # --------------------------------------------------------------------------
 def test_an_upcoming_high_impact_event_is_listed_but_scores_nothing():

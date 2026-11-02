@@ -1649,6 +1649,7 @@ function renderRegionalBias(rb){
 
   var head='<div class="rbhead"><span class="ft">REGIONAL MACRO BIAS</span>'
     +'<span class="fd">'+esc((rb.regions||[]).join(' / ')||'NO REGIONS')+'</span>'
+    +'<span class="fs">SESSION: '+esc(String(rb.session||'').toUpperCase())+'</span>'
     +'<span class="fz">scheduled releases only &middot; last updated '
     +esc(rb.last_updated_local||'unknown')
     +(rb.display_timezone?(' ('+esc(rb.display_timezone)+')'):'')+'</span></div>';
@@ -1700,7 +1701,7 @@ function renderRegionalBias(rb){
       return '<span>'+esc(r.code)+' <b>'+(c>=0?'+':'')+n1(c)+'</b></span>';
     }).join('');
     var mfoot=foot?'<div class="mfoot"><span style="color:var(--dim);font-size:9px;letter-spacing:1px;margin-right:8px">REGION CONTRIBUTION</span>'+foot+'</div>':'';
-    var mscore='<div class="mscore">raw <b>'+(score>=0?'+':'')+n1(score)+'</b></div>';
+    var mscore='<div class="mscore">raw <b>'+(score>=0?'+':'')+n1(score)+'</b> <span class="conf">confidence '+Math.round(Math.max(0,Math.min(100,+a.confidence||0)*100))+'%</span></div>';
     var risk='';
     if(a.event_risk&&a.event_risk.active){
       risk='<div class="risk-note">&#9888; '+esc(a.event_risk.note)+'</div>';

@@ -172,10 +172,48 @@
   "time_decay": {
     "_readme": [
       "Full weight for the first full_weight_hours after the release, then a",
-      "linear decay to zero at decay_to_zero_hours."
+      "linear decay to zero at decay_to_zero_hours.",
+      "",
+      "DAY TRADING: replace the linear decay with an exponential half-life so",
+      "yesterday's prints fade within the session. Set half_life_hours > 0 to",
+      "switch modes (0.0 keeps the existing linear decay). A sensible intraday",
+      "starting point is half_life_hours=1.5 with decay_to_zero_hours=12 and a",
+      "decay_floor of 0.05 so a print is effectively gone after half a day.",
+      "full_weight_hours still applies first: nothing decays inside that window."
     ],
     "full_weight_hours": 4.0,
-    "decay_to_zero_hours": 48.0
+    "decay_to_zero_hours": 48.0,
+    "half_life_hours": 0.0,
+    "decay_floor": 0.05
+  },
+
+  "fresh_signal": {
+    "_readme": [
+      "DAY TRADING: a fresh print deserves a small recency boost on top of decay.",
+      "A release within window_10min gets boost_10min, within window_30min gets",
+      "boost_30min, older prints get no boost. Multiplicative on top of time_decay.",
+      "Set enabled=false to restore the pre-boost behaviour exactly."
+    ],
+    "enabled": true,
+    "window_10min": 10,
+    "boost_10min": 1.20,
+    "window_30min": 30,
+    "boost_30min": 1.10
+  },
+
+  "region_session_multipliers": {
+    "_readme": [
+      "DAY TRADING: how much a region's release counts in each trading session.",
+      "Keys are region codes; values map a session name (asia / europe / us /",
+      "off_hours) to a multiplier. A CNY print matters most in the Asia session,",
+      "a USD print most in the US session. Missing entries default to 1.0.",
+      "Set every session to 1.0 to restore the old session-blind behaviour."
+    ],
+    "USA": {"asia": 0.70, "europe": 0.85, "us": 1.00, "off_hours": 1.00},
+    "EUR": {"asia": 0.75, "europe": 1.00, "us": 0.85, "off_hours": 1.00},
+    "CNY": {"asia": 1.00, "europe": 0.75, "us": 0.70, "off_hours": 1.00},
+    "JPY": {"asia": 1.00, "europe": 0.80, "us": 0.70, "off_hours": 1.00},
+    "GBP": {"asia": 0.75, "europe": 1.00, "us": 0.85, "off_hours": 1.00}
   },
 
   "inverted_events": {

@@ -75,6 +75,7 @@ from app.analysis.calendar_risk import matched_std
 from app.analysis.economic_impact import to_float
 from app.config import settings
 from app.logging_conf import get_logger
+from app.market.session_detector import detect_session
 from app.models.enums import Asset
 
 log = get_logger(__name__)
@@ -172,6 +173,7 @@ class AssetBias:
     score: float
     bias: str
     raw_score: float
+    confidence: float = 0.0
     contributions: tuple[Contribution, ...] = ()
     region_breakdown: tuple[tuple[str, str, float], ...] = ()
     top_drivers: tuple[Contribution, ...] = ()
@@ -188,6 +190,7 @@ class RegionalBias:
     assets: tuple[AssetBias, ...] = ()
     upcoming: tuple[UpcomingEvent, ...] = ()
     regions: tuple[str, ...] = ()
+    session: str = ""
     stats: dict = field(default_factory=dict)
     error: str = ""
     stale: bool = False
@@ -218,13 +221,21 @@ def _impact_rank(impact: str) -> int:
 
 
 def time_decay(when_utc: datetime, now: datetime, cfg: CalendarBiasConfig
-                ) -> float:
+              ) -> float:
     """
     How much influence a release still has.
 
-    Full weight for ``full_weight_hours`` after the release, then a linear
-    decay to zero at ``decay_to_zero_hours``. An event that has not happened
-    yet has NO influence (0.0) - it is a risk, not evidence.
+    Full weight for ``full_weight_hours`` after the release. After that:
+
+      * when ``decay_half_life_hours`` is set (> 0) an exponential half-life
+        decay applies: ``0.5 ** ((age - full) / half_life)``, floored at
+        ``decay_floor``. This is the DAY TRADING mode - yesterday's prints
+        fade within the session instead of lingering for two days.
+      * otherwise the original linear decay to zero at
+        ``decay_to_zero_hours`` is used.
+
+    An event that has not happened yet has NO influence (0.0) - it is a
+    risk, not evidence.
     """
     if when_utc is None:
         return 0.0
@@ -239,6 +250,11 @@ def time_decay(when_utc: datetime, now: datetime, cfg: CalendarBiasConfig
         return 0.0
     if horizon <= full:
         return 0.0
+    half_life = float(cfg.decay_half_life_hours or 0.0)
+    floor = float(cfg.decay_floor or 0.0)
+    if half_life > 0:
+        weight = 0.5 ** ((age_hours - full) / half_life)
+        return max(floor, weight)
     return max(0.0, 1.0 - (age_hours - full) / (horizon - full))
 
 
@@ -643,7 +659,7 @@ def _read_events(events, cfg: CalendarBiasConfig, now: datetime
 
 
 def _contributions(reads: list[EventRead], cfg: CalendarBiasConfig,
-                   now: datetime) -> list[Contribution]:
+                   now: datetime, session: str) -> list[Contribution]:
     """Expand every read into its per-asset contributions."""
     out: list[Contribution] = []
     for read in reads:
@@ -651,7 +667,15 @@ def _contributions(reads: list[EventRead], cfg: CalendarBiasConfig,
         impact_weight = cfg.impact_weight(read.impact)
         region = cfg.region_by_code(read.region_code)
         region_weight = region.weight if region is not None else 1.0
+        # DAY TRADING: scale the region's weight by how relevant it is in the
+        # current session (CNY in Asia, USD in US, ...). Defaults to 1.0 when
+        # no multiplier is configured, restoring the old session-blind math.
+        region_weight = region_weight * cfg.session_relevance(
+            read.region_code, session)
         magnitude = abs(read.surprise)
+        # DAY TRADING: a fresh print gets a recency boost on top of decay.
+        age_minutes = (now - read.when_utc).total_seconds() / 60.0
+        magnitude = magnitude * cfg.fresh_signal_boost(age_minutes)
         for asset in PANEL_ASSETS:
             sensitivity = cfg.sensitivity(read.scenario, asset.value)
             if sensitivity == 0.0:
@@ -739,7 +763,8 @@ def compute_regional_bias(events, now: datetime | None = None,
     try:
         reads, considered, skipped = _read_events(events, cfg, reference)
         reads = dedupe_frequency_variants(reads, cfg)
-        contributions = _contributions(reads, cfg, reference)
+        session = detect_session(reference).value.lower()
+        contributions = _contributions(reads, cfg, reference, session)
     except Exception as exc:  # noqa: BLE001 - a panel must never break a poll
         log.error("Regional bias: scoring failed - %s: %s",
                   type(exc).__name__, exc, exc_info=True)
@@ -787,6 +812,17 @@ def compute_regional_bias(events, now: datetime | None = None,
         score = normalise_score(raw, cfg)
         bias = label_for(score, cfg, neutral_multiplier)
 
+        # DAY TRADING: confidence reflects how much evidence stands behind the
+        # score. Mass = total absolute contribution relative to the scale; a
+        # score built from one marginal print is less trustworthy than one
+        # built from several. Region breadth adds credit: a verdict supported
+        # by more than one region is harder to dismiss as a single-print fluke.
+        mass = sum(abs(c.contribution) for c in rows)
+        mass_confidence = min(1.0, mass / (float(cfg.normal_scale) * 0.5))
+        region_count = len({c.region_code for c in rows if c.contribution != 0.0})
+        diversity = min(1.0, region_count / 2.0)
+        confidence = round(0.70 * mass_confidence + 0.30 * diversity, 2)
+
         breakdown: dict[str, tuple[str, float]] = {}
         for row in rows:
             code, label, total = breakdown.get(
@@ -809,6 +845,7 @@ def compute_regional_bias(events, now: datetime | None = None,
             score=round(score, 2),
             bias=bias,
             raw_score=round(raw, 4),
+            confidence=confidence,
             contributions=tuple(rows),
             region_breakdown=region_rows,
             top_drivers=drivers,
@@ -830,6 +867,7 @@ def compute_regional_bias(events, now: datetime | None = None,
         assets=tuple(assets_out),
         upcoming=tuple(upcoming),
         regions=tuple(r.code for r in cfg.regions),
+        session=session,
         stats={
             "events_total": len(list(events or [])),
             "events_read": len(reads),
@@ -880,6 +918,7 @@ def to_payload(result: RegionalBias) -> dict:
             "score": row.score,
             "bias": row.bias,
             "raw_score": row.raw_score,
+            "confidence": row.confidence,
             "events_considered": row.events_considered,
             "events_scored": row.events_scored,
             "region_breakdown": [
@@ -927,6 +966,7 @@ def to_payload(result: RegionalBias) -> dict:
         "generated_at_utc": result.generated_at_utc.isoformat(),
         "generated_at_local": _local_time(result.generated_at_utc),
         "display_timezone": settings.display_timezone,
+        "session": result.session,
         "last_updated_utc": (result.last_updated_utc.isoformat()
                              if result.last_updated_utc else None),
         "last_updated_local": _local_time(result.last_updated_utc),

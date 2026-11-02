@@ -157,6 +157,21 @@ class CalendarBiasConfig:
     label_strong_bullish: float = 60.0
     label_names: dict = field(default_factory=dict)
 
+    # day trading: session-aware region multipliers
+    # {region_code: {session_name: multiplier}}, session names are asia/europe/us/off_hours
+    region_session_multipliers: dict = field(default_factory=dict)
+
+    # day trading: fresh-signal recency boost (multiplicative on top of decay)
+    fresh_signal_enabled: bool = False
+    fresh_signal_window_10min: int = 10
+    fresh_signal_boost_10min: float = 1.20
+    fresh_signal_window_30min: int = 30
+    fresh_signal_boost_30min: float = 1.10
+
+    # day trading: exponential half-life decay (0.0 keeps the linear decay)
+    decay_half_life_hours: float = 0.0
+    decay_floor: float = 0.05
+
     # event risk / upcoming
     risk_before_minutes: int = 30
     risk_after_minutes: int = 15
@@ -217,6 +232,38 @@ class CalendarBiasConfig:
             return float(row.get(asset, 0.0))
         except (TypeError, ValueError):
             return 0.0
+
+    def session_relevance(self, region_code: str, session_name: str) -> float:
+        """
+        Session multiplier for one region's releases (day trading).
+
+        A CNY print matters most in the Asia session, a USD print most in the
+        US session, and so on. Returns 1.0 when no multiplier is configured
+        for this region/session, which restores the old session-blind
+        behaviour exactly.
+        """
+        table = self.region_session_multipliers or {}
+        row = table.get(region_code.upper()) or {}
+        try:
+            return float(row.get(session_name.lower(), 1.0))
+        except (TypeError, ValueError):
+            return 1.0
+
+    def fresh_signal_boost(self, age_minutes: float) -> float:
+        """
+        Multiplicative recency boost for a freshly-released print (day trading).
+
+        Returns 1.0 when the feature is off or the print is outside every
+        boost window. A print within window_10min gets boost_10min, within
+        window_30min gets boost_30min.
+        """
+        if not self.fresh_signal_enabled:
+            return 1.0
+        if age_minutes <= float(self.fresh_signal_window_10min):
+            return float(self.fresh_signal_boost_10min)
+        if age_minutes <= float(self.fresh_signal_window_30min):
+            return float(self.fresh_signal_boost_30min)
+        return 1.0
 
 
 # --------------------------------------------------------------------------
@@ -409,6 +456,8 @@ def _load_cached(path: str) -> CalendarBiasConfig:
     risk = raw.get("event_risk") or {}
     upcoming = raw.get("upcoming") or {}
     dashboard = raw.get("dashboard") or {}
+    fresh_signal = raw.get("fresh_signal") or {}
+    session_mult = raw.get("region_session_multipliers") or {}
     inverted = raw.get("inverted_events") or {}
     if isinstance(inverted, list):
         inverted_keywords = _as_tuple(inverted)
@@ -434,6 +483,8 @@ def _load_cached(path: str) -> CalendarBiasConfig:
         surprise_max_sigma=_as_float(surprise.get("max_sigma"), 3.0),
         full_weight_hours=_as_float(decay.get("full_weight_hours"), 4.0),
         decay_to_zero_hours=_as_float(decay.get("decay_to_zero_hours"), 48.0),
+        decay_half_life_hours=_as_float(decay.get("half_life_hours"), 0.0),
+        decay_floor=_as_float(decay.get("decay_floor"), 0.05),
         inverted_keywords=inverted_keywords,
         decision_keywords=_as_tuple(central.get("decision_keywords")),
         speech_keywords=_as_tuple(central.get("speech_keywords")),
@@ -469,6 +520,24 @@ def _load_cached(path: str) -> CalendarBiasConfig:
         top_drivers=int(_as_float(dashboard.get("top_drivers"), 3)),
         stale_minutes=int(_as_float(dashboard.get("stale_minutes"), 30)),
         max_events_per_asset=int(_as_float(dashboard.get("max_events_per_asset"), 0)),
+        region_session_multipliers={
+            str(k).upper(): {
+                str(sk).lower(): _as_float(sv, 1.0)
+                for sk, sv in (v or {}).items()
+                if not str(sk).startswith("_")
+            }
+            for k, v in (session_mult or {}).items()
+            if not str(k).startswith("_") and isinstance(v, dict)
+        },
+        fresh_signal_enabled=bool(fresh_signal.get("enabled", False)),
+        fresh_signal_window_10min=int(_as_float(
+            fresh_signal.get("window_10min"), 10)),
+        fresh_signal_boost_10min=_as_float(
+            fresh_signal.get("boost_10min"), 1.20),
+        fresh_signal_window_30min=int(_as_float(
+            fresh_signal.get("window_30min"), 30)),
+        fresh_signal_boost_30min=_as_float(
+            fresh_signal.get("boost_30min"), 1.10),
     )
     _load_cache[key] = (mtime, config)
     return config
