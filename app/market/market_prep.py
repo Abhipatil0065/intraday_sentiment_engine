@@ -57,6 +57,13 @@ ASSET_CATALYSTS: dict[Asset, list[str]] = {
         "Rate path and real-yield repricing",
         "Sector rotation and risk appetite",
     ],
+    Asset.OIL: [
+        "OPEC+ output decisions and supply discipline",
+        "EIA crude inventory and production data",
+        "USD index and real-yield moves",
+        "Geopolitical risk to supply routes",
+        "Global demand and China industrial data",
+    ],
 }
 
 MACRO_DRIVER_LABELS: dict[NewsCategory, str] = {
