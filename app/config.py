@@ -49,7 +49,7 @@ class Settings(BaseSettings):
 
     # ---------------- timezones ----------------
     # MARKET_TIMEZONE defines what "TODAY" means for the today-only filter.
-    market_timezone: str = "America/New_York"
+    market_timezone: str = "Asia/Kolkata"
     display_timezone: str = "Asia/Kolkata"
 
     # ---------------- LLM provider (provider-neutral) ----------------
