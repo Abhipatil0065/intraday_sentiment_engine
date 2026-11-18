@@ -207,16 +207,24 @@ app.add_middleware(
 )
 
 
-def _latest_snapshot(session, asset: str, scope: str):
-    """Most recent snapshot for an asset+scope (snapshots are append-only)."""
+def _latest_snapshot(session, asset: str, scope: str,
+                     sess: str | None = None, timeframe: str = "day"):
+    """Most recent snapshot for an asset+scope (+session+timeframe).
 
-    return session.scalar(
-        select(SentimentSnapshot)
-        .where(SentimentSnapshot.asset == asset)
-        .where(SentimentSnapshot.scope == scope)
-        .order_by(SentimentSnapshot.computed_at.desc())
-        .limit(1)
-    )
+    Snapshots are append-only, so the latest row is the current verdict.
+    When ``sess`` or ``timeframe`` are given, only rows matching those are
+    considered (P2/P3: session-scoped and multi-timeframe bias).
+    """
+    stmt = select(SentimentSnapshot).where(
+        SentimentSnapshot.asset == asset).where(
+        SentimentSnapshot.scope == scope)
+    if sess is not None:
+        stmt = stmt.where(SentimentSnapshot.session == sess)
+    if timeframe is not None:
+        stmt = stmt.where(SentimentSnapshot.timeframe == timeframe)
+    stmt = stmt.order_by(SentimentSnapshot.computed_at.desc()).limit(1)
+
+    return session.scalar(stmt)
 
 
 def _bias_since(session, asset: str, scope: str, score: float) -> str | None:
@@ -276,7 +284,8 @@ _BIAS_LOOKBACK = 500
 HEALTH_STALE_MINUTES = pipeline.HEALTH_STALE_MINUTES
 
 
-def _block(session, asset: str, scope: str) -> dict:
+def _block(session, asset: str, scope: str,
+           sess: str | None = None, timeframe: str = "day") -> dict:
     """
     One sentiment block, or an explicit empty state (never invented data).
 
@@ -284,8 +293,13 @@ def _block(session, asset: str, scope: str) -> dict:
     strictly BULLISH or BEARISH. ``stale`` marks a carried-forward verdict -
     no signals reached this asset in the window (n=0), or no snapshot exists
     at all.
+
+    P2/P3: ``sess`` filters by session (ASIA/EUROPE/US), ``timeframe`` filters
+    by intraday/session/day. When omitted, returns the latest snapshot for the
+    asset/scope regardless of session or timeframe (backward compatible).
     """
-    snap = _latest_snapshot(session, asset, scope)
+    snap = _latest_snapshot(session, asset, scope, sess=sess,
+                            timeframe=timeframe)
     if snap is None:
         # Nothing computed yet. No signals = NO_BIAS verdict, passed through
         # to to_display() which will render NEUTRAL with a 50/50 split.
@@ -354,7 +368,13 @@ def _block(session, asset: str, scope: str) -> dict:
         "confidence": snap.confidence,
         "bias": snap.bias,
         "display": to_display(_display_raw, snap.bias, snap.confidence,
-                               tie_break=_tie_break),
+                               tie_break=_tie_break,
+                               contradiction_detected=bool(
+                                   getattr(snap, "contradiction_detected",
+                                           False)),
+                               burst_total=int(
+                                   getattr(snap, "burst_bull", 0) or 0)
+                               + int(getattr(snap, "burst_bear", 0) or 0)),
         # When this dominant side began, from snapshot history. The card uses it
         # to show "since ..." on a fresh page load, before the browser has
         # witnessed a flip of its own.
@@ -474,6 +494,66 @@ def _news_feed(session, limit: int | None = None,
     return feed, total
 
 
+def compute_convergence(session) -> dict:
+    """
+    P5: Cross-asset convergence/divergence signal.
+
+    Reads the current (day timeframe) bias for each core asset and determines
+    whether they are aligned (all same direction) or divergent (mixed).
+    Returns a block the dashboard can render at the top of the page.
+    """
+    from app.models.enums import Asset
+    _sess = detect_session().value
+    biases = {}
+    scores = {}
+    for asset in (Asset.GOLD, Asset.SILVER, Asset.BITCOIN):
+        snap = _latest_snapshot(session, asset.value, "CURRENT",
+                                sess=_sess, timeframe="day")
+        if snap is not None and not snap.stale:
+            biases[asset.value] = snap.bias
+            scores[asset.value] = snap.score
+        else:
+            biases[asset.value] = None
+            scores[asset.value] = 0.0
+
+    directions = [b for b in biases.values() if b is not None]
+    bull_count = sum(1 for b in directions if b is not None
+                     and getattr(b, "value", b) == "BULLISH")
+    bear_count = len(directions) - bull_count
+
+    if len(directions) == 0:
+        return {"alignment": "NO_CONSENSUS",
+                "note": "No bias computed for any core asset.",
+                "assets": {}}
+
+    if bull_count == len(directions):
+        alignment = "UNIFIED_BULLISH"
+        note = "All core assets aligned bullish - unified risk-off / weaker-USD read."
+    elif bear_count == len(directions):
+        alignment = "UNIFIED_BEARISH"
+        note = "All core assets aligned bearish - unified risk-on / stronger-USD read."
+    elif bull_count > 0 and bear_count > 0:
+        alignment = "DIVERGENT"
+        note = "Core assets split - metals and bitcoin disagree; lower conviction."
+    else:
+        alignment = "NO_CONSENSUS"
+        note = "No clear directional consensus across core assets."
+
+    return {
+        "alignment": alignment,
+        "note": note,
+        "bull_count": bull_count,
+        "bear_count": bear_count,
+        "assets": {
+            asset.value: {
+                "bias": biases.get(asset.value),
+                "score": scores.get(asset.value, 0.0),
+            }
+            for asset in (Asset.GOLD, Asset.SILVER, Asset.BITCOIN)
+        },
+    }
+
+
 def build_payload(session) -> dict:
     """Assemble the complete dashboard payload (section 20)."""
     state = pipeline.runtime_state()
@@ -488,19 +568,31 @@ def build_payload(session) -> dict:
 
     assets_out = []
     for asset in Asset:
-        # Step 6 (Option A): Skip Asset.EQUITY - equity is served via the
-        # session-aware equity card (top-level "equity" key), not as a
-        # regular asset card. The asset-level EQUITY snapshot is no longer
-        # computed in _recompute_sentiment.
-        if asset is Asset.EQUITY:
-            continue
+        # P1: Only core day-trading assets (XAUUSD, XAGUSD, BTCUSD) are served
+        # by default. EQUITY/OIL are opt-in via ASSETS_INCLUDE_EXTRA=1.
+        if asset is Asset.EQUITY or asset is Asset.OIL:
+            if settings.assets_include_extra != "1":
+                continue
         assets_out.append({
             "asset": asset.value,
             "label": asset.label,
             "symbol": asset.value,
-            "market_prep": _block(session, asset.value, "MARKET_PREP"),
-            "market_wrap": _block(session, asset.value, "MARKET_WRAP"),
-            "current": _block(session, asset.value, "CURRENT"),
+            # P2/P3: current bias for the active session, plus intraday and
+            # session timeframes so a day trader can see short-term vs session
+            # bias side by side.
+            "market_prep": _block(session, asset.value, "MARKET_PREP",
+                                  sess=detect_session().value),
+            "market_wrap": _block(session, asset.value, "MARKET_WRAP",
+                                  sess=detect_session().value),
+            "current": _block(session, asset.value, "CURRENT",
+                              sess=detect_session().value, timeframe="day"),
+            "current_intraday": _block(session, asset.value, "CURRENT",
+                                       sess=detect_session().value,
+                                       timeframe="intraday"),
+            "current_session_tf": _block(session, asset.value, "CURRENT",
+                                         sess=detect_session().value,
+                                         timeframe="session"),
+            "current_session": detect_session().value,
             "economic_calendar": pipeline.calendar_summary(asset),
         })
 
@@ -568,6 +660,7 @@ def build_payload(session) -> dict:
         "regime_confidence": (regime.confidence if regime else 0.0),
         "regime_drivers": (regime.drivers if regime else []),
         "assets": assets_out,
+        "convergence": compute_convergence(session),
         "news_feed": news_feed,
         "news_feed_total": news_feed_total,
         "alerts": alerts,
@@ -759,12 +852,25 @@ async def sentiment(asset: str):
     key = asset.upper()
     if key not in Asset.values():
         return JSONResponse({"error": f"Unsupported asset: {asset}"}, status_code=404)
+    # P1: EQUITY/OIL are opt-in via ASSETS_INCLUDE_EXTRA=1.
+    if key in ("EQUITY", "USOIL") and settings.assets_include_extra != "1":
+        return JSONResponse(
+            {"error": f"Asset {asset} is opt-in; set ASSETS_INCLUDE_EXTRA=1"},
+            status_code=404,
+        )
+    _sess = detect_session().value
     with session_scope() as session:
         return {
             "asset": key,
-            "market_prep": _block(session, key, "MARKET_PREP"),
-            "market_wrap": _block(session, key, "MARKET_WRAP"),
-            "current": _block(session, key, "CURRENT"),
+            "market_prep": _block(session, key, "MARKET_PREP", sess=_sess),
+            "market_wrap": _block(session, key, "MARKET_WRAP", sess=_sess),
+            "current": _block(session, key, "CURRENT", sess=_sess,
+                              timeframe="day"),
+            "current_intraday": _block(session, key, "CURRENT", sess=_sess,
+                                       timeframe="intraday"),
+            "current_session_tf": _block(session, key, "CURRENT", sess=_sess,
+                                         timeframe="session"),
+            "current_session": _sess,
         }
 
 

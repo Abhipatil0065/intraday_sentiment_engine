@@ -33,6 +33,7 @@ from app.analysis.fj_sessions import (
 )
 from app.analysis.news_classifier import analyze_article, is_section_b_verdict
 from app.analysis.sentiment_engine import WeightedSignal, remember_bias
+from app.analysis.sentiment_engine import compute_timeframes
 from app.analysis.signal_factory import build_bleed_signal, build_signal
 from app.config import settings
 from app.database import session_scope
@@ -63,6 +64,7 @@ from app.models.enums import (
     ImpactStrength,
     NewsCategory,
     ReportKind,
+    SessionName,
 )
 from app.services.bias_snapshots import AssetVerdict
 from app.utils import timeutils as T
@@ -1031,6 +1033,7 @@ def _recompute_sentiment(session, stats: IngestStats):
     _recompute_sentiment._last_session = current_session
 
     from app.analysis.sentiment_engine import compute as compute_sentiment
+    from app.analysis.sentiment_engine import compute_timeframes
     from app.analysis.sentiment_engine import _signal_weight
 
     rows = session.scalars(
@@ -1301,14 +1304,24 @@ def _recompute_sentiment(session, stats: IngestStats):
     except Exception as exc:  # noqa: BLE001 - never break the recompute
         log.debug("event_risk_check failed: %s", exc)
 
-    for asset in Asset:
+    for asset_str in settings.supported_assets:
+        try:
+            asset = Asset(asset_str)
+        except ValueError:
+            log.debug("Skipping unsupported asset %r", asset_str)
+            continue
         asset_signals = [s for s in signals if s.asset is asset]
 
-        current_result = compute_sentiment(
-            asset_signals, asset, event_risk=at_risk,
-            event_risk_note=risk_note)
-        prep = market_prep.build(asset_signals, category_weights, asset)
-        wrap = market_wrap.build(asset_signals, asset)
+        # P3: compute bias for intraday/session/day timeframes.
+        tf_results = compute_timeframes(
+            asset_signals, asset, session=current_session,
+            event_risk=at_risk, event_risk_note=risk_note)
+        current_result = tf_results["day"]
+        intraday_result = tf_results["intraday"]
+        session_result = tf_results["session"]
+        prep = market_prep.build(asset_signals, category_weights, asset,
+                                 session=current_session)
+        wrap = market_wrap.build(asset_signals, asset, session=current_session)
 
         # Item 11: persist every published bias so it can be scored later.
         try:
@@ -1323,13 +1336,22 @@ def _recompute_sentiment(session, stats: IngestStats):
         if (not current_result.stale
                 and current_result.confidence > 0.0
                 and current_result.confidence_label != "LOW"):
-            remember_bias(asset.value, current_result.bias)
+            # P2: remember bias per (asset, session, timeframe) so session-scoped
+            # bias persists across ticks. Matches the key format used inside
+            # compute() when session is provided.
+            bias_key = f"{asset.value}:{current_session.value}:day" \
+                if current_session else asset.value
+            remember_bias(bias_key, current_result.bias)
 
-        for scope, result in (
-            ("CURRENT", current_result),
-            ("MARKET_PREP", prep.sentiment),
-            ("MARKET_WRAP", wrap.sentiment),
-        ):
+        # P3: persist intraday/session/day timeframes as CURRENT scope snapshots.
+        current_scope_results = (
+            ("CURRENT", current_result, "day"),
+            ("CURRENT", intraday_result, "intraday"),
+            ("CURRENT", session_result, "session"),
+            ("MARKET_PREP", prep.sentiment, "day"),
+            ("MARKET_WRAP", wrap.sentiment, "day"),
+        )
+        for scope, result, tf in current_scope_results:
             # TASK 2: collect bull/bear on every snapshot row for every asset,
             # including EQUITY and all three scopes, so historical r is
             # reconstructable. EQUITY still has its own top-level card in
@@ -1363,15 +1385,17 @@ def _recompute_sentiment(session, stats: IngestStats):
                                "direction": result.conflict.direction,
                                "weight": result.conflict.weight}
                               if result.conflict else None),
-note=result.note,
-                      contributing_articles=result.contributing_articles,
-                      signal_count=result.signal_count,
-                      contradiction_detected=result.contradiction_detected,
-                      burst_bull=result.burst_bull,
-                      burst_bear=result.burst_bear,
-                      stale=result.stale,
+                    note=result.note,
+                    contributing_articles=result.contributing_articles,
+                    signal_count=result.signal_count,
+                    contradiction_detected=result.contradiction_detected,
+                    burst_bull=result.burst_bull,
+                    burst_bear=result.burst_bear,
+                    stale=result.stale,
                     confidence_label=result.confidence_label,
                     price_note=_price_note(asset),
+                    session=current_session.value if current_session else None,
+                    timeframe=tf,
                     bull=result.bull_weight,
                     bear=result.bear_weight,
             )

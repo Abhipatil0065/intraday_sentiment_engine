@@ -366,10 +366,12 @@ class Settings(BaseSettings):
     news_sources: str = ""
 
     # ---------------- assets ----------------
-    # Item 2: S&P 500 as a first-class asset. EQUITY is iterated by the pipeline
-    # like the other three, persisted to sentiment_snapshot/bias_snapshots, and
-    # served from its own card - it is no longer a proxy for BITCOIN.
-    assets: str = "XAUUSD,XAGUSD,BTCUSD,EQUITY"
+    # Core day-trading assets (default). XAUUSD, XAGUSD, BTCUSD are always on.
+    # EQUITY and OIL are opt-in via ASSETS_INCLUDE_EXTRA=1 so they do not burn
+    # the 180s poll budget or add noise for a trader focused on gold/silver/btc.
+    assets: str = "XAUUSD,XAGUSD,BTCUSD"
+    # When "1", also iterate EQUITY and OIL as first-class assets. Off by default.
+    assets_include_extra: str = Field(default="0", validation_alias="ASSETS_INCLUDE_EXTRA")
 
     # ---------------- session profiles (Item 3) ----------------
     # Per-asset session multiplier profile. BTCUSD is "flat" by default: it
@@ -638,7 +640,17 @@ class Settings(BaseSettings):
 
     @property
     def supported_assets(self) -> list[str]:
-        return [a.strip().upper() for a in self.assets.split(",") if a.strip()]
+        core = [a.strip().upper() for a in self.assets.split(",") if a.strip()]
+        if self.assets_include_extra == "1":
+            for extra in ("EQUITY", "OIL"):
+                if extra not in core:
+                    core.append(extra)
+        return core
+
+    @property
+    def core_assets(self) -> list[str]:
+        """Always the three day-trading assets: XAUUSD, XAGUSD, BTCUSD."""
+        return ["XAUUSD", "XAGUSD", "BTCUSD"]
 
     @property
     def asset_session_profile_map(self) -> dict[str, str]:

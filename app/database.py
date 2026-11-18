@@ -211,6 +211,8 @@ def _add_missing_sentiment_columns() -> None:
         "baseline_score": "FLOAT",
         "stale": "BOOLEAN DEFAULT 0",
         "confidence_label": "VARCHAR(8) DEFAULT 'LOW'",
+        "session": "VARCHAR(16)",
+        "timeframe": "VARCHAR(16) DEFAULT 'day'",
     }
     try:
         with engine.begin() as conn:

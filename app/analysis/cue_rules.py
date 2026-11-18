@@ -285,7 +285,37 @@ def detect_inversion_subjects(
     return [s for s in matched if not (s in seen or seen.add(s))]
 
 
-def score_cues(text: str, cues: list[tuple[str, int]]) -> float:
+# P8: Session-aware cue multipliers. When the active session is known, cues
+# relevant to that session's trading focus are boosted so the heuristic engine
+# reads session-appropriate signals more strongly. Off-hours boosts geopolitics
+# and risk-off cues that move markets when liquidity is thin.
+SESSION_CUE_MULTIPLIERS: dict[str, dict[str, float]] = {
+    "ASIA": {
+        "china": 1.30, "manufacturing": 1.30, "pmi": 1.30, "industrial": 1.30,
+        "copper": 1.30, "solar": 1.30, "electronics": 1.30, "demand": 1.25,
+        "pboc": 1.25, "commodity": 1.20,
+    },
+    "EUROPE": {
+        "ecb": 1.30, "lagarde": 1.30, "bund": 1.25, "gilt": 1.25,
+        "euro": 1.20, "ftse": 1.20, "dax": 1.20, "cac": 1.20,
+        "inflation": 1.20, "cpi": 1.20, "treasury": 1.15,
+    },
+    "US": {
+        "fed": 1.35, "powell": 1.35, "fomc": 1.35, "nfp": 1.35, "payroll": 1.35,
+        "cpi": 1.35, "pce": 1.35, "nonfarm": 1.35, "dxy": 1.30, "dollar": 1.30,
+        "treasury": 1.30, "yield": 1.30, "real yield": 1.35, "etf": 1.25,
+        "gld": 1.25, "unemployment": 1.30,
+    },
+    "OFF_HOURS": {
+        "geopolit": 1.35, "war": 1.35, "missile": 1.35, "sanction": 1.30,
+        "escalat": 1.30, "risk-off": 1.25, "risk off": 1.25, "safe haven": 1.25,
+        "oil": 1.20, "crude": 1.20,
+    },
+}
+
+
+def score_cues(text: str, cues: list[tuple[str, int]],
+               session: str | None = None) -> float:
     """
     Sum the weights of every cue present in the text.
 
@@ -293,16 +323,30 @@ def score_cues(text: str, cues: list[tuple[str, int]]) -> float:
     :func:`app.analysis.text_match.contains_cue`) so that "plunge" still fires
     on "plunges". A cue may legitimately appear more than once; each occurrence
     is counted, capped so a single repeated word cannot dominate the score.
+
+    P8: When ``session`` is provided, cues relevant to that session's trading
+    focus are boosted by ``SESSION_CUE_MULTIPLIERS[session]``. Unknown sessions
+    or missing cues leave weights unchanged.
     """
     total = 0.0
+    mults = SESSION_CUE_MULTIPLIERS.get(session, {}) if session else {}
+    lowered = text.lower()
     for phrase, weight in cues:
         hits = cue_hits(text, phrase)
         if hits:
-            total += weight * min(hits, _MAX_REPEAT_HITS)
+            # P8: apply session multiplier if the cue phrase matches a
+            # session-relevant keyword (substring match on the lowered text).
+            mult = 1.0
+            for key, m in mults.items():
+                if key in lowered:
+                    mult = m
+                    break
+            total += weight * mult * min(hits, _MAX_REPEAT_HITS)
     return total
 
 
-def detect_direction(text: str, equity: bool = False) -> Direction:
+def detect_direction(text: str, equity: bool = False,
+                     session: str | None = None) -> Direction:
     """
     Net directional read from weighted cue scores.
 
@@ -316,6 +360,10 @@ def detect_direction(text: str, equity: bool = False) -> Direction:
     is a metal-bearish cue, and "lower guidance" is BEARISH for equities even
     though "lower yields" is bullish for metals.
 
+    P8: When ``session`` is provided, session-relevant cues are boosted via
+    ``score_cues`` so the heuristic engine reads session-appropriate signals
+    more strongly.
+
     Negation and the text-quality multipliers are applied here so that a
     negated or hedged headline cannot produce a directional read at all.
     """
@@ -324,8 +372,8 @@ def detect_direction(text: str, equity: bool = False) -> Direction:
     # A negated cue must not score: "rules out a rate cut" is not a rate cut.
     scored = tq.neutralise_on_negation(text)
 
-    bull = score_cues(scored, BULLISH_CUES)
-    bear = score_cues(scored, BEARISH_CUES)
+    bull = score_cues(scored, BULLISH_CUES, session=session)
+    bear = score_cues(scored, BEARISH_CUES, session=session)
 
     for subject in detect_inversion_subjects(scored, YIELD_SUBJECTS, UP_VERBS):
         bull = max(0.0, bull - _INVERSION_WEIGHT)

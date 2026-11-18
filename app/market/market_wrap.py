@@ -24,7 +24,7 @@ from app.analysis.sentiment_engine import (
     compute as compute_sentiment,
 )
 from app.logging_conf import get_logger
-from app.models.enums import Asset, Direction, ReportKind
+from app.models.enums import Asset, Direction, ReportKind, SessionName
 
 log = get_logger(__name__)
 
@@ -55,7 +55,8 @@ def _net_of(signals: Sequence[WeightedSignal]) -> float:
     return total
 
 
-def build(signals: Sequence[WeightedSignal], asset: Asset) -> WrapResult:
+def build(signals: Sequence[WeightedSignal], asset: Asset,
+          session: SessionName | None = None) -> WrapResult:
     """Build the wrap view for one asset."""
     asset_signals = [s for s in signals if s.asset is asset]
     wrap_signals = [s for s in asset_signals if s.report_kind is ReportKind.WRAP]
@@ -66,10 +67,10 @@ def build(signals: Sequence[WeightedSignal], asset: Asset) -> WrapResult:
     if explicit:
         for s in wrap_signals:
             s.persistence = min(1.0, s.persistence + 0.15)
-        sentiment = compute_sentiment(asset_signals, asset)
+        sentiment = compute_sentiment(asset_signals, asset, session=session)
         note = "Includes today's MARKET_WRAP reports."
     else:
-        sentiment = compute_sentiment(asset_signals, asset)
+        sentiment = compute_sentiment(asset_signals, asset, session=session)
         note = ("No MARKET_WRAP article found today - session flow reconstructed "
                 "from intraday news.")
 

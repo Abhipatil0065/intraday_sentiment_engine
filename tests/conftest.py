@@ -32,6 +32,8 @@ _BASE = Path(__file__).resolve().parent.parent
 _TMP_DB = Path(tempfile.mkdtemp(prefix="intraday_test_")) / "test.db"
 os.environ["DATABASE_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
 os.environ["APP_TESTING"] = "1"
+# Tests expect the default LLM concurrency of 2 regardless of .env overrides.
+os.environ["LLM_MAX_CONCURRENT"] = "2"
 # Prevent the real .env from overriding the temp DB path.
 os.environ.pop("DATABASE_URL_2", None)
 

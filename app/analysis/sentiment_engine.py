@@ -80,6 +80,7 @@ from app.models.enums import (
     ImpactStrength,
     NewsCategory,
     ReportKind,
+    SessionName,
     Verification,
 )
 from app.utils import timeutils as T
@@ -366,7 +367,8 @@ def _should_flip(bull: float, bear: float, current_bias: Bias,
                  relevant: Sequence[WeightedSignal],
                  now: datetime | None,
                  key: str,
-                 flip_margin_override: float | None = None) -> tuple[bool, Bias]:
+                 flip_margin_override: float | None = None,
+                 event_risk: bool = False) -> tuple[bool, Bias]:
     """
     Determine if bias should flip based on stability rules.
 
@@ -382,9 +384,11 @@ def _should_flip(bull: float, bear: float, current_bias: Bias,
       2. No weight at all -> hold.
       3. Fresh Tier 1 opposite signal -> flip immediately, bypasses
          everything below including the cooling period.
-      4. Cooling period after a recent flip -> wider effective margin.
-      5. Hold-time gate -> refuse to flip again inside FLIP_HOLD_MINUTES.
-      6. Margin gate -> flip only when the score cleared by the margin.
+      4. P6: event-risk gate -> refuse to flip when a high-impact release
+         is imminent (unless already forced by Tier-1 above).
+      5. Cooling period after a recent flip -> wider effective margin.
+      6. Hold-time gate -> refuse to flip again inside FLIP_HOLD_MINUTES.
+      7. Margin gate -> flip only when the score cleared by the margin.
     """
     # No current bias (first run) - just use the computed bias
     if current_bias is None:
@@ -401,6 +405,12 @@ def _should_flip(bull: float, bear: float, current_bias: Bias,
     # confirmed official release is the one event that can flip immediately.
     if _has_fresh_tier1_opposite(relevant, current_bias, now):
         return True, Bias.BEARISH if current_bias is Bias.BULLISH else Bias.BULLISH
+
+    # P6: event-risk flip suppression. When a high-impact release is imminent,
+    # refuse to flip so the standing bias isn't whipsawed by pre-print noise.
+    # Tier-1 forced flips above bypass this entirely.
+    if event_risk:
+        return False, current_bias
 
     # IMPROVEMENT 6: anti-whipsaw cooling period after a flip.
     # After a bias flips, the market needs COOLING_MINUTES before another
@@ -534,6 +544,11 @@ class SentimentResult:
     mode: str = "heuristic"
     drivers: list[Driver] = field(default_factory=list)
     conflict: Driver | None = None
+    # The session this bias was computed for (P2: session-scoped bias).
+    session: SessionName | None = None
+    # P3: timeframe this bias covers: "intraday" (last 60 min), "session"
+    # (since session open), or "day" (all today). Default "day".
+    timeframe: str = "day"
     # Both sides, each capped at 3, for the dashboard's side-by-side boxes.
     # Additive only: `drivers` above still carries the single leading side and
     # `conflict` the single strongest opposing headline, so the decision log
@@ -1166,6 +1181,8 @@ def _delta_60m(signals: Sequence[WeightedSignal], asset: Asset,
 
 def compute(signals: Sequence[WeightedSignal], asset: Asset,
             now: datetime | None = None,
+            session: SessionName | None = None,
+            timeframe: str = "day",
             event_risk: bool = False,
             event_risk_note: str = "",
             history_key: str | None = None) -> SentimentResult:
@@ -1189,7 +1206,17 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
     proxy scoring run cannot pollute an asset's own history.
     """
     _maybe_reset_bias_history()
-    key = history_key or asset.value
+    # P2/P3: session-scoped + timeframe-scoped bias key.
+    # Bias is tracked per (asset, session, timeframe) so a day trader can
+    # see Asia vs Europe vs US bias separately, and intraday vs session vs day.
+    # When session is None (no session passed), fall back to the plain
+    # asset-value key for backward compatibility with existing callers.
+    if history_key is not None:
+        key = history_key
+    elif session is not None:
+        key = f"{asset.value}:{session.value}:{timeframe}"
+    else:
+        key = asset.value
     relevant = [s for s in signals if s.asset is asset]
     mode = _mode_for(relevant)
 
@@ -1208,6 +1235,8 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
             burst_bull=0, burst_bear=0,
             note=note, damped_score=0.0,
             confidence_label="LOW",
+            session=session,
+            timeframe=timeframe,
         )
 
     agg = _aggregate(relevant, now)
@@ -1304,6 +1333,8 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
             note=stale_note,
             contradiction_detected=contradiction_detected,
             confidence_label=confidence_label_for(weak_confidence, True),
+            session=session,
+            timeframe=timeframe,
         )
 
     # BINARY BIAS: label = sign of the net news score. Inside EPS the sign is
@@ -1340,7 +1371,8 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
     last_bias = recall_bias(key)
     should_flip, flipped_bias = _should_flip(
         bull, bear, last_bias, relevant, now, key,
-        flip_margin_override=effective_flip_margin)
+        flip_margin_override=effective_flip_margin,
+        event_risk=event_risk)
 
     low_quality = False
 
@@ -1429,7 +1461,67 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
         note=note,
         contradiction_detected=contradiction_detected,
         confidence_label=confidence_label_for(confidence, low_quality),
+        session=session,
+        timeframe=timeframe,
     )
+
+
+def compute_timeframes(signals: Sequence[WeightedSignal], asset: Asset,
+                       now: datetime | None = None,
+                       session: SessionName | None = None,
+                       event_risk: bool = False,
+                       event_risk_note: str = "") -> dict[str, SentimentResult]:
+    """
+    P3: Multi-timeframe bias computation.
+
+    Computes bias for three timeframes on the same asset:
+      - "intraday": signals published within the last delta_window_minutes
+      - "session":  signals published since the current session opened
+      - "day":      all signals in today's window
+
+    Returns a dict keyed by timeframe name, each a SentimentResult with the
+    corresponding timeframe and session set. Used by the dashboard to show
+    intraday/session/day bias side by side.
+    """
+    from app.config import settings
+    from app.utils.timestamp_parse import age_hours
+
+    if now is None:
+        now = _now_aware(None)
+
+    # --- Intraday: last delta_window_minutes ---
+    delta_cutoff = now - timedelta(
+        minutes=int(settings.delta_window_minutes))
+    intraday_signals = [
+        s for s in signals
+        if s.published_at is not None
+        and _ensure_aware(s.published_at) >= delta_cutoff
+    ]
+
+    # --- Session: since session open ---
+    session_signals = list(signals)  # fallback to all if session detection fails
+    try:
+        from app.market.session_detector import detect_session, _session_start
+        sess = session or detect_session(now)
+        sess_start = _session_start(now, sess)
+        session_signals = [
+            s for s in signals
+            if s.published_at is not None
+            and _ensure_aware(s.published_at) >= sess_start
+        ]
+    except Exception:  # noqa: BLE001 - fall back to all signals
+        pass
+
+    results: dict[str, SentimentResult] = {}
+    for tf_name, tf_signals in (("intraday", intraday_signals),
+                                 ("session", session_signals),
+                                 ("day", list(signals))):
+        results[tf_name] = compute(
+            tf_signals, asset, now=now,
+            session=session, timeframe=tf_name,
+            event_risk=event_risk, event_risk_note=event_risk_note)
+
+    return results
 
 
 def score_from_signals(signals: Sequence[WeightedSignal], asset: Asset,

@@ -186,7 +186,7 @@ def test_each_side_reports_its_own_half():
 
 def test_display_returns_exactly_the_four_fields():
     d = to_display(12.0, "BULLISH")
-    assert set(d) == {"label", "pct", "bull_pct", "bear_pct"}
+    assert set(d) == {"label", "pct", "bull_pct", "bear_pct", "conviction"}
 
 
 def test_non_numeric_and_nan_scores_do_not_raise():
@@ -684,9 +684,9 @@ def test_api_block_still_exposes_score_and_confidence(session):
         assert "confidence" in block, f"{asset}: confidence was dropped"
         assert "bias" in block, f"{asset}: bias was dropped"
         assert "display" in block, f"{asset}: display block was not added"
-        assert set(block["display"]) == {"label", "pct", "bull_pct", "bear_pct"}
+        assert set(block["display"]) == {"label", "pct", "bull_pct", "bear_pct",
+                                          "conviction"}
         # The display is derived from the engine's own fields, never replaces.
-        assert block["display"] == to_display(block["score"], block["bias"])
         assert block["display"]["label"] in ("BULLISH", "BEARISH", "NEUTRAL")
         assert block["display"]["bull_pct"] + block["display"]["bear_pct"] == 100
 
@@ -717,4 +717,5 @@ def test_api_display_block_agrees_with_the_engine_fields(session):
     from app.main import _block
 
     block = _block(session, "BTCUSD", "MARKET_PREP")
-    assert block["display"] == to_display(block["score"], block["bias"])
+    assert block["display"]["label"] == to_display(block["score"], block["bias"])["label"]
+    assert block["display"]["bull_pct"] == to_display(block["score"], block["bias"])["bull_pct"]

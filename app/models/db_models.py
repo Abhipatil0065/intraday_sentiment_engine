@@ -223,6 +223,11 @@ class SentimentSnapshot(Base):
     # dashboard so a reader can see the momentum behind the score.
     burst_bull: Mapped[int] = mapped_column(Integer, default=0)
     burst_bear: Mapped[int] = mapped_column(Integer, default=0)
+    # P2: session-scoped bias - the session this verdict was computed for
+    # (ASIA / EUROPE / US / OFF_HOURS), so a trader can see per-session bias.
+    session: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # P3: timeframe this bias covers: "intraday", "session", or "day".
+    timeframe: Mapped[str] = mapped_column(String(16), default="day")
 
     price_note: Mapped[str] = mapped_column(Text, default="")
     stale: Mapped[bool] = mapped_column(Boolean, default=False)

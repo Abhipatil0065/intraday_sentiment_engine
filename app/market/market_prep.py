@@ -20,7 +20,7 @@ from app.analysis.sentiment_engine import (
     compute as compute_sentiment,
 )
 from app.logging_conf import get_logger
-from app.models.enums import Asset, NewsCategory, ReportKind
+from app.models.enums import Asset, NewsCategory, ReportKind, SessionName
 
 log = get_logger(__name__)
 
@@ -104,6 +104,7 @@ def build(
     signals: Sequence[WeightedSignal],
     category_weights: dict[NewsCategory, float],
     asset: Asset,
+    session: SessionName | None = None,
 ) -> PrepResult:
     """
     Build the prep view for one asset.
@@ -122,10 +123,10 @@ def build(
     if explicit:
         blended = list(prep_signals)
         blended.extend(s for s in asset_signals if s.report_kind is not ReportKind.PREP)
-        sentiment = compute_sentiment(blended, asset)
+        sentiment = compute_sentiment(blended, asset, session=session)
         note = "Built from today's MARKET_PREP reports plus supporting macro flow."
     else:
-        sentiment = compute_sentiment(asset_signals, asset)
+        sentiment = compute_sentiment(asset_signals, asset, session=session)
         note = (
             "No MARKET_PREP article found today - setup inferred from "
             "general intraday news flow."

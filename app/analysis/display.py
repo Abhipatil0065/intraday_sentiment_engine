@@ -44,6 +44,47 @@ from __future__ import annotations
 BULLISH = "BULLISH"
 BEARISH = "BEARISH"
 
+# P4: Conviction tier thresholds. A day trader can act on STRONG/MODERATE
+# calls; WEAK calls are "watch only".
+CONVICTION_STRONG_SCORE = 40.0   # min |score| for STRONG
+CONVICTION_STRONG_CONF = 0.60    # min confidence for STRONG
+CONVICTION_MODERATE_SCORE = 20.0 # min |score| for MODERATE
+CONVICTION_MODERATE_CONF = 0.40  # min confidence for MODERATE
+
+WEAK = "WEAK"
+MODERATE = "MODERATE"
+STRONG = "STRONG"
+
+
+def to_conviction(score: float, confidence: float | None,
+                  contradiction_detected: bool = False,
+                  burst_total: int = 0) -> str:
+    """
+    P4: Map a verdict to a conviction tier.
+
+    STRONG: |score| >= 40 AND confidence >= 0.60, no contradiction, some burst
+    MODERATE: |score| >= 20 AND confidence >= 0.40, no contradiction
+    WEAK: everything else (tie-breaks, held biases, contradicted news)
+
+    A contradiction caps conviction at WEAK regardless of numbers, because
+    the two sides are genuinely fighting and no single direction is trustworthy.
+    """
+    if contradiction_detected:
+        return WEAK
+    conf = confidence or 0.0
+    try:
+        abs_score = abs(float(score or 0.0))
+    except (TypeError, ValueError):
+        abs_score = 0.0
+    if (abs_score >= CONVICTION_STRONG_SCORE
+            and conf >= CONVICTION_STRONG_CONF):
+        return STRONG
+    if (abs_score >= CONVICTION_MODERATE_SCORE
+            and conf >= CONVICTION_MODERATE_CONF):
+        return MODERATE
+    return WEAK
+
+
 # The ONE lean shown when a named side contradicts the raw split (a tie-break
 # verdict whose raw score leans the other way): one point over half toward the
 # label - never a strong-looking bar for a call the engine had to tie-break.
@@ -96,7 +137,9 @@ def _leading_side(bull_pct: int) -> str:
 
 
 def to_display(score: float, bias, confidence: float | None = None,
-               tie_break: bool = False) -> dict:
+               tie_break: bool = False,
+               contradiction_detected: bool = False,
+               burst_total: int = 0) -> dict:
     """
     Project an engine verdict onto the dashboard's bull/bear split.
 
@@ -131,9 +174,13 @@ def to_display(score: float, bias, confidence: float | None = None,
             split toward 50/50 proportionally. None means no shrinking.
         tie_break: optional; True when the label came from the tie-break rule
             (|raw_score| < EPS) rather than from the score's own sign.
+        contradiction_detected: optional; True when both sides are heavily
+            weighted, capping conviction at WEAK.
+        burst_total: optional; total same-side burst count in the last 15 min,
+            used to boost conviction toward STRONG.
 
     Returns:
-        ``{"label", "pct", "bull_pct", "bear_pct"}``.
+        ``{"label", "pct", "bull_pct", "bear_pct", "conviction"}``.
     """
     try:
         numeric = float(score)
@@ -212,9 +259,13 @@ def to_display(score: float, bias, confidence: float | None = None,
         label = _leading_side(bull_pct)
         pct = bull_pct if label == BULLISH else bear_pct
 
+    conviction = to_conviction(score, confidence, contradiction_detected,
+                               burst_total)
+
     return {
         "label": label,
         "pct": pct,
         "bull_pct": bull_pct,
         "bear_pct": bear_pct,
+        "conviction": conviction,
     }
