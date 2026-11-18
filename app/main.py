@@ -567,12 +567,11 @@ def build_payload(session) -> dict:
     stale, stale_reason = pipeline.compute_stale(HEALTH_STALE_MINUTES)
 
     assets_out = []
-    for asset in Asset:
-        # P1: Only core day-trading assets (XAUUSD, XAGUSD, BTCUSD) are served
-        # by default. EQUITY/OIL are opt-in via ASSETS_INCLUDE_EXTRA=1.
-        if asset is Asset.EQUITY or asset is Asset.OIL:
-            if settings.assets_include_extra != "1":
-                continue
+    for asset_str in settings.supported_assets:
+        try:
+            asset = Asset(asset_str)
+        except ValueError:
+            continue
         assets_out.append({
             "asset": asset.value,
             "label": asset.label,
@@ -852,10 +851,12 @@ async def sentiment(asset: str):
     key = asset.upper()
     if key not in Asset.values():
         return JSONResponse({"error": f"Unsupported asset: {asset}"}, status_code=404)
-    # P1: EQUITY/OIL are opt-in via ASSETS_INCLUDE_EXTRA=1.
-    if key in ("EQUITY", "USOIL") and settings.assets_include_extra != "1":
+    # P1: EQUITY/OIL are opt-in unless explicitly listed in ASSETS.
+    if key in ("EQUITY", "USOIL") and settings.assets_include_extra != "1" \
+            and key not in settings.supported_assets:
         return JSONResponse(
-            {"error": f"Asset {asset} is opt-in; set ASSETS_INCLUDE_EXTRA=1"},
+            {"error": f"Asset {asset} is opt-in; set ASSETS_INCLUDE_EXTRA=1 "
+             f"or add it to ASSETS"},
             status_code=404,
         )
     _sess = detect_session().value
