@@ -1,0 +1,84 @@
+{
+  "url": "https://www.tradingview.com/symbols/XAUUSD/news/",
+  "next_data": null,
+  "initial_state": null,
+  "json_ld_scripts": [
+    {
+      "@context": "https://schema.org",
+      "@type": "FinancialProduct",
+      "name": "Gold",
+      "description": "Gold price is widely followed in financial markets around the world. Gold was the basis of economic capitalism for hundreds of years until the repeal of the Gold standard, which led to the expansion of a flat currency system in which paper money doesn't have an implied backing with any physical form of monetization. AU is the code for Gold on the Periodic table of elements, and the price above is Gold quoted in US Dollars, which is the common yardstick for measuring the value of Gold across the world.",
+      "category": "Financial Instrument",
+      "tickerSymbol": "XAUUSD",
+      "identifier": [
+        {
+          "@type": "PropertyValue",
+          "propertyID": "tickerSymbol",
+          "value": "XAUUSD"
+        }
+      ],
+      "provider": {
+        "@type": "Organization",
+        "name": "TradingView",
+        "url": "https://www.tradingview.com"
+      },
+      "offers": {
+        "@type": "Offer",
+        "price": "4134.15",
+        "priceCurrency": "USD",
+        "priceValidUntil": "2026-10-20T00:26:54Z"
+      }
+    },
+    {
+      "@context": "https://schema.org",
+      "@type": "Organization",
+      "name": "TradingView",
+      "url": "https://www.tradingview.com"
+    },
+    {
+      "@context": "https://schema.org",
+      "@type": "Dataset",
+      "name": "XAUUSD price data",
+      "description": "Historical and real-time Gold Spot / U.S. Dollar price data from OANDA with charts, trends, and key market metrics.",
+      "creator": {
+        "@type": "Organization",
+        "name": "OANDA"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "TradingView",
+        "url": "https://www.tradingview.com"
+      }
+    },
+    {
+      "@context": "https://schema.org",
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "item": {
+            "@id": "https://www.tradingview.com/markets/",
+            "name": "Markets"
+          }
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "item": {
+            "@id": "https://www.tradingview.com/symbols/XAUUSD/?exchange=OANDA",
+            "name": "XAUUSD"
+          }
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "item": {
+            "@id": "https://www.tradingview.com/symbols/XAUUSD/news/",
+            "name": "News"
+          }
+        }
+      ]
+    }
+  ]
+}

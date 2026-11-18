@@ -1,0 +1,1307 @@
+{
+  "items": [
+    {
+      "paywall": true,
+      "id": "tag:reuters.com,2026:newsml_L1N4660RM:0",
+      "title": "Swiss gold exports rose 6% in September as shipments to UK surged",
+      "published": 1792513758,
+      "urgency": 2,
+      "permission": "headline",
+      "relatedSymbols": [
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/reuters.com,2026:newsml_L1N4660RM:0-swiss-gold-exports-rose-6-in-september-as-shipments-to-uk-surged/",
+      "provider": {
+        "id": "reuters",
+        "name": "Reuters",
+        "logo_id": "reuters"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "tag:reuters.com,2026:newsml_L1N4660OS:0",
+      "title": "Gold steady as investors await fed rate signals",
+      "published": 1792510771,
+      "urgency": 2,
+      "permission": "headline",
+      "relatedSymbols": [
+        {
+          "symbol": "TVC:GOLD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        },
+        {
+          "symbol": "BIST:XAGUSD1!",
+          "logoid": "metal/silver",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/silver"
+          }
+        },
+        {
+          "symbol": "BIST:XPDUSD1!",
+          "logoid": "metal/palladium",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/palladium"
+          }
+        },
+        {
+          "symbol": "NYMEX:PL1!",
+          "logoid": "metal/platinum",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/platinum"
+          }
+        },
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/reuters.com,2026:newsml_L1N4660OS:0-gold-steady-as-investors-await-fed-rate-signals/",
+      "provider": {
+        "id": "reuters",
+        "name": "Reuters",
+        "logo_id": "reuters"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "tag:reuters.com,2026:newsml_L1N4660G0:0",
+      "title": "Gold eases as oil-driven inflation worries weigh",
+      "published": 1792503333,
+      "urgency": 2,
+      "permission": "headline",
+      "relatedSymbols": [
+        {
+          "symbol": "TVC:GOLD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        },
+        {
+          "symbol": "BIST:XAGUSD1!",
+          "logoid": "metal/silver",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/silver"
+          }
+        },
+        {
+          "symbol": "BIST:XPDUSD1!",
+          "logoid": "metal/palladium",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/palladium"
+          }
+        },
+        {
+          "symbol": "NYMEX:PL1!",
+          "logoid": "metal/platinum",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/platinum"
+          }
+        },
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/reuters.com,2026:newsml_L1N4660G0:0-gold-eases-as-oil-driven-inflation-worries-weigh/",
+      "provider": {
+        "id": "reuters",
+        "name": "Reuters",
+        "logo_id": "reuters"
+      }
+    },
+    {
+      "paywall": false,
+      "id": "te_news:593481:0",
+      "title": "Gold Slips as Rising Oil Prices Fuel Rate Hike Expectations",
+      "published": 1792502905,
+      "urgency": 2,
+      "link": "https://tradingeconomics.com/commodity/gold",
+      "permission": "preview",
+      "relatedSymbols": [
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/te_news:593481:0-gold-slips-as-rising-oil-prices-fuel-rate-hike-expectations/",
+      "provider": {
+        "id": "trading-economics",
+        "name": "Trading Economics",
+        "logo_id": "te"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "DJN_DN20261020005007:0",
+      "title": "Comex Gold Delivery Intentions Breakdown - Oct 20",
+      "published": 1792502220,
+      "urgency": 2,
+      "permission": "headline",
+      "relatedSymbols": [
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/DJN_DN20261020005007:0-comex-gold-delivery-intentions-breakdown-oct-20/",
+      "provider": {
+        "id": "dow-jones",
+        "name": "Dow Jones Newswires",
+        "logo_id": "dow-jones"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "tag:reuters.com,2026:newsml_L1N4660BU:0",
+      "title": "Gold eases as higher oil prices stoke inflation concerns",
+      "published": 1792495676,
+      "urgency": 2,
+      "permission": "headline",
+      "relatedSymbols": [
+        {
+          "symbol": "TVC:GOLD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        },
+        {
+          "symbol": "BIST:XAGUSD1!",
+          "logoid": "metal/silver",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/silver"
+          }
+        },
+        {
+          "symbol": "BIST:XPDUSD1!",
+          "logoid": "metal/palladium",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/palladium"
+          }
+        },
+        {
+          "symbol": "NYMEX:PL1!",
+          "logoid": "metal/platinum",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/platinum"
+          }
+        },
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/reuters.com,2026:newsml_L1N4660BU:0-gold-eases-as-higher-oil-prices-stoke-inflation-concerns/",
+      "provider": {
+        "id": "reuters",
+        "name": "Reuters",
+        "logo_id": "reuters"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "DJN_DN20261020001785:0",
+      "title": "Goldman Raises Copper Price Forecast as Market Tightens Outside U.S. — Market Talk",
+      "published": 1792488240,
+      "urgency": 2,
+      "permission": "headline",
+      "relatedSymbols": [
+        {
+          "symbol": "COMEX:HG1!",
+          "logoid": "metal/copper",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/copper"
+          }
+        },
+        {
+          "symbol": "MCX:COPPER1!",
+          "logoid": "metal/copper",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/copper"
+          }
+        },
+        {
+          "symbol": "CAPITALCOM:XCUUSD",
+          "logoid": "metal/copper",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/copper"
+          }
+        },
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/DJN_DN20261020001785:0-goldman-raises-copper-price-forecast-as-market-tightens-outside-u-s-market-talk/",
+      "provider": {
+        "id": "dow-jones",
+        "name": "Dow Jones Newswires",
+        "logo_id": "dow-jones"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "DJN_DN20261020001573:0",
+      "title": "Gold Slips as Investors Await Fed Meeting Next Week — Market Talk",
+      "published": 1792485480,
+      "urgency": 2,
+      "permission": "headline",
+      "relatedSymbols": [
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        },
+        {
+          "symbol": "OANDA:XAGUSD",
+          "logoid": "metal/silver",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/silver"
+          }
+        },
+        {
+          "symbol": "COMEX:SI1!",
+          "logoid": "metal/silver",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/silver"
+          }
+        },
+        {
+          "symbol": "MCX:SILVER1!",
+          "logoid": "metal/silver",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/silver"
+          }
+        },
+        {
+          "symbol": "BIST:XAGUSD1!",
+          "logoid": "metal/silver",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/silver"
+          }
+        }
+      ],
+      "storyPath": "/news/DJN_DN20261020001573:0-gold-slips-as-investors-await-fed-meeting-next-week-market-talk/",
+      "provider": {
+        "id": "dow-jones",
+        "name": "Dow Jones Newswires",
+        "logo_id": "dow-jones"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "tag:reuters.com,2026:newsml_L1N46607S:0",
+      "title": "Gold eases as elevated oil prices keep inflation risks in focus",
+      "published": 1792484155,
+      "urgency": 2,
+      "permission": "headline",
+      "relatedSymbols": [
+        {
+          "symbol": "TVC:GOLD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        },
+        {
+          "symbol": "BIST:XAGUSD1!",
+          "logoid": "metal/silver",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/silver"
+          }
+        },
+        {
+          "symbol": "NYMEX:PL1!",
+          "logoid": "metal/platinum",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/platinum"
+          }
+        },
+        {
+          "symbol": "BIST:XPDUSD1!",
+          "logoid": "metal/palladium",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/palladium"
+          }
+        },
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/reuters.com,2026:newsml_L1N46607S:0-gold-eases-as-elevated-oil-prices-keep-inflation-risks-in-focus/",
+      "provider": {
+        "id": "reuters",
+        "name": "Reuters",
+        "logo_id": "reuters"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "tag:reuters.com,2026:newsml_L1N46601P:0",
+      "title": "Gold inches up on softer dollar as investors assess Fed rate outlook",
+      "published": 1792469774,
+      "urgency": 2,
+      "permission": "headline",
+      "relatedSymbols": [
+        {
+          "symbol": "TVC:GOLD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        },
+        {
+          "symbol": "TVC:DXY",
+          "logoid": "indices/u-s-dollar-index",
+          "logo": {
+            "style": "single",
+            "logoid": "indices/u-s-dollar-index"
+          }
+        },
+        {
+          "symbol": "BIST:XAGUSD1!",
+          "logoid": "metal/silver",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/silver"
+          }
+        },
+        {
+          "symbol": "NYMEX:PL1!",
+          "logoid": "metal/platinum",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/platinum"
+          }
+        },
+        {
+          "symbol": "BIST:XPDUSD1!",
+          "logoid": "metal/palladium",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/palladium"
+          }
+        },
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/reuters.com,2026:newsml_L1N46601P:0-gold-inches-up-on-softer-dollar-as-investors-assess-fed-rate-outlook/",
+      "provider": {
+        "id": "reuters",
+        "name": "Reuters",
+        "logo_id": "reuters"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "DJN_DN20261019008742:0",
+      "title": "Gold Edges Lower as Higher Yields Weigh — Market Talk",
+      "published": 1792463160,
+      "urgency": 2,
+      "permission": "headline",
+      "relatedSymbols": [
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/DJN_DN20261019008742:0-gold-edges-lower-as-higher-yields-weigh-market-talk/",
+      "provider": {
+        "id": "dow-jones",
+        "name": "Dow Jones Newswires",
+        "logo_id": "dow-jones"
+      }
+    },
+    {
+      "paywall": false,
+      "id": "te_news:593257:0",
+      "title": "Gold Slides for Third Straight Session",
+      "published": 1792460354,
+      "urgency": 2,
+      "link": "https://tradingeconomics.com/commodity/gold",
+      "permission": "preview",
+      "relatedSymbols": [
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/te_news:593257:0-gold-slides-for-third-straight-session/",
+      "provider": {
+        "id": "trading-economics",
+        "name": "Trading Economics",
+        "logo_id": "te"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "moneycontrol:78024ec45094b:0",
+      "title": "Gold holds decline as energy-led inflation weighs on rate path",
+      "published": 1792460263,
+      "urgency": 2,
+      "link": "https://www.moneycontrol.com/news/business/commodities/gold-holds-decline-as-energy-led-inflation-weighs-on-rate-path-14055805.html",
+      "relatedSymbols": [
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/moneycontrol:78024ec45094b:0-gold-holds-decline-as-energy-led-inflation-weighs-on-rate-path/",
+      "provider": {
+        "id": "moneycontrol",
+        "name": "Moneycontrol",
+        "logo_id": "moneycontrol"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "tag:reuters.com,2026:newsml_L4N4651RA:0",
+      "title": "Gold slips as investors weigh Fed rate outlook",
+      "published": 1792459743,
+      "urgency": 2,
+      "permission": "headline",
+      "relatedSymbols": [
+        {
+          "symbol": "TVC:GOLD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        },
+        {
+          "symbol": "BIST:XAGUSD1!",
+          "logoid": "metal/silver",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/silver"
+          }
+        },
+        {
+          "symbol": "NYMEX:PL1!",
+          "logoid": "metal/platinum",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/platinum"
+          }
+        },
+        {
+          "symbol": "BIST:XPDUSD1!",
+          "logoid": "metal/palladium",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/palladium"
+          }
+        },
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/reuters.com,2026:newsml_L4N4651RA:0-gold-slips-as-investors-weigh-fed-rate-outlook/",
+      "provider": {
+        "id": "reuters",
+        "name": "Reuters",
+        "logo_id": "reuters"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "tag:reuters.com,2026:newsml_L1N46600H:0",
+      "title": "Commodities intraday targets/key levels",
+      "published": 1792456456,
+      "urgency": 2,
+      "permission": "headline",
+      "relatedSymbols": [
+        {
+          "symbol": "TVC:UKOIL",
+          "logoid": "crude-oil",
+          "logo": {
+            "style": "single",
+            "logoid": "crude-oil"
+          }
+        },
+        {
+          "symbol": "ICEUS:CC1!",
+          "logoid": "cocoa",
+          "logo": {
+            "style": "single",
+            "logoid": "cocoa"
+          }
+        },
+        {
+          "symbol": "ICEUS:KC1!",
+          "logoid": "commodity/coffee",
+          "logo": {
+            "style": "single",
+            "logoid": "commodity/coffee"
+          }
+        },
+        {
+          "symbol": "NYMEX:CL1!",
+          "logoid": "crude-oil",
+          "logo": {
+            "style": "single",
+            "logoid": "crude-oil"
+          }
+        },
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/reuters.com,2026:newsml_L1N46600H:0-commodities-intraday-targets-key-levels/",
+      "provider": {
+        "id": "reuters",
+        "name": "Reuters",
+        "logo_id": "reuters"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "tag:reuters.com,2026:newsml_L1N4650S7:0",
+      "title": "Gold edges lower as firm dollar, elevated yields weigh",
+      "published": 1792434001,
+      "urgency": 2,
+      "permission": "headline",
+      "relatedSymbols": [
+        {
+          "symbol": "TVC:GOLD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        },
+        {
+          "symbol": "BIST:XAGUSD1!",
+          "logoid": "metal/silver",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/silver"
+          }
+        },
+        {
+          "symbol": "NYMEX:PL1!",
+          "logoid": "metal/platinum",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/platinum"
+          }
+        },
+        {
+          "symbol": "BIST:XPDUSD1!",
+          "logoid": "metal/palladium",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/palladium"
+          }
+        },
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/reuters.com,2026:newsml_L1N4650S7:0-gold-edges-lower-as-firm-dollar-elevated-yields-weigh/",
+      "provider": {
+        "id": "reuters",
+        "name": "Reuters",
+        "logo_id": "reuters"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "DJN_DN20261019005767:0",
+      "title": "Gold Futures Slip As U.S. Dollar Gains, Yields Edge Up — Market Talk",
+      "published": 1792433400,
+      "urgency": 2,
+      "permission": "headline",
+      "relatedSymbols": [
+        {
+          "symbol": "OANDA:XAGUSD",
+          "logoid": "metal/silver",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/silver"
+          }
+        },
+        {
+          "symbol": "COMEX:SI1!",
+          "logoid": "metal/silver",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/silver"
+          }
+        },
+        {
+          "symbol": "MCX:SILVER1!",
+          "logoid": "metal/silver",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/silver"
+          }
+        },
+        {
+          "symbol": "BIST:XAGUSD1!",
+          "logoid": "metal/silver",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/silver"
+          }
+        },
+        {
+          "symbol": "NYMEX:CL1!",
+          "logoid": "crude-oil",
+          "logo": {
+            "style": "single",
+            "logoid": "crude-oil"
+          }
+        },
+        {
+          "symbol": "TVC:USOIL",
+          "logoid": "crude-oil",
+          "logo": {
+            "style": "single",
+            "logoid": "crude-oil"
+          }
+        },
+        {
+          "symbol": "MCX:CRUDEOIL1!",
+          "logoid": "crude-oil",
+          "logo": {
+            "style": "single",
+            "logoid": "crude-oil"
+          }
+        },
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        },
+        {
+          "symbol": "TVC:DXY",
+          "logoid": "indices/u-s-dollar-index",
+          "logo": {
+            "style": "single",
+            "logoid": "indices/u-s-dollar-index"
+          }
+        }
+      ],
+      "storyPath": "/news/DJN_DN20261019005767:0-gold-futures-slip-as-u-s-dollar-gains-yields-edge-up-market-talk/",
+      "provider": {
+        "id": "dow-jones",
+        "name": "Dow Jones Newswires",
+        "logo_id": "dow-jones"
+      }
+    },
+    {
+      "paywall": false,
+      "id": "te_news:593165:0",
+      "title": "Gold Little Changed as Investors Weigh Fed Outlook",
+      "published": 1792418693,
+      "urgency": 2,
+      "link": "https://tradingeconomics.com/commodity/gold",
+      "permission": "preview",
+      "relatedSymbols": [
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/te_news:593165:0-gold-little-changed-as-investors-weigh-fed-outlook/",
+      "provider": {
+        "id": "trading-economics",
+        "name": "Trading Economics",
+        "logo_id": "te"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "tag:reuters.com,2026:newsml_L1N4650FE:0",
+      "title": "Gold steady ahead of Fed meeting, lower oil prices limit downside",
+      "published": 1792417266,
+      "urgency": 2,
+      "permission": "headline",
+      "relatedSymbols": [
+        {
+          "symbol": "TVC:GOLD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        },
+        {
+          "symbol": "BIST:XAGUSD1!",
+          "logoid": "metal/silver",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/silver"
+          }
+        },
+        {
+          "symbol": "NYMEX:PL1!",
+          "logoid": "metal/platinum",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/platinum"
+          }
+        },
+        {
+          "symbol": "BIST:XPDUSD1!",
+          "logoid": "metal/palladium",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/palladium"
+          }
+        },
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/reuters.com,2026:newsml_L1N4650FE:0-gold-steady-ahead-of-fed-meeting-lower-oil-prices-limit-downside/",
+      "provider": {
+        "id": "reuters",
+        "name": "Reuters",
+        "logo_id": "reuters"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "DJN_DN20261019003692:0",
+      "title": "Comex Gold Delivery Intentions Breakdown - Oct 19",
+      "published": 1792415940,
+      "urgency": 2,
+      "permission": "headline",
+      "relatedSymbols": [
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/DJN_DN20261019003692:0-comex-gold-delivery-intentions-breakdown-oct-19/",
+      "provider": {
+        "id": "dow-jones",
+        "name": "Dow Jones Newswires",
+        "logo_id": "dow-jones"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "tag:reuters.com,2026:newsml_L1N4650BR:0",
+      "title": "Gold edges up as oil retreat lends support; Fed decision in focus",
+      "published": 1792409700,
+      "urgency": 2,
+      "permission": "headline",
+      "relatedSymbols": [
+        {
+          "symbol": "TVC:GOLD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        },
+        {
+          "symbol": "BIST:XAGUSD1!",
+          "logoid": "metal/silver",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/silver"
+          }
+        },
+        {
+          "symbol": "NYMEX:PL1!",
+          "logoid": "metal/platinum",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/platinum"
+          }
+        },
+        {
+          "symbol": "BIST:XPDUSD1!",
+          "logoid": "metal/palladium",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/palladium"
+          }
+        },
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/reuters.com,2026:newsml_L1N4650BR:0-gold-edges-up-as-oil-retreat-lends-support-fed-decision-in-focus/",
+      "provider": {
+        "id": "reuters",
+        "name": "Reuters",
+        "logo_id": "reuters"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "tag:reuters.com,2026:newsml_L1N46506C:0",
+      "title": "Gold rises as investors weigh Fed rate outlook, lower oil prices",
+      "published": 1792396590,
+      "urgency": 2,
+      "permission": "headline",
+      "relatedSymbols": [
+        {
+          "symbol": "TVC:GOLD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        },
+        {
+          "symbol": "BIST:XAGUSD1!",
+          "logoid": "metal/silver",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/silver"
+          }
+        },
+        {
+          "symbol": "NYMEX:PL1!",
+          "logoid": "metal/platinum",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/platinum"
+          }
+        },
+        {
+          "symbol": "BIST:XPDUSD1!",
+          "logoid": "metal/palladium",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/palladium"
+          }
+        },
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/reuters.com,2026:newsml_L1N46506C:0-gold-rises-as-investors-weigh-fed-rate-outlook-lower-oil-prices/",
+      "provider": {
+        "id": "reuters",
+        "name": "Reuters",
+        "logo_id": "reuters"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "moneycontrol:c63dd67a7094b:0",
+      "title": "IFSCA issues Good Delivery Guidelines for responsible gold sourcing",
+      "published": 1792396421,
+      "urgency": 2,
+      "link": "https://www.moneycontrol.com/news/business/markets/ifsca-issues-good-delivery-guidelines-for-responsible-gold-sourcing-14055345.html",
+      "relatedSymbols": [
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/moneycontrol:c63dd67a7094b:0-ifsca-issues-good-delivery-guidelines-for-responsible-gold-sourcing/",
+      "provider": {
+        "id": "moneycontrol",
+        "name": "Moneycontrol",
+        "logo_id": "moneycontrol"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "DJN_DN20261019000886:0",
+      "title": "Gold Rises Amid Falling Oil Prices — Market Talk",
+      "published": 1792396260,
+      "urgency": 2,
+      "permission": "headline",
+      "relatedSymbols": [
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/DJN_DN20261019000886:0-gold-rises-amid-falling-oil-prices-market-talk/",
+      "provider": {
+        "id": "dow-jones",
+        "name": "Dow Jones Newswires",
+        "logo_id": "dow-jones"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "tag:reuters.com,2026:newsml_L1N46503K:0",
+      "title": "Gold edges higher as softer oil eases inflation woes",
+      "published": 1792386784,
+      "urgency": 2,
+      "permission": "headline",
+      "relatedSymbols": [
+        {
+          "symbol": "TVC:GOLD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        },
+        {
+          "symbol": "BIST:XAGUSD1!",
+          "logoid": "metal/silver",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/silver"
+          }
+        },
+        {
+          "symbol": "NYMEX:PL1!",
+          "logoid": "metal/platinum",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/platinum"
+          }
+        },
+        {
+          "symbol": "BIST:XPDUSD1!",
+          "logoid": "metal/palladium",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/palladium"
+          }
+        },
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/reuters.com,2026:newsml_L1N46503K:0-gold-edges-higher-as-softer-oil-eases-inflation-woes/",
+      "provider": {
+        "id": "reuters",
+        "name": "Reuters",
+        "logo_id": "reuters"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "tag:reuters.com,2026:newsml_L1N46501U:0",
+      "title": "Gold edges higher on softer oil; Fed rate outlook in focus",
+      "published": 1792379359,
+      "urgency": 2,
+      "permission": "headline",
+      "relatedSymbols": [
+        {
+          "symbol": "TVC:GOLD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        },
+        {
+          "symbol": "BIST:XAGUSD1!",
+          "logoid": "metal/silver",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/silver"
+          }
+        },
+        {
+          "symbol": "NYMEX:PL1!",
+          "logoid": "metal/platinum",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/platinum"
+          }
+        },
+        {
+          "symbol": "BIST:XPDUSD1!",
+          "logoid": "metal/palladium",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/palladium"
+          }
+        },
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/reuters.com,2026:newsml_L1N46501U:0-gold-edges-higher-on-softer-oil-fed-rate-outlook-in-focus/",
+      "provider": {
+        "id": "reuters",
+        "name": "Reuters",
+        "logo_id": "reuters"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "moneycontrol:9b9ac308e094b:0",
+      "title": "Gold edges higher as traders ease rate-hike bets on Warsh speech",
+      "published": 1792377016,
+      "urgency": 2,
+      "link": "https://www.moneycontrol.com/news/business/commodities/gold-edges-higher-as-traders-ease-rate-hike-bets-on-warsh-speech-14055017.html",
+      "relatedSymbols": [
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/moneycontrol:9b9ac308e094b:0-gold-edges-higher-as-traders-ease-rate-hike-bets-on-warsh-speech/",
+      "provider": {
+        "id": "moneycontrol",
+        "name": "Moneycontrol",
+        "logo_id": "moneycontrol"
+      }
+    },
+    {
+      "paywall": false,
+      "id": "te_news:592937:0",
+      "title": "Gold Rises as Fed Rate Hike Bets Ease",
+      "published": 1792375269,
+      "urgency": 2,
+      "link": "https://tradingeconomics.com/commodity/gold",
+      "permission": "preview",
+      "relatedSymbols": [
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/te_news:592937:0-gold-rises-as-fed-rate-hike-bets-ease/",
+      "provider": {
+        "id": "trading-economics",
+        "name": "Trading Economics",
+        "logo_id": "te"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "DJN_DN20261018001395:0",
+      "title": "Gold Edges Higher as Traders Weigh Fed Rate Hike Expectations — Market Talk",
+      "published": 1792374000,
+      "urgency": 2,
+      "permission": "headline",
+      "relatedSymbols": [
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/DJN_DN20261018001395:0-gold-edges-higher-as-traders-weigh-fed-rate-hike-expectations-market-talk/",
+      "provider": {
+        "id": "dow-jones",
+        "name": "Dow Jones Newswires",
+        "logo_id": "dow-jones"
+      }
+    },
+    {
+      "paywall": true,
+      "id": "tag:reuters.com,2026:newsml_L4N46407E:0",
+      "title": "Gold edges higher as investors assess Fed rate-hike odds",
+      "published": 1792372367,
+      "urgency": 2,
+      "permission": "headline",
+      "relatedSymbols": [
+        {
+          "symbol": "TVC:GOLD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        },
+        {
+          "symbol": "BIST:XAGUSD1!",
+          "logoid": "metal/silver",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/silver"
+          }
+        },
+        {
+          "symbol": "NYMEX:PL1!",
+          "logoid": "metal/platinum",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/platinum"
+          }
+        },
+        {
+          "symbol": "BIST:XPDUSD1!",
+          "logoid": "metal/palladium",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/palladium"
+          }
+        },
+        {
+          "symbol": "OANDA:XAUUSD",
+          "logoid": "metal/gold",
+          "logo": {
+            "style": "single",
+            "logoid": "metal/gold"
+          }
+        }
+      ],
+      "storyPath": "/news/reuters.com,2026:newsml_L4N46407E:0-gold-edges-higher-as-investors-assess-fed-rate-hike-odds/",
+      "provider": {
+        "id": "reuters",
+        "name": "Reuters",
+        "logo_id": "reuters"
+      }
+    }
+  ],
+  "pagination": {
+    "cursor": "eyJfaWQiOiJ0YWc6cmV1dGVycy5jb20sMjAyNjpuZXdzbWxfTDFONDYyMDJEIiwicHViZGF0ZSI6MTc5MjEyNjczMTAwMH0="
+  }
+}

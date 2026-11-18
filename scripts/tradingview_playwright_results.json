@@ -1,0 +1,83 @@
+[
+  {
+    "symbol": "XAUUSD",
+    "url": "https://www.tradingview.com/symbols/XAUUSD/news/",
+    "success": true,
+    "error": null,
+    "items_scraped": 3,
+    "items": [
+      {
+        "title": "Swiss gold exports rose 6% in September as shipments to UK surged",
+        "provider": "Reuters",
+        "url": "https://www.tradingview.com/news/reuters.com,2026:newsml_L1N4660RM:0-swiss-gold-exports-rose-6-in-september-as-shipments-to-uk-surged/",
+        "published_at": null
+      },
+      {
+        "title": "Gold steady as investors await fed rate signals",
+        "provider": "Reuters",
+        "url": "https://www.tradingview.com/news/reuters.com,2026:newsml_L1N4660OS:0-gold-steady-as-investors-await-fed-rate-signals/",
+        "published_at": null
+      },
+      {
+        "title": "Gold eases as oil-driven inflation worries weigh",
+        "provider": "Reuters",
+        "url": "https://www.tradingview.com/news/reuters.com,2026:newsml_L1N4660G0:0-gold-eases-as-oil-driven-inflation-worries-weigh/",
+        "published_at": null
+      }
+    ]
+  },
+  {
+    "symbol": "XAGUSD",
+    "url": "https://www.tradingview.com/symbols/XAGUSD/news/",
+    "success": true,
+    "error": null,
+    "items_scraped": 3,
+    "items": [
+      {
+        "title": "Gold steady as investors await fed rate signals",
+        "provider": "Reuters",
+        "url": "https://www.tradingview.com/news/reuters.com,2026:newsml_L1N4660OS:0-gold-steady-as-investors-await-fed-rate-signals/",
+        "published_at": null
+      },
+      {
+        "title": "Gold eases as oil-driven inflation worries weigh",
+        "provider": "Reuters",
+        "url": "https://www.tradingview.com/news/reuters.com,2026:newsml_L1N4660G0:0-gold-eases-as-oil-driven-inflation-worries-weigh/",
+        "published_at": null
+      },
+      {
+        "title": "Silver Holds Near Multi-Week Lows",
+        "provider": "Trading Economics",
+        "url": "https://www.tradingview.com/news/te_news:593483:0-silver-holds-near-multi-week-lows/",
+        "published_at": null
+      }
+    ]
+  },
+  {
+    "symbol": "BTCUSD",
+    "url": "https://www.tradingview.com/symbols/BTCUSD/news/",
+    "success": true,
+    "error": null,
+    "items_scraped": 3,
+    "items": [
+      {
+        "title": "Bitcoin ETFs Post Biggest Inflow in Nearly a Month — Market Talk",
+        "provider": "Dow Jones Newswires",
+        "url": "https://www.tradingview.com/news/DJN_DN20261020006446:0-bitcoin-etfs-post-biggest-inflow-in-nearly-a-month-market-talk/",
+        "published_at": null
+      },
+      {
+        "title": "Bitcoin price spikes to $83.3K as US stocks rise on Q3 earnings, oil falls",
+        "provider": "Cointelegraph",
+        "url": "https://www.tradingview.com/news/cointelegraph:69d70d30f094b:0-bitcoin-price-spikes-to-83-3k-as-us-stocks-rise-on-q3-earnings-oil-falls/",
+        "published_at": null
+      },
+      {
+        "title": "Michael Saylor Says Bitcoin's Next Bull Run Has Begun, Sees It Back In 'Six Figures' Within A Year",
+        "provider": "Stocktwits",
+        "url": "https://www.tradingview.com/news/stocktwits:772c6d29d094b:0-michael-saylor-says-bitcoin-s-next-bull-run-has-begun-sees-it-back-in-six-figures-within-a-year/",
+        "published_at": null
+      }
+    ]
+  }
+]

@@ -1,0 +1,41 @@
+# Secrets - injected at runtime via env_file, never baked into the image
+.env
+.env.*
+
+# Runtime data & logs (kept in named volumes)
+data/
+logs/
+backups/
+*.db
+*.db-wal
+*.db-shm
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Git / editors / OS
+.git/
+.github/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Not needed in the image
+README.md
+AUDIT.md
+CHANGELOG.md
+FINAL_REPORT.md
+*.png
+*.jpg
+*.bat
+*.ps1
+*.md
+tests/
+scripts/
+tools/

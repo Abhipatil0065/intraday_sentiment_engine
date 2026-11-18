@@ -1,0 +1,28 @@
+services:
+  sentiment:
+    build: .
+    container_name: intraday-sentiment
+    env_file:
+      - .env
+    environment:
+      # Bind to all interfaces inside the container so the published port works
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      # SQLite lives in the persisted volume (/app/data)
+      - DATABASE_URL=sqlite:///./data/intraday_sentiment.db
+    ports:
+      - "8000:8000"
+    volumes:
+      - sentiment_data:/app/data
+      - sentiment_logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  sentiment_data:
+  sentiment_logs:
