@@ -196,11 +196,17 @@ def to_display(score: float, bias, confidence: float | None = None,
     bull_pct = _clamp_pct(int(round(50 + numeric / 2.0)))
     bear_pct = 100 - bull_pct
 
-    # Confidence-aware shrinkage: if confidence is provided, shrink the split
-    # toward 50/50 proportionally to confidence. At confidence=0 the split is 50/50; at
+    # Confidence-aware shrinkage: shrink the split toward 50/50 proportionally
+    # to confidence. At confidence=0 the split is 50/50; at
     # confidence>=TIEBREAK_MAX_CONFIDENCE (0.30) the full score is shown.
     # Intermediate values linearly interpolate.
-    if confidence is not None:
+    #
+    # When the engine has named a side (BULLISH/BEARISH), skip shrinking:
+    # the engine has already decided there is a direction. The confidence
+    # label (LOW/MEDIUM/STRONG) shown alongside the card already tells the
+    # reader how confident the engine is - shrinking the split to 50/50 at
+    # near-zero confidence would contradict the named side and show "nothing".
+    if confidence is not None and name not in (BULLISH, BEARISH):
         try:
             c = float(confidence)
             if c != c or c in (float("inf"), float("-inf")):

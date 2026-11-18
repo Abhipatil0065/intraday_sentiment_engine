@@ -337,14 +337,16 @@ def _block(session, asset: str, scope: str,
     # fake 51/49 and the weak-evidence branch would be compressed instead of
     # shown at full strength.
     #
-    # Step 8: the same raw value tells the display whether the engine took this
-    # label from its tie-break rule (|raw| < EPS). When it did and the split is
-    # even, the card reads NEUTRAL 50/50 rather than a forced 51/49 lean.
-    _display_raw = snap.raw_score
+    # The display bull/bear split is derived from the engine's FINAL score
+    # (snap.score), which is the damped, baseline-adjusted verdict bounded to
+    # -100..+100. ``raw_score`` is the pre-damping computation artifact and can
+    # be extreme (e.g. +100 on a single dominant signal) even when the final
+    # score is small — using it for the display split would show 100/0 when the
+    # real lean is modest. ``score`` is what the card should project.
+    _display_score = snap.score
+    _display_raw = snap.raw_score  # kept for tie-break detection only
     if _display_raw is None:
-        # Rows written before the migration. Fall back to the published score
-        # so a legacy database still renders, but say so loudly: the split on
-        # those rows is NOT the raw lean the docstring promises.
+        # Rows written before the migration. Fall back to the published score.
         log.warning(
             "sentiment_snapshot %s/%s has no raw_score (legacy row); "
             "displaying the published score instead", asset, scope)
@@ -367,7 +369,7 @@ def _block(session, asset: str, scope: str,
         "damped_score": snap.damped_score,
         "confidence": snap.confidence,
         "bias": snap.bias,
-        "display": to_display(_display_raw, snap.bias, snap.confidence,
+        "display": to_display(_display_score, snap.bias, snap.confidence,
                                tie_break=_tie_break,
                                contradiction_detected=bool(
                                    getattr(snap, "contradiction_detected",
