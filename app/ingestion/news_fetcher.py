@@ -21,6 +21,7 @@ from app.ingestion.base import (
 from app.ingestion.kitco import KitcoSource
 from app.ingestion.mock_source import MockSource
 from app.ingestion.rss_reader import RssSource
+from app.ingestion.tradingview import TradingViewSource
 from app.ingestion.website_monitor import WebsiteSource
 from app.logging_conf import get_logger
 
@@ -53,6 +54,8 @@ def build_sources() -> list:
                 sources.append(WebsiteSource(spec))
             elif spec.kind == "kitco":
                 sources.append(KitcoSource(spec))
+            elif spec.kind == "tradingview_api":
+                sources.append(TradingViewSource(spec))
             elif spec.kind == "mock":
                 sources.append(MockSource(spec.url))
             elif spec.kind == "fj":

@@ -66,6 +66,24 @@
    .runbtn:disabled{opacity:.55;cursor:default}
    .quota{color:var(--dim);font-variant-numeric:tabular-nums;white-space:nowrap}
 
+   /* ---- Sources live strip (top of dashboard) ----
+      Pill styled like the other status pills (green when all live). */
+   .srcline{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;
+            border-radius:20px;font-weight:600;letter-spacing:.4px;
+            white-space:nowrap;border:1px solid transparent}
+   .srcline.live{background:rgba(34,197,94,.10);border-color:rgba(34,197,94,.40);
+                 color:#86efac}
+   .srcline.partial{background:rgba(210,153,34,.10);border-color:rgba(210,153,34,.40);
+                     color:#d29922}
+   .srcline.dead{background:rgba(239,68,68,.10);border-color:rgba(239,68,68,.40);
+                 color:#fca5a5}
+   .srcline .srctitle{font-size:10px;color:inherit;letter-spacing:.5px;
+                      font-weight:700;opacity:.85}
+   .srcline .srcnum{font-size:11px;font-weight:700;color:inherit;
+                    font-variant-numeric:tabular-nums}
+   .srcline .srcden{font-size:10px;color:inherit;opacity:.8}
+
+
    /* ---- Bias calibration (manual outcome labels) ----
       DATA COLLECTION ONLY: nothing here feeds a threshold at decision time.
       The labels exist so the tunables can later be calibrated against real
@@ -457,6 +475,7 @@
     <span class="pill live" id="pPipe"><span class="dot"></span><span id="lPipe">Pipeline: RUNNING</span></span>
     <span class="pill live" id="pDb"><span class="dot"></span><span id="lDb">Pipeline: OK</span></span>
     <span class="pill alert-pill" id="pAlert"><span class="dot"></span><span id="lAlert">⚠️ ALERT: LLM Engine Down - Fallback Active</span></span>
+    <div class="srcline pill live" id="srcLine"><span class="dot"></span><span class="srctitle">Sources</span><span class="srcnum" id="srcNum">0</span><span class="srcden" id="srcDen">of 0</span></div>
     <button class="runbtn" id="runBtn" title="Run one pipeline pass now">RUN NOW</button>
     <span class="quota" id="tsLlmQuota"></span>
     <span class="ts" id="tsLastUpdated">Last Updated: n/a</span>
@@ -1131,6 +1150,17 @@ function renderFinancialJuice(d){
   });
   box.innerHTML=html;
 }
+function renderSources(ok, total, perSource){
+  var line=document.getElementById('srcLine');
+  if(!line) return;
+  var num=document.getElementById('srcNum');
+  var den=document.getElementById('srcDen');
+  if(num) num.textContent=ok;
+  if(den) den.textContent='of '+total;
+  /* Pill colour: green when all live, amber when partial, red when none. */
+  line.className='srcline pill '+
+    (total===0?'idle':ok===total?'live':ok>0?'partial':'dead');
+}
 function renderHeader(d){
   var st=d.status||{};
   var staleBanner=document.getElementById('staleBanner');
@@ -1157,6 +1187,7 @@ function renderHeader(d){
   HEALTH.pipelineStatus = st.running ? 'RUNNING' : 'STOPPED';
   HEALTH.dbStatus = s.last_poll_ok ? 'OK' : 'STALE';
   HEALTH.lastUpdated = st.last_updated || '';
+  HEALTH.newsSources = (d.health||{}).per_source || {};
 
   /* LLM rate-limit budget used in the last minute - the number that predicts
      the next degraded pill before the breaker trips. */
@@ -1204,6 +1235,10 @@ function renderHeader(d){
   var _lPipe=document.getElementById('lPipe'); if(_lPipe) _lPipe.textContent='Pipeline: '+HEALTH.pipelineStatus;
    var _lDb=document.getElementById('lDb'); if(_lDb) _lDb.textContent='Pipeline: '+(HEALTH.dbStatus==='OK'?'OK':'NO TICK');
   var _ts=document.getElementById('tsLastUpdated'); if(_ts) _ts.textContent='Last Updated: '+(HEALTH.lastUpdated||'n/a');
+
+  /* ---- Sources live pill ----
+      sources_ok / sources_polled come from the status block. */
+  renderSources(s.sources_ok||0, s.sources_polled||0, HEALTH.newsSources);
 
   var alertPill=document.getElementById('pAlert');
   if(HEALTH.systemError){
