@@ -11,6 +11,7 @@ This module owns the end-to-end control flow. The background scheduler calls
 from __future__ import annotations
 
 import atexit
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -1687,6 +1688,21 @@ async def run_once() -> IngestStats:
     if _running:
         log.debug("Pipeline already running; skipping this tick")
         return IngestStats(errors=["pipeline already running"])
+
+    # WEEKDAY GATE (Indian time): never retrieve news on weekends.
+    # Saturday/Sunday in Asia/Kolkata => the tick is a no-op: nothing is
+    # fetched, classified, or persisted. Bypassed under APP_TESTING so the
+    # test suite stays deterministic any day of the week (app.main applies
+    # the same bypass to skip the scheduler while tests run).
+    _testing = os.environ.get("APP_TESTING", "").strip() in ("1", "true", "yes")
+    if (not _testing and settings.news_weekdays_only
+            and not T.is_market_weekday()):
+        log.info(
+            "Weekend in Indian time (%s): news retrieval disabled "
+            "(weekdays only) - skipping tick",
+            T.market_today(),
+        )
+        return IngestStats()
 
     # Reset LLM circuit breaker at the start of each tick so a degraded
     # endpoint gets a fresh chance on the next poll.

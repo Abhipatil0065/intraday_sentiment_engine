@@ -108,6 +108,12 @@ class Settings(BaseSettings):
     # ---------------- ingestion ----------------
     poll_interval_seconds: int = 180
     article_fetch_enabled: bool = True
+    # News retrieval only runs on weekdays (Monday-Friday) in the market
+    # timezone (Asia/Kolkata / Indian time). On Saturdays and Sundays the
+    # pipeline tick is a no-op: nothing is fetched, classified, or persisted.
+    # Set NEWS_WEEKDAYS_ONLY=false to run seven days a week.
+    news_weekdays_only: bool = Field(
+        default=True, validation_alias="NEWS_WEEKDAYS_ONLY")
     article_fetch_max_chars: int = 4000
     http_timeout_seconds: int = 20
     http_user_agent: str = (

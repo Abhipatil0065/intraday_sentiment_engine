@@ -57,6 +57,19 @@ def market_today() -> date:
     return now_market().date()
 
 
+def is_market_weekday(now: datetime | None = None) -> bool:
+    """
+    True when today in the market timezone (Indian time) is Monday-Friday.
+
+    The engine only retrieves news on weekdays, per the Indian trading week,
+    so Saturday (weekday 5) and Sunday (weekday 6) are non-trading days and
+    news retrieval is skipped. ``now`` is injectable so unit tests can pin a
+    specific day instead of the wall clock.
+    """
+    ref = now or now_utc()
+    return ref.astimezone(market_tz()).weekday() < 5
+
+
 def market_day_start_utc(now: datetime | None = None) -> datetime:
     """
     The UTC instant at which today's market session began.
