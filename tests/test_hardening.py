@@ -132,11 +132,28 @@ class TestHealthEndpoint:
         assert "llm_enabled" in data
 
     @pytest.mark.asyncio
-    async def test_health_works_while_pipeline_runs(self):
+    async def test_health_works_while_pipeline_runs(self, monkeypatch):
         """Health endpoint responds while pipeline is running."""
         from fastapi.testclient import TestClient
 
         client = TestClient(app)
+
+        # Mock ingestion so run_once() never makes real network calls.
+        from app.ingestion.news_fetcher import FetchReport
+        from app.ingestion.economic_calendar import CalendarEvent
+
+        async def fake_fetch_all_news():
+            return FetchReport(articles=[], errors=[], sources_polled=0, sources_ok=0)
+
+        async def fake_fetch_calendar():
+            return [], []
+
+        monkeypatch.setattr(
+            "app.services.pipeline.fetch_all_news", fake_fetch_all_news, raising=False
+        )
+        monkeypatch.setattr(
+            "app.services.pipeline.fetch_calendar", fake_fetch_calendar, raising=False
+        )
 
         # Start a pipeline run in background
         pipeline_task = asyncio.create_task(run_once())
@@ -147,6 +164,9 @@ class TestHealthEndpoint:
         # Health should still respond quickly
         response = client.get("/api/health")
         assert response.status_code in (200, 503)
+        data = response.json()
+        assert "status" in data
+        assert "llm_enabled" in data
 
         # Wait for pipeline to complete
         await pipeline_task

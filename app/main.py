@@ -45,6 +45,7 @@ from app.models.db_models import (
 from app.models.enums import (
     Asset,
     MarketRegime,
+    SessionName,
 )
 from app.services import overnight, pipeline
 from app.utils import timeutils as T
@@ -574,6 +575,14 @@ def build_payload(session) -> dict:
             asset = Asset(asset_str)
         except ValueError:
             continue
+        _sess = detect_session().value
+        # Session-scoped sentiment for each of Asia / Europe / US so the
+        # dashboard can render a session heatmap (who moved where today).
+        session_blocks = {}
+        for _sname in (SessionName.ASIA, SessionName.EUROPE, SessionName.US):
+            session_blocks[_sname.value.lower()] = _block(
+                session, asset.value, "CURRENT",
+                sess=_sname.value, timeframe="session")
         assets_out.append({
             "asset": asset.value,
             "label": asset.label,
@@ -582,18 +591,19 @@ def build_payload(session) -> dict:
             # session timeframes so a day trader can see short-term vs session
             # bias side by side.
             "market_prep": _block(session, asset.value, "MARKET_PREP",
-                                  sess=detect_session().value),
+                                  sess=_sess),
             "market_wrap": _block(session, asset.value, "MARKET_WRAP",
-                                  sess=detect_session().value),
+                                  sess=_sess),
             "current": _block(session, asset.value, "CURRENT",
-                              sess=detect_session().value, timeframe="day"),
+                              sess=_sess, timeframe="day"),
             "current_intraday": _block(session, asset.value, "CURRENT",
-                                       sess=detect_session().value,
-                                       timeframe="intraday"),
+                                       sess=_sess, timeframe="intraday"),
             "current_session_tf": _block(session, asset.value, "CURRENT",
-                                         sess=detect_session().value,
-                                         timeframe="session"),
+                                         sess=_sess, timeframe="session"),
             "current_session": detect_session().value,
+            "asia": session_blocks["asia"],
+            "europe": session_blocks["europe"],
+            "us": session_blocks["us"],
             "economic_calendar": pipeline.calendar_summary(asset),
         })
 
@@ -986,6 +996,103 @@ async def calibration_label(asset: str, outcome: str,
         "bias_snapshot_id": snap_id,
         "outcome": outcome,
     }
+
+
+# ---------------------------------------------------------------------------
+# Trade blotter (Tier 6: open signals, P&L, stop/target)
+# ---------------------------------------------------------------------------
+from pathlib import Path as _Path
+import json as _json
+from datetime import datetime as _dt, timezone as _tz
+
+_BLOTTER_PATH = _Path("data/blotter.json")
+
+
+def _blotter_load() -> list[dict]:
+    if not _BLOTTER_PATH.exists():
+        return []
+    try:
+        return _json.loads(_BLOTTER_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def _blotter_save(items: list[dict]) -> None:
+    _BLOTTER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _BLOTTER_PATH.write_text(_json.dumps(items, indent=2), encoding="utf-8")
+
+
+@app.get("/api/blotter")
+async def blotter_list():
+    """List all blotter positions (open + closed)."""
+    return {"items": _blotter_load()}
+
+
+@app.post("/api/blotter")
+async def blotter_add(asset: str, side: str, entry: float,
+                      stop: float = 0.0, target: float = 0.0,
+                      size: float = 0.0, note: str | None = None):
+    """Add a new open position to the blotter."""
+    side_up = side.upper()
+    if side_up not in ("LONG", "SHORT"):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "side must be LONG or SHORT"},
+        )
+    if entry <= 0:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "entry must be > 0"},
+        )
+    positions = _blotter_load()
+    pos = {
+        "id": int(_dt.now(_tz.utc).timestamp() * 1000),
+        "asset": asset.upper(),
+        "side": side_up,
+        "entry": float(entry),
+        "stop": float(stop),
+        "target": float(target),
+        "size": float(size),
+        "note": (note or "").strip(),
+        "status": "OPEN",
+        "opened_at": _dt.now(_tz.utc).isoformat(),
+        "closed_at": None,
+        "pnl": None,
+        "close_price": None,
+    }
+    positions.append(pos)
+    _blotter_save(positions)
+    return {"status": "added", "position": pos}
+
+
+@app.post("/api/blotter/{position_id}/close")
+async def blotter_close(position_id: int, close_price: float):
+    """Close an open blotter position at a given price."""
+    if close_price <= 0:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "close_price must be > 0"},
+        )
+    positions = _blotter_load()
+    for p in positions:
+        if p.get("id") == position_id and p.get("status") == "OPEN":
+            entry = float(p.get("entry", 0) or 0)
+            side = p.get("side", "")
+            sz = float(p.get("size", 1) or 1)
+            if side == "LONG":
+                pnl = (close_price - entry) * sz
+            else:
+                pnl = (entry - close_price) * sz
+            p["status"] = "CLOSED"
+            p["closed_at"] = _dt.now(_tz.utc).isoformat()
+            p["pnl"] = round(pnl, 2)
+            p["close_price"] = float(close_price)
+            _blotter_save(positions)
+            return {"status": "closed", "position": p}
+    return JSONResponse(
+        status_code=404,
+        content={"error": f"open position {position_id} not found"},
+    )
 
 
 @app.post("/api/run")

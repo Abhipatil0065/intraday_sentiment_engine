@@ -354,7 +354,7 @@ def test_strip_renders_the_current_value_not_the_prep_value(tmp_path):
     real_block = M._block
     seen = []
 
-    def fake_block(session, asset, scope):
+    def fake_block(session, asset, scope, sess=None, timeframe="day"):
         seen.append((asset, scope))
         return current_first.get(scope, {"asset": asset, "scope": scope,
                                          "bias": "BULLISH", "score": 0.0,

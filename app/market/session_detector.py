@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from app.logging_conf import get_logger
 from app.models.enums import SessionName
 from app.utils import timeutils as T
 
 log = get_logger(__name__)
+
+# Session windows are defined in New York time (the market convention for
+# FX/CFD sessions). Session detection must happen in NY time regardless of
+# MARKET_TIMEZONE, which drives the news "today" filter and defaults to
+# Asia/Kolkata.
+SESSION_TZ = ZoneInfo("America/New_York")
 
 # Session windows in the market timezone (New York by default).
 # Forex/CFD convention: sessions overlap at the edges, so we use explicit
@@ -39,7 +46,7 @@ def detect_session(now: datetime | None = None) -> SessionName:
     Overnight gaps are handled by checking the same hour against the previous
     calendar day for the Asia window.
     """
-    ref = (now or T.now_utc()).astimezone(T.market_tz())
+    ref = (now or T.now_utc()).astimezone(SESSION_TZ)
     hour = ref.hour
 
     # Priority order matters: US is checked first, then EUROPE, then ASIA,
@@ -73,7 +80,7 @@ def _session_start(ref: datetime, session: SessionName) -> datetime:
 
 
 def previous_session(now: datetime | None = None) -> SessionName:
-    ref = (now or T.now_utc()).astimezone(T.market_tz())
+    ref = (now or T.now_utc()).astimezone(SESSION_TZ)
     current = detect_session(ref)
     idx = SESSION_ORDER.index(current) if current in SESSION_ORDER else -1
     if idx <= 0:
@@ -82,7 +89,7 @@ def previous_session(now: datetime | None = None) -> SessionName:
 
 
 def next_session(now: datetime | None = None) -> SessionName:
-    ref = (now or T.now_utc()).astimezone(T.market_tz())
+    ref = (now or T.now_utc()).astimezone(SESSION_TZ)
     current = detect_session(ref)
     idx = SESSION_ORDER.index(current) if current in SESSION_ORDER else len(SESSION_ORDER)
     # +1: the session that OPENS after the current one. The old modulo on the
@@ -93,7 +100,7 @@ def next_session(now: datetime | None = None) -> SessionName:
 
 def session_progress(now: datetime | None = None) -> float:
     """0.0-1.0 through the current session - used to fade stale prep signals."""
-    ref = (now or T.now_utc()).astimezone(T.market_tz())
+    ref = (now or T.now_utc()).astimezone(SESSION_TZ)
     session = detect_session(ref)
     for name, start, end in SESSION_WINDOWS:
         if name is not session:

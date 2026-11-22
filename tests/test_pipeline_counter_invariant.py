@@ -11,6 +11,9 @@ stored - still new_today articles, just in their own bucket.
 
 It uses a stub LLM that always succeeds, so we can verify the counters
 without depending on an external LLM provider.
+
+Ingestion (fetch_all_news / fetch_calendar) is mocked so the test never
+makes real network calls to RSS feeds or the economic calendar.
 """
 import asyncio
 import pytest
@@ -19,6 +22,9 @@ from app.services.pipeline import run_once, IngestStats
 from app.database import init_db, session_scope
 from app.models.db_models import NewsArticle, NewsEvent, AssetImpact, ArticleEvent, SentimentSnapshot, PipelineRun, Alert
 from sqlalchemy import delete
+
+from app.ingestion.base import RawArticle
+from app.ingestion.news_fetcher import FetchReport
 
 
 class StubLLMClient:
@@ -117,6 +123,34 @@ async def test_pipeline_counter_invariant_with_stub_llm():
         session.execute(delete(PipelineRun))
         session.execute(delete(Alert))
     
+    # Mock ingestion so run_once() never makes real network calls.
+    mock_articles = [
+        RawArticle(
+            guid="a1", source="test", source_quality="TIER_2_MAJOR",
+            url="https://example.com/a1", title="Fed raises rates",
+            body="The Federal Reserve raised rates by 25 basis points.",
+            published_raw="2026-01-01T00:00:00Z",
+        ),
+        RawArticle(
+            guid="a2", source="test", source_quality="TIER_2_MAJOR",
+            url="https://example.com/a2", title="Gold price jumps",
+            body="Gold surged on safe-haven demand.",
+            published_raw="2026-01-01T00:00:00Z",
+        ),
+        RawArticle(
+            guid="a3", source="test", source_quality="TIER_3_CRYPTO",
+            url="https://example.com/a3", title="Bitcoin rallies",
+            body="Bitcoin broke above resistance.",
+            published_raw="2026-01-01T00:00:00Z",
+        ),
+    ]
+
+    async def fake_fetch_all_news():
+        return FetchReport(articles=mock_articles, errors=[], sources_polled=1, sources_ok=1)
+
+    async def fake_fetch_calendar():
+        return [], []
+
     # Patch the LLM client with our stub
     with patch('app.services.pipeline.llm_client', StubLLMClient):
         with patch('app.analysis.news_classifier.llm_client', StubLLMClient):
@@ -130,7 +164,9 @@ async def test_pipeline_counter_invariant_with_stub_llm():
                 mock_settings.drop_low_impact_articles = True
                 mock_settings.only_llm_verdict_may_drop = True
 
-                stats = await run_once()
+                with patch('app.services.pipeline.fetch_all_news', fake_fetch_all_news), \
+                     patch('app.services.pipeline.fetch_calendar', fake_fetch_calendar):
+                    stats = await run_once()
 
     # Verify the invariant. Under the one-shot policy the stub's LOW-importance
     # articles are DELETED, so they land in llm_new_dropped_low - a fifth
@@ -185,8 +221,26 @@ async def test_pipeline_counter_invariant_multiple_ticks():
                 mock_settings.drop_low_impact_articles = True
                 mock_settings.only_llm_verdict_may_drop = True
 
-                for tick in range(3):
-                    stats = await run_once()
+                # Mock ingestion so run_once() never makes real network calls.
+                mock_articles = [
+                    RawArticle(
+                        guid="a1", source="test", source_quality="TIER_2_MAJOR",
+                        url="https://example.com/a1", title="Fed raises rates",
+                        body="The Federal Reserve raised rates by 25 basis points.",
+                        published_raw="2026-01-01T00:00:00Z",
+                    ),
+                ]
+
+                async def fake_fetch_all_news():
+                    return FetchReport(articles=mock_articles, errors=[], sources_polled=1, sources_ok=1)
+
+                async def fake_fetch_calendar():
+                    return [], []
+
+                with patch('app.services.pipeline.fetch_all_news', fake_fetch_all_news), \
+                     patch('app.services.pipeline.fetch_calendar', fake_fetch_calendar):
+                    for tick in range(3):
+                        stats = await run_once()
 
                     # Verify invariant on each tick
                     total_llm_accounted = (
