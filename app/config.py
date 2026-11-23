@@ -648,7 +648,7 @@ class Settings(BaseSettings):
     def supported_assets(self) -> list[str]:
         core = [a.strip().upper() for a in self.assets.split(",") if a.strip()]
         if self.assets_include_extra == "1":
-            for extra in ("EQUITY", "OIL"):
+            for extra in ("EQUITY", "USOIL"):
                 if extra not in core:
                     core.append(extra)
         return core
