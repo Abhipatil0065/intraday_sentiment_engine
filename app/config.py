@@ -807,28 +807,29 @@ COOLING_MARGIN = settings.cooling_margin
 #   TIER_2 = central-bank speeches, secondary data, official statements.
 #   TIER_3 = analyst opinion, previews, commentary, forecasts.
 # ---------------------------------------------------------------------------
+# All news sources are tier one: every signal gets the full tier-one weight
+# (1.00) regardless of its classified tier. Tier labels still exist for
+# bookkeeping, but TIER_2 and TIER_3 no longer carry a haircut.
 TIER_MULTIPLIERS = {
     "TIER_1": 1.00,
-    "TIER_2": 0.45,
-    "TIER_3": 0.15,
+    "TIER_2": 1.00,
+    "TIER_3": 1.00,
 }
 
 # Task 5a: intraday recency decay half-lives by EVENT TIER (not category).
 # Exponential decay: weight = 0.5 ** (age_hours / half_life).
-# Tier 1 ~90min, Tier 2 ~45min, Tier 3 ~15min.
-# Retuned 2026-10-13: the DAY TRADING values (0.5/0.25/0.1h) faded real news
-# out in minutes - a 12:30 UTC NFP print was at 6% weight by the US close,
-# even though gold trades that print for hours. Tier 2 speeches from London
-# open were dead by the 13:30 US window. Half-lives are now sized to how long
-# each event tier actually drives price intraday:
+# All tiers are tier one: every signal decays at the same 1.5h half-life,
+# so a Tier 3 commentary persists as long as a Tier 1 print. The old haircut
+# half-lives (0.75h / 0.25h) are retired.
+#
 #   TIER_1 (CPI/FOMC/NFP/geopolitical): 1.5h -> 63% at 2h, 40% at 4h
-#   TIER_2 (speeches/secondary data):    0.75h -> 47% at 1h, 28% at 2h
-#   TIER_3 (commentary/previews):        0.25h -> 25% at 30min, 6% at 1h
+#   TIER_2 (speeches/secondary data):    1.5h (was 0.75h)
+#   TIER_3 (commentary/previews):        1.5h (was 0.25h)
 # TRADING_DAY_CUTOFF_HOURS: any item older than this gets weight 0.
 TIER_HALF_LIVES = {
     "TIER_1": 1.5,
-    "TIER_2": 1.25,
-    "TIER_3": 0.25,
+    "TIER_2": 1.5,
+    "TIER_3": 1.5,
 }
 
 # STEP 7: Explicit half-life override per EventType (optional).
