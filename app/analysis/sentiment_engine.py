@@ -419,7 +419,12 @@ def _should_flip(bull: float, bear: float, current_bias: Bias,
     # re-test of the old level does not immediately flip it back. The
     # Tier-1 override above still bypasses this entirely - it returned
     # before reaching this point.
-    last_flip = _recall_flip_time(key)
+    # _recall_flip_time may return an offset-naive datetime (e.g. stored via
+    # datetime.now() when now was None). Coerce to aware UTC so subtracting it
+    # from the aware ``now`` clock never raises TypeError. _ensure_aware is the
+    # module's existing helper for exactly this class of tz-mismatch (see
+    # _has_fresh_tier1_opposite and _age_hours).
+    last_flip = _ensure_aware(_recall_flip_time(key))
     in_cooling = (
         last_flip is not None and
         now is not None and
@@ -1396,7 +1401,7 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
         final_bias = flipped_bias if last_bias is not None else computed_bias
         score = payload_score(raw, final_bias)
         if last_bias is not None and final_bias != last_bias:
-            _record_flip_time(key, now or datetime.now())
+            _record_flip_time(key, _now_aware(now))
             note = f"Bias flipped: {last_bias.value} -> {final_bias.value} (raw {raw:.1f})."
         else:
             note = ""
