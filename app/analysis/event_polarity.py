@@ -341,6 +341,8 @@ ASSET_PRICE_SUBJECTS: dict = {
     "XAUUSD": ("gold", "xau", "bullion"),
     "XAGUSD": ("silver", "xag"),
     "BTCUSD": ("bitcoin", "btc"),
+    # WTI crude oil - direct price statements ("oil rose", "brent fell", etc.)
+    "USOIL": ("oil", "crude", "wti", "brent"),
 }
 
 # Words that mean the asset is NOT the subject of the verb. "gold ETF inflows"
