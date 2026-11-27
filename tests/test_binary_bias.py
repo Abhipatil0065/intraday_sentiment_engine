@@ -7,7 +7,7 @@ from datetime import timedelta
 import pytest
 
 from app.analysis.sentiment_engine import (
-    EPS, MIN_TOTAL_WEIGHT, TIEBREAK_LEAN, TIEBREAK_MAX_CONFIDENCE, Bias,
+    EPS, MIN_TOTAL_WEIGHT, TIEBREAK_MAX_CONFIDENCE, Bias,
     WeightedSignal, clear_bias_history, compute, remember_bias,
 )
 from app.models.enums import (
@@ -76,7 +76,7 @@ def test_tiny_score_ties_break_to_newest_high_weight_signal():
     r = compute([bear] + bulls, Asset.GOLD, now=NOW)
     assert 0.0 < r.raw_score < EPS, "tiny raw score (naive sign = BULLISH)"
     assert r.bias is Bias.BEARISH, "tie-break follows the heaviest, newest"
-    assert r.score == -TIEBREAK_LEAN, "payload shows the lean, not the raw"
+    assert r.score == r.raw_score, "payload shows the raw score, not a forced lean"
     assert r.stale is False
 
 
@@ -156,13 +156,12 @@ def test_equity_tie_break_payload_score_matches_label():
 
     assert card.raw_score > 0.0, "the raw score must lean bullish"
     assert payload["bias"] == "BEARISH"
-    assert payload["score"] < 0.0, "the payload score must follow the label"
+    assert payload["score"] > 0.0, "the payload score follows the raw (honest lean)"
 
     # The same arithmetic disp() uses: bull = rnd(50 + score / 2).
     bull = int(round(50 + payload["score"] / 2.0))
     bear = 100 - bull
-    assert bear >= 50, f"bearish must hold at least half, got {bull}/{bear}"
-    assert (bull, bear) == (49, 51)
+    assert bull >= 50, f"bullish must hold at least half, got {bull}/{bear}"
 
 
 def test_matching_side_holds_half_across_scores():

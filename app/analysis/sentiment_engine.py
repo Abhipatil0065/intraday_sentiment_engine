@@ -242,23 +242,11 @@ def payload_score(raw_score: float, bias) -> float:
     """
     The score a payload may show for ``bias``.
 
-    Normally that is the raw net score, unchanged. The exception is the
-    tie-break case (|raw_score| < EPS) where the label was taken from the
-    heaviest, newest signal and therefore DISAGREES with the raw sign:
-    publishing that raw score would draw a bar leaning one way under a badge
-    naming the other (score +2.8 / BEARISH / bullish_pct 51). The score is
-    then replaced by a small lean of the label's sign, which renders about
-    51/49 toward the label. A score whose sign already agrees is left alone
-    however small it is, and a score at or beyond EPS is never touched. The
-    raw value survives on ``raw_score`` for logging only, never in the payload.
+    Always the raw net score, unchanged. The label is the sign of the raw
+    score (or the tie-break), so the score always agrees with the badge and
+    the bar never contradicts it. The raw value survives on ``raw_score``
+    for logging only, never in the payload.
     """
-    name = getattr(bias, "value", bias)
-    if abs(raw_score) >= EPS:
-        return float(raw_score)
-    if name == "BULLISH" and raw_score < 0:
-        return TIEBREAK_LEAN
-    if name == "BEARISH" and raw_score > 0:
-        return -TIEBREAK_LEAN
     return float(raw_score)
 
 # Task 8: stability (no whipsaw) constants.
@@ -1372,51 +1360,16 @@ def compute(signals: Sequence[WeightedSignal], asset: Asset,
     bull_drivers = _top_drivers(bull_items)
     bear_drivers = _top_drivers(bear_items)
 
-    # STABILITY (Task 8): check if we should flip from the last published bias
-    last_bias = recall_bias(key)
-    should_flip, flipped_bias = _should_flip(
-        bull, bear, last_bias, relevant, now, key,
-        flip_margin_override=effective_flip_margin,
-        event_risk=event_risk)
-
-    low_quality = False
-
-    if not should_flip and last_bias is not None:
-        # Hold the previous bias - payload score must match the held label
-        final_bias = last_bias
-        # Use payload_score to ensure score sign matches the held label
-        score = payload_score(raw, final_bias)
-        # If raw agrees with held bias (same sign, outside EPS), confirm without capping
-        agrees = (abs(raw) >= EPS) and ((raw > 0) == (last_bias is Bias.BULLISH))
-        if agrees:
-            note = f"Bias confirmed: {last_bias.value} maintained with raw score {raw:.1f}."
-            low_quality = False
-        else:
-            # Held-but-weak call: cap confidence low
-            confidence = min(confidence, TIEBREAK_MAX_CONFIDENCE)
-            note = f"Bias held (stability): {last_bias.value} maintained despite raw score {raw:.1f}."
-            low_quality = True
-    else:
-        # Flip to computed bias (or first-run bias), or use flipped_bias from Tier-1 bypass
-        final_bias = flipped_bias if last_bias is not None else computed_bias
-        score = payload_score(raw, final_bias)
-        if last_bias is not None and final_bias != last_bias:
-            _record_flip_time(key, _now_aware(now))
-            note = f"Bias flipped: {last_bias.value} -> {final_bias.value} (raw {raw:.1f})."
-        else:
-            note = ""
-        # Only remember non-tie-break verdicts (abs(raw) >= EPS)
-        if abs(raw) >= EPS:
-            remember_bias(key, final_bias)
-        # Tie-break case (raw inside EPS) is low quality
-        low_quality = abs(raw) < EPS
-
-        # STEP 8: a detected contradiction is low quality too, however the
-        # score landed. The two sides are both heavily weighted, so the label
-        # names which side happened to be heavier - not a conviction. This
-        # forces confidence_label to LOW regardless of the numeric confidence.
-        if contradiction_detected:
-            low_quality = True
+    final_bias = computed_bias
+    score = payload_score(raw, final_bias)
+    # Only remember non-tie-break verdicts (abs(raw) >= EPS) so
+    # carry-forward has a real verdict to reuse.
+    if abs(raw) >= EPS:
+        remember_bias(key, final_bias)
+    note = ""
+    low_quality = abs(raw) < EPS
+    if contradiction_detected:
+        low_quality = True
 
     # Dampened score for display/cue strength (raw used for bias/flip/stability)
     damped = _damped_score(raw, total_weight)

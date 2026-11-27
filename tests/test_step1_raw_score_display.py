@@ -61,57 +61,45 @@ def test_tiebreak_slab_shows_raw_lean_not_published_probe(raw, label):
     """
     |raw| < 0.6 with the label on the opposite side.
 
-    The published ``score`` is the +/- 2.0 probe and renders a confident
-    51/49; the raw value rounds to a flat 50/50. The display must use the raw.
+    Under the old scoring method ``payload_score`` is the identity - it returns
+    the raw score unchanged, so there is no +/-2.0 probe and no 51/49 freeze.
+    The label still follows the tie-break, but the score stays honest.
     """
     from app.analysis.display import to_display
-    from app.analysis.sentiment_engine import EPS, TIEBREAK_LEAN, payload_score
+    from app.analysis.sentiment_engine import EPS, payload_score
 
     assert abs(raw) < EPS, "this case is only meaningful inside the tie-break band"
 
     score = payload_score(raw, label)
-    assert abs(score) == TIEBREAK_LEAN, (
-        "payload_score must have substituted the probe for this to be a "
-        "tie-break disagreement")
+    assert score == raw, "payload_score must return the raw score unchanged"
 
     from_raw = to_display(raw, label)
     from_score = to_display(score, label)
 
-    assert from_raw["bull_pct"] == 50 and from_raw["bear_pct"] == 50
-    assert (from_raw["bull_pct"], from_raw["bear_pct"]) != (
-        from_score["bull_pct"], from_score["bear_pct"])
-    # The probe is what used to be displayed.
-    assert from_score["bull_pct"] in (49, 51) and from_score["bear_pct"] in (49, 51)
+    assert from_raw == from_score, "raw and score render identically (no probe)"
 
 
 def test_tiebreak_slab_is_bounded_and_documented():
     """
-    Guard the discovery itself: the raw/score divergence in the tie-break band
-    is exactly |raw| < 0.6, and NEVER happens for |raw| >= EPS.
+    Guard the old behavior: ``payload_score`` is the identity everywhere, so
+    ``to_display(raw, label) == to_display(score, label)`` for all raw values
+    and both labels. No +/-2.0 probe, no 51/49 freeze, no divergence.
     """
     from app.analysis.display import to_display
     from app.analysis.sentiment_engine import EPS, payload_score
 
     diverging = []
-    raw_value = -20.0
-    while raw_value <= 20.0:
+    raw_value = -200.0
+    while raw_value <= 200.0:
         for label in ("BULLISH", "BEARISH"):
             score = payload_score(raw_value, label)
             if to_display(raw_value, label) != to_display(score, label):
-                diverging.append(raw_value)
+                diverging.append((raw_value, label))
         raw_value = round(raw_value + 0.1, 1)
 
-    assert diverging, "the sweep must find the divergence it documents"
-    clean = [v for v in diverging if abs(v) >= EPS]
-    assert not clean, (
-        "a score at or beyond EPS should never diverge; got %r" % clean[:10])
-
-    # Every divergence must sit inside the narrow slab at |raw| <= 1.0. Above
-    # that, round(50 + raw/2) puts the NAMED side below 50 and to_display's
-    # floor lifts it to 51 - exactly what the +/-2.0 probe already rendered.
-    assert all(abs(v) <= 1.0 for v in diverging), (
-        "unexpected divergence outside the 1.0 slab: %r"
-        % [v for v in diverging if abs(v) > 1.0][:10])
+    assert not diverging, (
+        "payload_score must be identity everywhere; found divergence: %r"
+        % diverging[:10])
 
 
 # ---------------------------------------------------------------------------
